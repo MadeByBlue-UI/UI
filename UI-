@@ -1683,9 +1683,9 @@ function Library:CreateWindow(Settings)
         SetImageAsync(TopIcon, "Image", CustomIconID)
     end
 
-    Create("TextLabel", {
+    local TitleLabel = Create("TextLabel", {
         Parent = TopBar,
-        Size = UDim2.new(1, -40, 1, 0),
+        Size = UDim2.new(0, 200, 1, 0),  -- Taille fixe pour laisser place à la barre de recherche
         Position = UDim2.new(0, TitleOffsetX, 0, 0),
         BackgroundTransparency = 1,
         Text = Title,
@@ -1696,6 +1696,124 @@ function Library:CreateWindow(Settings)
         ZIndex = 6,
         ThemeTag = "Text"
     })
+    
+    -- 🔍 BARRE DE RECHERCHE GLOBALE
+    local SearchContainer = Create("Frame", {
+        Parent = TopBar,
+        Size = UDim2.new(0, 180, 0, 26),
+        Position = UDim2.new(1, -235, 0.5, -13),  -- À droite du titre, à gauche du bouton fermer
+        BackgroundColor3 = SelectedTheme.Second,
+        BackgroundTransparency = 0.7,
+        ZIndex = 6,
+        ThemeTag = "Second"
+    })
+    AddCorner(SearchContainer, 6)
+    
+    local SearchStroke = Create("UIStroke", {
+        Parent = SearchContainer,
+        Color = SelectedTheme.Accent,
+        Transparency = 0.8,
+        Thickness = 1,
+        ThemeTag = "Accent"
+    })
+    
+    local SearchIcon = Create("ImageLabel", {
+        Parent = SearchContainer,
+        Size = UDim2.new(0, 16, 0, 16),
+        Position = UDim2.new(0, 8, 0.5, -8),
+        BackgroundTransparency = 1,
+        Image = "rbxassetid://7733964719",  -- Icône de recherche
+        ImageColor3 = SelectedTheme.TextDark,
+        ZIndex = 7,
+        ThemeTag = "TextDark"
+    })
+    
+    local SearchBox = Create("TextBox", {
+        Parent = SearchContainer,
+        Size = UDim2.new(1, -30, 1, 0),
+        Position = UDim2.new(0, 26, 0, 0),
+        BackgroundTransparency = 1,
+        Text = "",
+        PlaceholderText = "Rechercher...",
+        PlaceholderColor3 = SelectedTheme.TextDark,
+        Font = Library.GlobalFont,
+        TextColor3 = SelectedTheme.Text,
+        TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ClearTextOnFocus = false,
+        ZIndex = 7,
+        ThemeTag = "Text"
+    })
+    
+    -- Animation hover pour la barre de recherche
+    SearchContainer.MouseEnter:Connect(function()
+        TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.4}):Play()
+        TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.5}):Play()
+    end)
+    
+    SearchContainer.MouseLeave:Connect(function()
+        if not SearchBox:IsFocused() then
+            TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.8}):Play()
+            TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.7}):Play()
+        end
+    end)
+    
+    -- Animation focus pour la barre de recherche
+    SearchBox.Focused:Connect(function()
+        TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.2}):Play()
+        TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.3}):Play()
+    end)
+    
+    SearchBox.FocusLost:Connect(function()
+        TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.8}):Play()
+        TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.7}):Play()
+    end)
+    
+    -- 🔍 LOGIQUE DE RECHERCHE GLOBALE
+    local allSearchableElements = {}  -- Stocke tous les éléments cherchables
+    
+    -- Fonction pour ajouter un élément à la recherche
+    local function AddToSearch(element, keywords, tab, block)
+        table.insert(allSearchableElements, {
+            element = element,
+            keywords = keywords:lower(),
+            tab = tab,
+            block = block,
+            visible = true
+        })
+    end
+    
+    -- Fonction de recherche
+    local function PerformSearch(query)
+        query = query:lower()
+        local foundResults = 0
+        
+        for _, item in ipairs(allSearchableElements) do
+            local shouldShow = query == "" or item.keywords:find(query, 1, true)
+            
+            if item.element and item.element.Parent then
+                item.element.Visible = shouldShow
+                if shouldShow then foundResults = foundResults + 1 end
+            end
+        end
+        
+        -- Notification des résultats
+        if query ~= "" then
+            local resultText = foundResults == 0 and "Aucun résultat" or (foundResults .. " résultat" .. (foundResults > 1 and "s" or ""))
+            -- Optionnel: Ajouter notification
+            -- Library:Notify({Title = "Recherche", Content = resultText, Duration = 1})
+        end
+    end
+    
+    -- Recherche en temps réel
+    SearchBox.Changed:Connect(function(property)
+        if property == "Text" then
+            PerformSearch(SearchBox.Text)
+        end
+    end)
+    
+    -- Fonction publique pour ajouter des éléments à la recherche (utilisée par les CreateToggle, CreateSlider, etc.)
+    Library.AddToSearch = AddToSearch
     
     local Close = Create("TextButton", {
         Parent = TopBar,
@@ -2260,7 +2378,7 @@ function Library:CreateWindow(Settings)
                 })
                 
                 -- Permet de mettre à jour le texte dynamiquement
-                return {
+                local labelObj = {
                     SetText = function(newText)
                         Lab.Text = newText
                     end,
@@ -2268,6 +2386,13 @@ function Library:CreateWindow(Settings)
                         Lab.TextColor3 = newColor
                     end
                 }
+                
+                -- 🔍 Ajoute automatiquement ce label à la recherche globale
+                if Library.AddToSearch then
+                    Library.AddToSearch(Lab, Text or "Label", "Label", "")
+                end
+                
+                return labelObj
             end
 
             function Elements:CreateButton(Cfg)
@@ -2312,6 +2437,11 @@ function Library:CreateWindow(Settings)
                         Cfg.Callback()
                     end
                 end)
+                
+                -- 🔍 Ajoute automatiquement ce button à la recherche globale
+                if Library.AddToSearch then
+                    Library.AddToSearch(Btn, Cfg.Name or "Button", "Button", "")
+                end
             end
 
             function Elements:CreateToggle(Cfg)
@@ -2420,6 +2550,11 @@ function Library:CreateWindow(Settings)
                         UpdateState(val)
                     end
                 }
+                
+                -- 🔍 Ajoute automatiquement ce toggle à la recherche globale
+                if Library.AddToSearch then
+                    Library.AddToSearch(Btn, Cfg.Name or "Toggle", "Toggle", "")
+                end
             end
 
             function Elements:CreateSlider(Cfg)
@@ -2580,6 +2715,11 @@ function Library:CreateWindow(Settings)
                 end)
 
                 Library.Items[Flag] = {Set = Update}
+                
+                -- 🔍 Ajoute automatiquement ce slider à la recherche globale
+                if Library.AddToSearch then
+                    Library.AddToSearch(Frame, Cfg.Name or "Slider", "Slider", "")
+                end
             end
 
             function Elements:CreateInput(Cfg)
@@ -2687,6 +2827,11 @@ function Library:CreateWindow(Settings)
                 end)
                 
                 Library.Items[Flag] = {Set = Update}
+                
+                -- 🔍 Ajoute automatiquement cet input à la recherche globale
+                if Library.AddToSearch then
+                    Library.AddToSearch(Frame, Cfg.Name or "Input", "Input", "")
+                end
             end
 
             function Elements:CreateDropdown(Cfg)
@@ -2856,6 +3001,11 @@ function Library:CreateWindow(Settings)
                     Refresh = function(self, list) RefreshList(list) end,
                     Get = function() return Selected end
                 }
+                
+                -- 🔍 Ajoute automatiquement ce dropdown à la recherche globale
+                if Library.AddToSearch then
+                    Library.AddToSearch(Drop, Cfg.Name or "Dropdown", "Dropdown", "")
+                end
                 
                 return Library.Items[Flag]
             end
