@@ -109,12 +109,12 @@ local AvailableFonts = {
 
 Library.GlobalFont = Enum.Font.Gotham
 Library.GlobalFontBold = Enum.Font.GothamBold
-Library.GlobalCornerValue = 10
+Library.GlobalCornerValue = 22  -- Coins très arrondis comme Mercury (1/4 de cercle complet)
 
 local Themes = {
     Default = {
-        Main = Color3.fromRGB(25, 25, 30),
-        Second = Color3.fromRGB(35, 35, 40),
+        Main = Color3.fromRGB(0, 0, 0),  -- Fond noir pur comme Mercury
+        Second = Color3.fromRGB(10, 10, 15),  -- Légèrement plus clair pour les blocks
         Accent = Color3.fromRGB(255, 255, 255),
         ElementAccent = Color3.fromRGB(0, 160, 255),
         GradientStart = Color3.fromRGB(255, 255, 255),
@@ -122,7 +122,7 @@ local Themes = {
         Text = Color3.fromRGB(255, 255, 255),
         TextDark = Color3.fromRGB(170, 170, 170),
         Error = Color3.fromRGB(255, 60, 60),
-        Transparency = 0.25,
+        Transparency = 0.15,  -- Plus transparent pour un look moderne
         ImageTransparency = 0,
         OrbsTransparency = 0.90,
         Font = "Gotham",
@@ -1124,7 +1124,7 @@ function Library:CreateWindow(Settings)
     local Title = Config.Title or "UI"
     local SelectedTheme = GetTheme(Config.Theme)
     
-    Library.GlobalCornerValue = Config.CornerRadius or SelectedTheme.CornerRadius or 10
+    Library.GlobalCornerValue = Config.CornerRadius or SelectedTheme.CornerRadius or 22  -- Coins très arrondis par défaut
 
     Library.ConfigFolder = Config.ConfigFolder or "SolarisUI-Configs"
     if not isfolder(Library.ConfigFolder) then makefolder(Library.ConfigFolder) end
