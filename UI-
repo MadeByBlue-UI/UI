@@ -1745,6 +1745,28 @@ function Library:CreateWindow(Settings)
         ThemeTag = "Text"
     })
     
+    -- 🪐 ICÔNE DE PLANÈTE À DROITE DU TITRE
+    local PlanetIcon = Create("ImageLabel", {
+        Parent = TopBar,
+        Size = UDim2.new(0, 22, 0, 22),
+        Position = UDim2.new(0, TitleOffsetX + 210, 0.5, -11),  -- À droite du titre
+        BackgroundTransparency = 1,
+        ImageColor3 = Color3.fromRGB(255, 255, 255),  -- Blanc
+        ImageTransparency = 0,
+        ZIndex = 6
+    })
+    SetImageAsync(PlanetIcon, "Image", "rbxassetid://7733955511")  -- Icône de planète/globe
+    
+    -- Animation rotation lente de la planète
+    task.spawn(function()
+        while PlanetIcon.Parent do
+            for rotation = 0, 360, 1 do
+                PlanetIcon.Rotation = rotation
+                task.wait(0.05)  -- Rotation lente et fluide
+            end
+        end
+    end)
+    
     -- 🔍 BARRE DE RECHERCHE GLOBALE
     local SearchContainer = Create("Frame", {
         Parent = TopBar,
