@@ -1,10 +1,4 @@
 
-
-
-
--- 🎵 ENHANCED UI LIBRARY WITH SOUNDS & SMOOTH ANIMATIONS 🎵
--- Améliorations: Sons, Animations fluides, Effets visuels avancés
-
 local Library = {}
 local TS = game:GetService("TweenService")
 local UIS = game:GetService("UserInputService")
@@ -109,7 +103,7 @@ local AvailableFonts = {
 
 Library.GlobalFont = Enum.Font.Gotham
 Library.GlobalFontBold = Enum.Font.GothamBold
-Library.GlobalCornerValue = 28  -- Coins TRÈS arrondis (presque des cercles)
+Library.GlobalCornerValue = 30  -- Coins parfaitement arrondis (valeur optimale)
 
 local Themes = {
     Default = {
@@ -731,6 +725,29 @@ local function AddSoftOrbs(parent, theme)
                 tween.Completed:Wait()
             end
         end)
+        
+        -- Animation de mouvement lent (drift)
+        task.spawn(function()
+            while Star.Parent do
+                if parent.AbsoluteSize.X == 0 or not parent.Visible then
+                    task.wait(1)
+                    continue
+                end
+                
+                -- Bouge vers une position aléatoire proche
+                local currentX = Star.Position.X.Scale
+                local currentY = Star.Position.Y.Scale
+                local targetX = math.clamp(currentX + (math.random(-15, 15) / 100), 0, 1)
+                local targetY = math.clamp(currentY + (math.random(-15, 15) / 100), 0, 1)
+                local targetPos = UDim2.fromScale(targetX, targetY)
+                
+                local moveTween = TS:Create(Star, TweenInfo.new(math.random(20, 40), Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                    Position = targetPos
+                })
+                moveTween:Play()
+                moveTween.Completed:Wait()
+            end
+        end)
     end
     
     -- Crée 50-60 petites étoiles
@@ -1123,7 +1140,7 @@ function Library:CreateWindow(Settings)
     local Title = Config.Title or "UI"
     local SelectedTheme = GetTheme(Config.Theme)
     
-    Library.GlobalCornerValue = Config.CornerRadius or SelectedTheme.CornerRadius or 28  -- Coins TRÈS arrondis par défaut
+    Library.GlobalCornerValue = Config.CornerRadius or SelectedTheme.CornerRadius or 30  -- Coins parfaitement arrondis par défaut
 
     Library.ConfigFolder = Config.ConfigFolder or "SolarisUI-Configs"
     if not isfolder(Library.ConfigFolder) then makefolder(Library.ConfigFolder) end
