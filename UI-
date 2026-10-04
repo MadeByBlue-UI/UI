@@ -1745,6 +1745,30 @@ function Library:CreateWindow(Settings)
         ThemeTag = "Text"
     })
     
+    -- 🎯 EFFET STRETCHED (texte compressé en hauteur) sur le titre
+    local TitleStretcher = Create("UITextSizeConstraint", {
+        Parent = TitleLabel,
+        MaxTextSize = 16,
+        MinTextSize = 8
+    })
+    
+    -- Créer un frame pour forcer l'aspect ratio stretched
+    local StretchFrame = Create("Frame", {
+        Parent = TopBar,
+        Size = UDim2.new(0, 200, 0, 25),  -- Hauteur réduite pour l'effet écrasé
+        Position = UDim2.new(0, TitleOffsetX, 0.5, -12.5),
+        BackgroundTransparency = 1,
+        ClipsDescendants = true,
+        ZIndex = 6
+    })
+    
+    -- Déplacer le TitleLabel dans le frame stretched
+    TitleLabel.Parent = StretchFrame
+    TitleLabel.Size = UDim2.new(1, 0, 1.8, 0)  -- 1.8x la hauteur pour compresser visuellement
+    TitleLabel.Position = UDim2.new(0, 0, -0.4, 0)  -- Recentrer verticalement
+    TitleLabel.TextScaled = false
+    TitleLabel.TextSize = 22  -- Plus gros pour que la compression soit visible
+    
     -- 🪐 ICÔNE DE PLANÈTE À DROITE DU TITRE
     local PlanetIcon = Create("ImageLabel", {
         Parent = TopBar,
