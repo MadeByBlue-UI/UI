@@ -1733,41 +1733,35 @@ function Library:CreateWindow(Settings)
 
     local TitleLabel = Create("TextLabel", {
         Parent = TopBar,
-        Size = UDim2.new(0, 200, 1, 0),  -- Taille fixe pour laisser place à la barre de recherche
-        Position = UDim2.new(0, TitleOffsetX, 0, 0),
+        Size = UDim2.new(0, 200, 0, 18),  -- Hauteur fixe réduite pour l'effet écrasé
+        Position = UDim2.new(0, TitleOffsetX, 0.5, -9),  -- Centré verticalement
         BackgroundTransparency = 1,
         Text = Title,
         Font = Library.GlobalFontBold,
         TextColor3 = SelectedTheme.Text,
         TextSize = 16,
         TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
+        TextScaled = false,
         ZIndex = 6,
         ThemeTag = "Text"
     })
     
-    -- 🎯 EFFET STRETCHED (texte compressé en hauteur) sur le titre
-    local TitleStretcher = Create("UITextSizeConstraint", {
+    -- 🎯 EFFET STRETCHED : Utiliser TextScaled avec un UITextSizeConstraint pour écraser le texte
+    TitleLabel.TextScaled = true
+    local TitleConstraint = Create("UITextSizeConstraint", {
         Parent = TitleLabel,
-        MaxTextSize = 16,
-        MinTextSize = 8
+        MaxTextSize = 20,  -- Taille max plus grande
+        MinTextSize = 10
     })
     
-    -- Créer un frame pour forcer l'aspect ratio stretched
-    local StretchFrame = Create("Frame", {
-        Parent = TopBar,
-        Size = UDim2.new(0, 200, 0, 25),  -- Hauteur réduite pour l'effet écrasé
-        Position = UDim2.new(0, TitleOffsetX, 0.5, -12.5),
-        BackgroundTransparency = 1,
-        ClipsDescendants = true,
-        ZIndex = 6
+    -- Wrapper pour forcer l'effet stretched (texte large dans petit espace vertical)
+    local aspectRatio = Create("UIAspectRatioConstraint", {
+        Parent = TitleLabel,
+        AspectRatio = 11,  -- Très large par rapport à la hauteur = effet stretched
+        AspectType = Enum.AspectType.ScaleWithParentSize,
+        DominantAxis = Enum.DominantAxis.Height
     })
-    
-    -- Déplacer le TitleLabel dans le frame stretched
-    TitleLabel.Parent = StretchFrame
-    TitleLabel.Size = UDim2.new(1, 0, 1.8, 0)  -- 1.8x la hauteur pour compresser visuellement
-    TitleLabel.Position = UDim2.new(0, 0, -0.4, 0)  -- Recentrer verticalement
-    TitleLabel.TextScaled = false
-    TitleLabel.TextSize = 22  -- Plus gros pour que la compression soit visible
     
     -- 🪐 ICÔNE DE PLANÈTE À DROITE DU TITRE
     local PlanetIcon = Create("ImageLabel", {
