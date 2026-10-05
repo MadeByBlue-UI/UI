@@ -1767,7 +1767,7 @@ function Library:CreateWindow(Settings)
     local CrownIcon = Create("ImageLabel", {
         Parent = TopBar,
         Size = UDim2.new(0, 24, 0, 24),
-        Position = UDim2.new(0, TitleOffsetX + 210, 0.5, -12),  -- À droite du titre
+        Position = UDim2.new(0, TitleOffsetX + 125, 0.5, -12),  -- Plus près du titre (était +210)
         BackgroundTransparency = 1,
         ImageColor3 = Color3.fromRGB(255, 255, 255),  -- Blanc
         ImageTransparency = 0,
