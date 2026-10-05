@@ -1763,25 +1763,34 @@ function Library:CreateWindow(Settings)
         DominantAxis = Enum.DominantAxis.Height
     })
     
-    -- 🪐 ICÔNE DE PLANÈTE À DROITE DU TITRE
-    local PlanetIcon = Create("ImageLabel", {
+    -- 👑 ICÔNE DE COURONNE À DROITE DU TITRE (représente invincibilité/domination)
+    local CrownIcon = Create("ImageLabel", {
         Parent = TopBar,
-        Size = UDim2.new(0, 22, 0, 22),
-        Position = UDim2.new(0, TitleOffsetX + 210, 0.5, -11),  -- À droite du titre
+        Size = UDim2.new(0, 24, 0, 24),
+        Position = UDim2.new(0, TitleOffsetX + 210, 0.5, -12),  -- À droite du titre
         BackgroundTransparency = 1,
         ImageColor3 = Color3.fromRGB(255, 255, 255),  -- Blanc
         ImageTransparency = 0,
         ZIndex = 6
     })
-    SetImageAsync(PlanetIcon, "Image", "rbxassetid://7733955511")  -- Icône de planète/globe
+    SetImageAsync(CrownIcon, "Image", "rbxassetid://7733674079")  -- Icône diamant/gemme brillante
     
-    -- Animation rotation lente de la planète
+    -- Animation pulsation douce (effet de brillance)
     task.spawn(function()
-        while PlanetIcon.Parent do
-            for rotation = 0, 360, 1 do
-                PlanetIcon.Rotation = rotation
-                task.wait(0.05)  -- Rotation lente et fluide
-            end
+        while CrownIcon.Parent do
+            -- Pulse vers le haut
+            TweenService:Create(CrownIcon, TweenInfo.new(1.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                Size = UDim2.new(0, 26, 0, 26),
+                ImageTransparency = 0
+            }):Play()
+            task.wait(1.5)
+            
+            -- Pulse vers le bas
+            TweenService:Create(CrownIcon, TweenInfo.new(1.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                Size = UDim2.new(0, 24, 0, 24),
+                ImageTransparency = 0.1
+            }):Play()
+            task.wait(1.5)
         end
     end)
     
