@@ -1767,13 +1767,13 @@ function Library:CreateWindow(Settings)
     local CrownIcon = Create("ImageLabel", {
         Parent = TopBar,
         Size = UDim2.new(0, 24, 0, 24),
-        Position = UDim2.new(0, TitleOffsetX + 125, 0.5, -12),  -- Plus près du titre (était +210)
+        Position = UDim2.new(0, TitleOffsetX + 95, 0.5, -12),  -- Plus près du titre (était +210)
         BackgroundTransparency = 1,
         ImageColor3 = Color3.fromRGB(255, 255, 255),  -- Blanc
         ImageTransparency = 0,
         ZIndex = 6
     })
-    SetImageAsync(CrownIcon, "Image", "rbxassetid://7733674079")  -- Icône diamant/gemme brillante
+    SetImageAsync(CrownIcon, "Image", "rbxassetid://5436396975")  -- Icône diamant/gemme brillante
     
     -- Animation pulsation douce (effet de brillance)
     task.spawn(function()
