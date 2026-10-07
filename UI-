@@ -1804,9 +1804,9 @@ function Library:CreateWindow(Settings)
     -- 🔍 BARRE DE RECHERCHE GLOBALE - En haut de l'écran avec animation smooth
     local SearchContainer = Create("Frame", {
         Parent = ScreenGui,
-        Size = UDim2.new(0, 350, 0, 45),
-        Position = UDim2.new(0.5, -175, 0, -60),  -- Commencer au-dessus de l'écran, centré
-        AnchorPoint = Vector2.new(0.5, 0),
+        Size = UDim2.new(0, 500, 0, 45),  -- Plus large (était 350)
+        Position = UDim2.new(0.5, -250, 0, -60),  -- Ajusté pour centrage
+        AnchorPoint = Vector2.new(0.5, 0.5),  -- Centre au milieu du frame
         BackgroundColor3 = SelectedTheme.Second,
         BackgroundTransparency = 0.15,
         BorderSizePixel = 0,
@@ -1817,7 +1817,7 @@ function Library:CreateWindow(Settings)
     
     -- Animation d'apparition smooth
     TS:Create(SearchContainer, TweenInfo.new(1.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Position = UDim2.new(0.5, -175, 0, 5)  -- Tout en haut
+        Position = UDim2.new(0.5, 0, 0, 30)  -- Positionner au vrai centre
     }):Play()
     
     local SearchStroke = Create("UIStroke", {
@@ -1828,14 +1828,16 @@ function Library:CreateWindow(Settings)
         ThemeTag = "Accent"
     })
     
-    -- 🔍 ICÔNE LOUPE
-    local SearchIcon = Create("ImageLabel", {
+    -- 🔍 ICÔNE LOUPE - Utiliser un TextLabel avec un unicode loupe
+    local SearchIcon = Create("TextLabel", {
         Parent = SearchContainer,
-        Size = UDim2.new(0, 24, 0, 24),
-        Position = UDim2.new(0, 15, 0.5, -12),
+        Size = UDim2.new(0, 30, 0, 30),
+        Position = UDim2.new(0, 10, 0.5, -15),
         BackgroundTransparency = 1,
-        Image = "rbxassetid://3926305904",  -- Icône loupe
-        ImageColor3 = SelectedTheme.Accent,
+        Text = "🔍",  -- Emoji loupe
+        Font = Library.GlobalFont,
+        TextColor3 = SelectedTheme.Accent,
+        TextSize = 20,
         ZIndex = 20002,
         ThemeTag = "Accent"
     })
@@ -1874,13 +1876,13 @@ function Library:CreateWindow(Settings)
     SearchBox.Focused:Connect(function()
         TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0}):Play()
         TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0}):Play()
-        TS:Create(SearchIcon, TweenInfo.new(0.2), {ImageColor3 = SelectedTheme.Accent}):Play()
+        TS:Create(SearchIcon, TweenInfo.new(0.2), {TextColor3 = SelectedTheme.Accent}):Play()
     end)
     
     SearchBox.FocusLost:Connect(function()
         TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.6}):Play()
         TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.15}):Play()
-        TS:Create(SearchIcon, TweenInfo.new(0.2), {ImageColor3 = SelectedTheme.TextDark}):Play()
+        TS:Create(SearchIcon, TweenInfo.new(0.2), {TextColor3 = SelectedTheme.TextDark}):Play()
     end)
     
     -- 🔍 LOGIQUE DE RECHERCHE GLOBALE
