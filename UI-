@@ -2037,64 +2037,6 @@ function Library:CreateWindow(Settings)
     })
     
     AddStroke(OpenSettingsBtn, SelectedTheme).Transparency = 0.7
-    
-    -- 👤 PROFIL JOUEUR EN BAS À GAUCHE
-    local ProfileFrame = Create("Frame", {
-        Parent = Main,
-        Size = UDim2.new(0, 200, 0, 50),
-        Position = UDim2.new(0, 10, 1, -100),  -- Juste au-dessus du bouton Settings
-        BackgroundColor3 = Color3.fromRGB(20, 20, 28),
-        BackgroundTransparency = 0.3,
-        BorderSizePixel = 0,
-        ZIndex = 5,
-        ThemeTag = "Main"
-    })
-    AddCorner(ProfileFrame, 10)
-    AddStroke(ProfileFrame, SelectedTheme).Transparency = 0.6
-
-    local AvatarImg = "rbxasset://textures/ui/GuiImagePlaceholder.png"
-    pcall(function()
-        AvatarImg = Plrs:GetUserThumbnailAsync(LP.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
-    end)
-    
-    local Avatar = Create("ImageLabel", {
-        Parent = ProfileFrame,
-        Size = UDim2.new(0, 32, 0, 32),
-        Position = UDim2.new(0, 10, 0.5, -16),
-        BackgroundTransparency = 1,
-        Image = AvatarImg,
-        ZIndex = 6
-    })
-    AddCorner(Avatar, 100)
-    
-    Create("TextLabel", {
-        Parent = ProfileFrame,
-        Size = UDim2.new(1, -50, 0, 16),
-        Position = UDim2.new(0, 48, 0, 5),
-        BackgroundTransparency = 1,
-        Text = LP.DisplayName,
-        Font = Library.GlobalFontBold,
-        TextColor3 = SelectedTheme.Text,
-        TextSize = 13,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex = 6,
-        TextTruncate = Enum.TextTruncate.AtEnd,
-        ThemeTag = "Text"
-    })
-    Create("TextLabel", {
-        Parent = ProfileFrame,
-        Size = UDim2.new(1, -50, 0, 14),
-        Position = UDim2.new(0, 48, 0, 24),
-        BackgroundTransparency = 1,
-        Text = "@" .. LP.Name,
-        Font = Library.GlobalFont,
-        TextColor3 = SelectedTheme.TextDark,
-        TextSize = 11,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex = 6,
-        TextTruncate = Enum.TextTruncate.AtEnd,
-        ThemeTag = "TextDark"
-    })
     table.insert(Library.ThemeObjects.Text, OpenSettingsBtn)
 
     CreateRipple(OpenSettingsBtn, SelectedTheme.Accent)
@@ -2129,64 +2071,13 @@ function Library:CreateWindow(Settings)
 
     -- 👤 PROFILE FRAME SUPPRIMÉ - Le bouton Settings est maintenant en bas de la sidebar
 
-    -- 📱 COLONNE DE DROITE POUR LES SETTINGS/OPTIONS (style moderne)
-    local RightTabContainer = Create("Frame", {
-        Parent = Main,
-        Size = UDim2.new(0, 120, 1, -120),  -- Plus étroite pour la colonne verticale
-        Position = UDim2.new(1, -130, 0, 60),  -- Collé à droite
-        BackgroundColor3 = Color3.fromRGB(0, 0, 0),  -- Fond noir pur
-        BackgroundTransparency = 0.2,  -- Plus visible
-        BorderSizePixel = 0,
-        ZIndex = 5,
-        ClipsDescendants = true,
-        ThemeTag = "Main"
-    })
-    AddCorner(RightTabContainer, 12)
-
-    local RightTabContainerStroke = AddStroke(RightTabContainer, SelectedTheme)
-    RightTabContainerStroke.Transparency = 0.7
-    RightTabContainerStroke.Thickness = 1.5
-    
-    Create("UIListLayout", {
-        Parent = RightTabContainer,
-        Padding = UDim.new(0, 4),  -- Espacement réduit
-        HorizontalAlignment = Enum.HorizontalAlignment.Center,
-        VerticalAlignment = Enum.VerticalAlignment.Top
-    })
-    Create("UIPadding", {
-        Parent = RightTabContainer,
-        PaddingTop = UDim.new(0, 10),
-        PaddingBottom = UDim.new(0, 10),
-        PaddingLeft = UDim.new(0, 6),
-        PaddingRight = UDim.new(0, 6)
-    })
-
-    -- 📝 CONTENEUR PRINCIPAL AU MILIEU - Grid de fonctions
     local PageContainer = Create("Frame", {
         Parent = Main,
-        Size = UDim2.new(1, -450, 1, -150),  -- Plus d'espace pour les fonctions
-        Position = UDim2.new(0, 220, 0, 85),  -- Sous la barre de recherche
+        Size = UDim2.new(1, -235, 1, -75),  -- Ajusté pour la sidebar plus large (200px + marges)
+        Position = UDim2.new(0, 220, 0, 60),  -- Commence après la sidebar
         BackgroundTransparency = 1,
         ZIndex = 5,
         ClipsDescendants = true
-    })
-    
-    -- Grid layout pour afficher les fonctions en colonnes/lignes
-    local GridLayout = Create("UIGridLayout", {
-        Parent = PageContainer,
-        CellSize = UDim2.new(0.5, -8, 0, 120),  -- 2 colonnes, hauteur fixe
-        SortOrder = Enum.SortOrder.LayoutOrder,
-        HorizontalAlignment = Enum.HorizontalAlignment.Center,
-        VerticalAlignment = Enum.VerticalAlignment.Top,
-        Padding = UDim.new(0, 12)
-    })
-    
-    Create("UIPadding", {
-        Parent = PageContainer,
-        PaddingTop = UDim.new(0, 10),
-        PaddingLeft = UDim.new(0, 15),
-        PaddingRight = UDim.new(0, 15),
-        PaddingBottom = UDim.new(0, 15)
     })
 
     local IsOpen, LastSize = true, WindowSize
@@ -2265,20 +2156,15 @@ function Library:CreateWindow(Settings)
         local TabBtn = Create("TextButton", {
             Name = "TabBtn",
             Parent = TabContainer,
-            Size = UDim2.new(1, -6, 0, 50),  -- Plus grand pour ressembler aux bulles
-            BackgroundColor3 = Color3.fromRGB(20, 20, 28),  -- Fond plus sombre
-            BackgroundTransparency = 0.3,  -- Visible avec fond
+            Size = UDim2.new(1, -4, 0, 45),  -- Plus grand et arrondi
+            BackgroundColor3 = Color3.fromRGB(15, 15, 20),  -- Fond sombre subtil
+            BackgroundTransparency = 0.95,  -- Très transparent au repos
             Text = "",
             AutoButtonColor = false,
             ZIndex = 6,
             ThemeTag = "Main"
         })
-        AddCorner(TabBtn, 12)  -- Coins bien arrondis comme une bulle
-        
-        -- Ajouter une bordure/stroke pour la bulle
-        local TabStroke = AddStroke(TabBtn, SelectedTheme)
-        TabStroke.Transparency = 0.6
-        TabStroke.Thickness = 1
+        AddCorner(TabBtn, 10)  -- Coins arrondis
 
         local TabLabel
         local ActiveLine
@@ -2360,14 +2246,14 @@ function Library:CreateWindow(Settings)
             PlaySound("Hover") -- 🔊 Son hover sur tab
             if ActiveTab and ActiveTab.Btn ~= TabBtn then
                 if leaveTweenTab then leaveTweenTab:Cancel() end
-                hoverTweenTab = TS:Create(TabBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.1})
+                hoverTweenTab = TS:Create(TabBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.7})
                 hoverTweenTab:Play()
             end
         end)
         TabBtn.MouseLeave:Connect(function()
             if ActiveTab and ActiveTab.Btn ~= TabBtn then
                 if hoverTweenTab then hoverTweenTab:Cancel() end
-                leaveTweenTab = TS:Create(TabBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.3})
+                leaveTweenTab = TS:Create(TabBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.95})
                 leaveTweenTab:Play()
             end
         end)
@@ -2476,7 +2362,7 @@ function Library:CreateWindow(Settings)
             -- Désactiver tous les autres tabs
             for _, v in pairs(TabContainer:GetChildren()) do 
                 if v:IsA("TextButton") then 
-                    TS:Create(v, TweenInfo.new(0.3, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.3}):Play()
+                    TS:Create(v, TweenInfo.new(0.3, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.95}):Play()
                     local lbl = v:FindFirstChild("TabLabel")
                     local line = v:FindFirstChild("ActiveLine")
                     local icon = v:FindFirstChild("TabIcon")
@@ -2494,8 +2380,8 @@ function Library:CreateWindow(Settings)
                 end 
             end
 
-            -- Activer le tab sélectionné - la bulle devient bien visible
-            TS:Create(TabBtn, TweenInfo.new(0.3, Enum.EasingStyle.Quart), {BackgroundTransparency = 0}):Play()
+            -- Activer le tab sélectionné avec un fond plus visible
+            TS:Create(TabBtn, TweenInfo.new(0.3, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.3}):Play()
             TS:Create(TabLabel, TweenInfo.new(0.3), {TextColor3 = SelectedTheme.Text, Position = UDim2.new(0, HasIcon and 45 or 25, 0, 0)}):Play()
             
             -- Animer la ligne d'accent
@@ -4128,85 +4014,6 @@ function Library:CreateWindow(Settings)
             end
         end
     })
-    
-    -- 🔧 FONCTION POUR CRÉER DES ITEMS DANS LA COLONNE DE DROITE (Settings/Options)
-    function Funcs:CreateRightTab(TabName, ImageID)
-        local Tab = {}
-        local HasIcon = (ImageID ~= nil and ImageID ~= "")
-        
-        local TabBtn = Create("TextButton", {
-            Name = "RightTabBtn",
-            Parent = RightTabContainer,
-            Size = UDim2.new(1, -4, 0, 38),  -- Plus compact
-            BackgroundColor3 = Color3.fromRGB(20, 20, 28),
-            BackgroundTransparency = 0.4,
-            Text = "",
-            AutoButtonColor = false,
-            ZIndex = 6,
-            ThemeTag = "Main"
-        })
-        AddCorner(TabBtn, 8)
-        
-        local TabStroke = AddStroke(TabBtn, SelectedTheme)
-        TabStroke.Transparency = 0.6
-        TabStroke.Thickness = 1
-
-        local TabLabel
-        if HasIcon then
-            local TabIcon = Create("ImageLabel", {
-                Name = "RightTabIcon",
-                Parent = TabBtn,
-                Size = UDim2.new(0, 18, 0, 18),
-                Position = UDim2.new(0.5, -33, 0.5, -9),
-                BackgroundTransparency = 1,
-                ImageColor3 = SelectedTheme.TextDark,
-                ZIndex = 7
-            })
-            SetImageAsync(TabIcon, "Image", ImageID)
-            
-            TabLabel = Create("TextLabel", {
-                Name = "RightTabLabel",
-                Parent = TabBtn,
-                Size = UDim2.new(0, 20, 1, 0),
-                Position = UDim2.new(1, -25, 0, 0),
-                BackgroundTransparency = 1,
-                Text = "",  -- Texte caché, seulement icône visible
-                Font = Library.GlobalFont,
-                TextColor3 = SelectedTheme.TextDark,
-                TextSize = 10,
-                TextXAlignment = Enum.TextXAlignment.Center,
-                ZIndex = 7
-            })
-        else
-            TabLabel = Create("TextLabel", {
-                Name = "RightTabLabel",
-                Parent = TabBtn,
-                Size = UDim2.fromScale(1, 1),
-                BackgroundTransparency = 1,
-                Text = TabName,
-                Font = Library.GlobalFont,
-                TextColor3 = SelectedTheme.TextDark,
-                TextSize = 11,
-                TextXAlignment = Enum.TextXAlignment.Center,
-                TextYAlignment = Enum.TextYAlignment.Center,
-                TextWrapped = true,
-                ZIndex = 7
-            })
-        end
-        
-        TabBtn.MouseEnter:Connect(function()
-            PlaySound("Hover")
-            TS:Create(TabBtn, TweenInfo.new(0.2, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.1}):Play()
-            TS:Create(TabLabel, TweenInfo.new(0.2), {TextColor3 = SelectedTheme.Text}):Play()
-        end)
-        
-        TabBtn.MouseLeave:Connect(function()
-            TS:Create(TabBtn, TweenInfo.new(0.2, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.4}):Play()
-            TS:Create(TabLabel, TweenInfo.new(0.2), {TextColor3 = SelectedTheme.TextDark}):Play()
-        end)
-        
-        return Tab
-    end
 
     return Funcs
 end
