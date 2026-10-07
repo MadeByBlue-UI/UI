@@ -2104,6 +2104,7 @@ function Library:CreateWindow(Settings)
             WindowContainer.Size = LastSize
             Shadow1.ImageTransparency = 0.35
             Shadow2.ImageTransparency = 0.4
+            SearchContainer.Visible = true  -- Affiche la barre de recherche
         else 
             PlaySound("Close") -- 🔊 Son de fermeture
             LastSize = WindowContainer.Size 
@@ -2112,6 +2113,7 @@ function Library:CreateWindow(Settings)
             Shadow1.ImageTransparency = 1
             Shadow2.ImageTransparency = 1
             WindowContainer.Visible = false
+            SearchContainer.Visible = false  -- Cache la barre de recherche
         end
     end
 
