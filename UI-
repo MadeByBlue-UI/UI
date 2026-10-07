@@ -2071,10 +2071,42 @@ function Library:CreateWindow(Settings)
 
     -- 👤 PROFILE FRAME SUPPRIMÉ - Le bouton Settings est maintenant en bas de la sidebar
 
+    -- 📱 COLONNE DE DROITE POUR LES TABS ADDITIONNELS (style moderne)
+    local RightTabContainer = Create("Frame", {
+        Parent = Main,
+        Size = UDim2.new(0, 200, 1, -120),  -- Même taille que la sidebar gauche
+        Position = UDim2.new(1, -210, 0, 60),  -- Collé à droite
+        BackgroundColor3 = Color3.fromRGB(0, 0, 0),  -- Fond noir pur
+        BackgroundTransparency = 0.2,  -- Plus visible
+        BorderSizePixel = 0,
+        ZIndex = 5,
+        ClipsDescendants = true,
+        ThemeTag = "Main"
+    })
+    AddCorner(RightTabContainer, 12)
+
+    local RightTabContainerStroke = AddStroke(RightTabContainer, SelectedTheme)
+    RightTabContainerStroke.Transparency = 0.7
+    RightTabContainerStroke.Thickness = 1.5
+    
+    Create("UIListLayout", {
+        Parent = RightTabContainer,
+        Padding = UDim.new(0, 4),  -- Espacement réduit
+        HorizontalAlignment = Enum.HorizontalAlignment.Center
+    })
+    Create("UIPadding", {
+        Parent = RightTabContainer,
+        PaddingTop = UDim.new(0, 10),
+        PaddingBottom = UDim.new(0, 10),
+        PaddingLeft = UDim.new(0, 8),
+        PaddingRight = UDim.new(0, 8)
+    })
+
+    -- 📝 CONTENEUR PRINCIPAL AU MILIEU
     local PageContainer = Create("Frame", {
         Parent = Main,
-        Size = UDim2.new(1, -235, 1, -75),  -- Ajusté pour la sidebar plus large (200px + marges)
-        Position = UDim2.new(0, 220, 0, 60),  -- Commence après la sidebar
+        Size = UDim2.new(1, -450, 1, -75),  -- Espace au milieu (après gauche, avant droite)
+        Position = UDim2.new(0, 220, 0, 60),  -- Commence après la sidebar gauche
         BackgroundTransparency = 1,
         ZIndex = 5,
         ClipsDescendants = true
@@ -4019,6 +4051,87 @@ function Library:CreateWindow(Settings)
             end
         end
     })
+    
+    -- 🔧 FONCTION POUR CRÉER DES TABS DANS LA COLONNE DE DROITE
+    function Funcs:CreateRightTab(TabName, ImageID)
+        local Tab = {}
+        local HasIcon = (ImageID ~= nil and ImageID ~= "")
+        
+        local TabBtn = Create("TextButton", {
+            Name = "RightTabBtn",
+            Parent = RightTabContainer,
+            Size = UDim2.new(1, -6, 0, 50),  -- Plus grand pour ressembler aux bulles
+            BackgroundColor3 = Color3.fromRGB(20, 20, 28),  -- Fond plus sombre
+            BackgroundTransparency = 0.3,  -- Visible avec fond
+            Text = "",
+            AutoButtonColor = false,
+            ZIndex = 6,
+            ThemeTag = "Main"
+        })
+        AddCorner(TabBtn, 12)  -- Coins bien arrondis comme une bulle
+        
+        -- Ajouter une bordure/stroke pour la bulle
+        local TabStroke = AddStroke(TabBtn, SelectedTheme)
+        TabStroke.Transparency = 0.6
+        TabStroke.Thickness = 1
+
+        local TabLabel
+        if HasIcon then
+            TabLabel = Create("TextLabel", {
+                Name = "RightTabLabel",
+                Parent = TabBtn,
+                Size = UDim2.new(1, -48, 1, 0),
+                Position = UDim2.new(0, 45, 0, 0),
+                BackgroundTransparency = 1,
+                Text = TabName,
+                Font = Library.GlobalFont,
+                TextColor3 = SelectedTheme.TextDark,
+                TextSize = 14,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                ZIndex = 7
+            })
+            
+            local TabIcon = Create("ImageLabel", {
+                Name = "RightTabIcon",
+                Parent = TabBtn,
+                Size = UDim2.new(0, 20, 0, 20),
+                Position = UDim2.new(0, 15, 0.5, -10),
+                BackgroundTransparency = 1,
+                ImageColor3 = SelectedTheme.TextDark,
+                ZIndex = 7
+            })
+            SetImageAsync(TabIcon, "Image", ImageID)
+            
+            table.insert(Library.ThemeObjects.TabLabels, {Label = TabLabel, Btn = TabBtn, Icon = TabIcon})
+        else
+            TabLabel = Create("TextLabel", {
+                Name = "RightTabLabel",
+                Parent = TabBtn,
+                Size = UDim2.new(1, -30, 1, 0),
+                Position = UDim2.new(0, 25, 0, 0),
+                BackgroundTransparency = 1,
+                Text = TabName,
+                Font = Library.GlobalFont,
+                TextColor3 = SelectedTheme.TextDark,
+                TextSize = 14,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                ZIndex = 7
+            })
+            
+            table.insert(Library.ThemeObjects.TabLabels, {Label = TabLabel, Btn = TabBtn})
+        end
+        
+        TabBtn.MouseEnter:Connect(function()
+            PlaySound("Hover")
+            TS:Create(TabBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.1}):Play()
+        end)
+        
+        TabBtn.MouseLeave:Connect(function()
+            TS:Create(TabBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.3}):Play()
+        end)
+        
+        return Tab
+    end
 
     return Funcs
 end
