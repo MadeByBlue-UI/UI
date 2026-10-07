@@ -1801,22 +1801,22 @@ function Library:CreateWindow(Settings)
     end)
     
     -- 🔍 BARRE DE RECHERCHE GLOBALE
-    -- 🔍 BARRE DE RECHERCHE GLOBALE - Centrée en haut avec animation smooth
+    -- 🔍 BARRE DE RECHERCHE GLOBALE - En haut de l'écran avec animation smooth
     local SearchContainer = Create("Frame", {
-        Parent = Main,
+        Parent = ScreenGui,
         Size = UDim2.new(0, 300, 0, 40),
-        Position = UDim2.new(0.5, -150, -0.2, 0),  -- Commencer au-dessus
+        Position = UDim2.new(0.5, -150, 0, -50),  -- Commencer au-dessus de l'écran
         AnchorPoint = Vector2.new(0.5, 0),
         BackgroundColor3 = SelectedTheme.Second,
         BackgroundTransparency = 0.2,
-        ZIndex = 10,  -- Par-dessus tout
+        ZIndex = 15000,  -- Au-dessus de tout
         ThemeTag = "Second"
     })
     AddCorner(SearchContainer, 12)
     
     -- Animation d'apparition smooth
-    TS:Create(SearchContainer, TweenInfo.new(0.8, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Position = UDim2.new(0.5, -150, 0.05, 0)
+    TS:Create(SearchContainer, TweenInfo.new(1, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+        Position = UDim2.new(0.5, -150, 0, 15)
     }):Play()
     
     local SearchStroke = Create("UIStroke", {
@@ -1834,7 +1834,7 @@ function Library:CreateWindow(Settings)
         BackgroundTransparency = 1,
         Image = "rbxassetid://7733964719",  -- Icône de recherche
         ImageColor3 = SelectedTheme.Accent,
-        ZIndex = 11,
+        ZIndex = 15001,
         ThemeTag = "Accent"
     })
     
@@ -1851,7 +1851,7 @@ function Library:CreateWindow(Settings)
         TextSize = 15,
         TextXAlignment = Enum.TextXAlignment.Left,
         ClearTextOnFocus = false,
-        ZIndex = 11,
+        ZIndex = 15001,
         ThemeTag = "Text"
     })
     
