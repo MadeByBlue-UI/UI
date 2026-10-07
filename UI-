@@ -2104,7 +2104,10 @@ function Library:CreateWindow(Settings)
             WindowContainer.Size = LastSize
             Shadow1.ImageTransparency = 0.35
             Shadow2.ImageTransparency = 0.4
-            SearchContainer.Visible = true  -- Affiche la barre de recherche
+            -- Animer la barre de recherche vers le bas
+            TS:Create(SearchContainer, TweenInfo.new(0.6, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+                Position = UDim2.new(0.5, 0, 0, 30)
+            }):Play()
         else 
             PlaySound("Close") -- 🔊 Son de fermeture
             LastSize = WindowContainer.Size 
@@ -2113,7 +2116,10 @@ function Library:CreateWindow(Settings)
             Shadow1.ImageTransparency = 1
             Shadow2.ImageTransparency = 1
             WindowContainer.Visible = false
-            SearchContainer.Visible = false  -- Cache la barre de recherche
+            -- Animer la barre de recherche vers le haut (cache)
+            TS:Create(SearchContainer, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+                Position = UDim2.new(0.5, 0, 0, -60)
+            }):Play()
         end
     end
 
