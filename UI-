@@ -1964,16 +1964,15 @@ function Library:CreateWindow(Settings)
     end)
 
     -- 📱 SIDEBAR VERTICALE POUR LES TABS (style moderne)
-    local TabContainer = Create("ScrollingFrame", {
+    local TabContainer = Create("Frame", {  -- Frame au lieu de ScrollingFrame
         Parent = Main,
         Size = UDim2.new(0, 200, 1, -120),  -- Plus large, prend toute la hauteur
         Position = UDim2.new(0, 10, 0, 60),  -- Collé à gauche
         BackgroundColor3 = Color3.fromRGB(0, 0, 0),  -- Fond noir pur
         BackgroundTransparency = 0.2,  -- Plus visible
-        ScrollBarThickness = 3,
-        ScrollBarImageColor3 = SelectedTheme.Accent,
         BorderSizePixel = 0,
         ZIndex = 5,
+        ClipsDescendants = true,  -- Cache ce qui dépasse
         ThemeTag = "Main"
     })
     AddCorner(TabContainer, 12)
