@@ -1963,10 +1963,10 @@ function Library:CreateWindow(Settings)
         ScreenGui:Destroy()
     end)
 
-    -- 📱 SIDEBAR CONTAINER (style moderne avec header)
-    local SidebarContainer = Create("Frame", {
+    -- 🎯 HEADER BOX SÉPARÉE (logo + titre)
+    local SidebarHeader = Create("Frame", {
         Parent = Main,
-        Size = UDim2.new(0, 200, 1, -70),
+        Size = UDim2.new(0, 200, 0, 50),
         Position = UDim2.new(0, 10, 0, 60),
         BackgroundColor3 = Color3.fromRGB(0, 0, 0),
         BackgroundTransparency = 0.2,
@@ -1974,29 +1974,20 @@ function Library:CreateWindow(Settings)
         ZIndex = 5,
         ThemeTag = "Main"
     })
-    AddCorner(SidebarContainer, 12)
+    AddCorner(SidebarHeader, 12)
     
-    local SidebarStroke = AddStroke(SidebarContainer, SelectedTheme)
-    SidebarStroke.Transparency = 0.7
-    SidebarStroke.Thickness = 1.5
+    local HeaderStroke = AddStroke(SidebarHeader, SelectedTheme)
+    HeaderStroke.Transparency = 0.7
+    HeaderStroke.Thickness = 1.5
     
-    -- 🎯 HEADER DE LA SIDEBAR avec logo et titre
-    local SidebarHeader = Create("Frame", {
-        Parent = SidebarContainer,
-        Size = UDim2.new(1, 0, 0, 55),
-        Position = UDim2.new(0, 0, 0, 0),
-        BackgroundTransparency = 1,
-        ZIndex = 6
-    })
-    
-    -- Logo/Icône personnalisé en haut
+    -- Logo/Icône
     local SidebarLogo = Create("ImageLabel", {
         Parent = SidebarHeader,
-        Size = UDim2.new(0, 32, 0, 32),
-        Position = UDim2.new(0, 15, 0, 10),
+        Size = UDim2.new(0, 28, 0, 28),
+        Position = UDim2.new(0, 12, 0.5, -14),
         BackgroundTransparency = 1,
         ImageColor3 = SelectedTheme.Accent,
-        ZIndex = 7,
+        ZIndex = 6,
         ThemeTag = "Accent"
     })
     
@@ -2006,44 +1997,39 @@ function Library:CreateWindow(Settings)
         SetImageAsync(SidebarLogo, "Image", "rbxassetid://10884488899")
     end
     
-    -- Titre du script à côté du logo
+    -- Titre
     local SidebarTitle = Create("TextLabel", {
         Parent = SidebarHeader,
-        Size = UDim2.new(1, -55, 0, 32),
-        Position = UDim2.new(0, 52, 0, 10),
+        Size = UDim2.new(1, -50, 1, 0),
+        Position = UDim2.new(0, 45, 0, 0),
         BackgroundTransparency = 1,
-        Text = Title:upper(),  -- Titre en majuscules comme dans l'image
+        Text = Title:upper(),
         Font = Library.GlobalFontBold,
         TextColor3 = SelectedTheme.Text,
         TextSize = 13,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Center,
-        ZIndex = 7,
+        ZIndex = 6,
         ThemeTag = "Text"
     })
     
-    -- Ligne de séparation sous le header
-    local SidebarDivider = Create("Frame", {
-        Parent = SidebarHeader,
-        Size = UDim2.new(1, -20, 0, 1),
-        Position = UDim2.new(0, 10, 1, -5),
-        BackgroundColor3 = SelectedTheme.TextDark,
-        BackgroundTransparency = 0.7,
-        BorderSizePixel = 0,
-        ZIndex = 6,
-        ThemeTag = "TextDark"
-    })
-    
-    -- 📱 TABS CONTAINER (sous le header)
+    -- 📱 TABS BOX SÉPARÉE (bulle séparée pour les tabs)
     local TabContainer = Create("Frame", {
-        Parent = SidebarContainer,
-        Size = UDim2.new(1, 0, 1, -115),  -- Prend l'espace restant entre header et settings
-        Position = UDim2.new(0, 0, 0, 60),  -- Sous le header
-        BackgroundTransparency = 1,
+        Parent = Main,
+        Size = UDim2.new(0, 200, 1, -235),  -- Espace entre header et settings
+        Position = UDim2.new(0, 10, 0, 120),  -- Sous le header avec un gap
+        BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+        BackgroundTransparency = 0.2,
         BorderSizePixel = 0,
         ZIndex = 5,
-        ClipsDescendants = true
+        ClipsDescendants = true,
+        ThemeTag = "Main"
     })
+    AddCorner(TabContainer, 12)
+    
+    local TabsStroke = AddStroke(TabContainer, SelectedTheme)
+    TabsStroke.Transparency = 0.7
+    TabsStroke.Thickness = 1.5
     
     Create("UIListLayout", {
         Parent = TabContainer,
@@ -2058,13 +2044,14 @@ function Library:CreateWindow(Settings)
         PaddingRight = UDim.new(0, 8)
     })
     
+    -- ⚙️ SETTINGS BOX SÉPARÉE (en bas, bulle séparée)
     local OpenSettingsBtn = Create("TextButton", {
-        Parent = SidebarContainer,  -- Dans la sidebar maintenant
-        Size = UDim2.new(1, -16, 0, 45),  -- S'adapte à la largeur
-        Position = UDim2.new(0, 8, 1, -52),  -- En bas de la sidebar
+        Parent = Main,  -- Directement dans Main, pas dans un container
+        Size = UDim2.new(0, 200, 0, 45),
+        Position = UDim2.new(0, 10, 1, -55),  -- En bas à gauche
         BackgroundColor3 = Color3.fromRGB(0, 0, 0),
         BackgroundTransparency = 0.2,
-        Text = "",  -- Pas de texte, on va ajouter icône + label
+        Text = "",
         Font = Library.GlobalFontBold,
         TextColor3 = SelectedTheme.Text,
         TextSize = 13,
@@ -2073,13 +2060,17 @@ function Library:CreateWindow(Settings)
     })
     AddCorner(OpenSettingsBtn, 12)
     
+    local SettingsStroke = AddStroke(OpenSettingsBtn, SelectedTheme)
+    SettingsStroke.Transparency = 0.7
+    SettingsStroke.Thickness = 1.5
+    
     -- Icône settings (engrenage)
     local SettingsIcon = Create("ImageLabel", {
         Parent = OpenSettingsBtn,
         Size = UDim2.new(0, 20, 0, 20),
         Position = UDim2.new(0, 15, 0.5, -10),
         BackgroundTransparency = 1,
-        Image = "rbxassetid://7733955511",  -- Icône engrenage
+        Image = "rbxassetid://7733955511",
         ImageColor3 = SelectedTheme.TextDark,
         ZIndex = 7,
         ThemeTag = "TextDark"
@@ -2099,8 +2090,6 @@ function Library:CreateWindow(Settings)
         ZIndex = 7,
         ThemeTag = "TextDark"
     })
-    
-    AddStroke(OpenSettingsBtn, SelectedTheme).Transparency = 0.7
     table.insert(Library.ThemeObjects.Text, OpenSettingsBtn)
 
     CreateRipple(OpenSettingsBtn, SelectedTheme.Accent)
@@ -2108,12 +2097,11 @@ function Library:CreateWindow(Settings)
     
     local hoverTweenSettings, leaveTweenSettings
     OpenSettingsBtn.MouseEnter:Connect(function()
-        PlaySound("Hover") -- 🔊 Son hover sur bouton settings
+        PlaySound("Hover")
         if leaveTweenSettings then leaveTweenSettings:Cancel() end
         hoverTweenSettings = TS:Create(OpenSettingsBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.05})
         hoverTweenSettings:Play()
         
-        -- Animer l'icône et le label
         TS:Create(SettingsIcon, TweenInfo.new(0.25), {ImageColor3 = Themes.Default.Accent}):Play()
         TS:Create(SettingsLabel, TweenInfo.new(0.25), {TextColor3 = Themes.Default.Text}):Play()
     end)
@@ -2122,15 +2110,14 @@ function Library:CreateWindow(Settings)
         leaveTweenSettings = TS:Create(OpenSettingsBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.2})
         leaveTweenSettings:Play()
         
-        -- Remettre les couleurs d'origine
         TS:Create(SettingsIcon, TweenInfo.new(0.25), {ImageColor3 = Themes.Default.TextDark}):Play()
         TS:Create(SettingsLabel, TweenInfo.new(0.25), {TextColor3 = Themes.Default.TextDark}):Play()
     end)
     OpenSettingsBtn.MouseButton1Down:Connect(function()
-        TS:Create(OpenSettingsBtn, TweenInfo.new(0.1), {Size = UDim2.new(1, -18, 0, 43), Position = UDim2.new(0, 9, 1, -51)}):Play()
+        TS:Create(OpenSettingsBtn, TweenInfo.new(0.1), {Size = UDim2.new(0, 196, 0, 42), Position = UDim2.new(0, 12, 1, -54)}):Play()
     end)
     OpenSettingsBtn.MouseButton1Up:Connect(function()
-        TS:Create(OpenSettingsBtn, TweenInfo.new(0.1), {Size = UDim2.new(1, -16, 0, 45), Position = UDim2.new(0, 8, 1, -52)}):Play()
+        TS:Create(OpenSettingsBtn, TweenInfo.new(0.1), {Size = UDim2.new(0, 200, 0, 45), Position = UDim2.new(0, 10, 1, -55)}):Play()
     end)
 
     -- 👤 PROFILE FRAME SUPPRIMÉ - Le bouton Settings est maintenant en bas de la sidebar
