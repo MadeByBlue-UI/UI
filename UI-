@@ -1804,20 +1804,20 @@ function Library:CreateWindow(Settings)
     -- 🔍 BARRE DE RECHERCHE GLOBALE - En haut de l'écran avec animation smooth
     local SearchContainer = Create("Frame", {
         Parent = ScreenGui,
-        Size = UDim2.new(0, 300, 0, 40),
-        Position = UDim2.new(0.5, -150, 0, -60),  -- Commencer au-dessus de l'écran
+        Size = UDim2.new(0, 350, 0, 45),
+        Position = UDim2.new(0.5, -175, 0, -60),  -- Commencer au-dessus de l'écran, centré
         AnchorPoint = Vector2.new(0.5, 0),
         BackgroundColor3 = SelectedTheme.Second,
-        BackgroundTransparency = 0.1,
+        BackgroundTransparency = 0.15,
         BorderSizePixel = 0,
-        ZIndex = 20001,  -- Au-dessus de TOUT (y compris WindowContainer)
+        ZIndex = 20001,  -- Au-dessus de TOUT
         ThemeTag = "Second"
     })
-    AddCorner(SearchContainer, 12)
+    AddCorner(SearchContainer, 15)
     
     -- Animation d'apparition smooth
     TS:Create(SearchContainer, TweenInfo.new(1.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Position = UDim2.new(0.5, -150, 0, 10)
+        Position = UDim2.new(0.5, -175, 0, 5)  -- Tout en haut
     }):Play()
     
     local SearchStroke = Create("UIStroke", {
@@ -1828,12 +1828,13 @@ function Library:CreateWindow(Settings)
         ThemeTag = "Accent"
     })
     
+    -- 🔍 ICÔNE LOUPE
     local SearchIcon = Create("ImageLabel", {
         Parent = SearchContainer,
-        Size = UDim2.new(0, 20, 0, 20),
-        Position = UDim2.new(0, 15, 0.5, -10),
+        Size = UDim2.new(0, 24, 0, 24),
+        Position = UDim2.new(0, 15, 0.5, -12),
         BackgroundTransparency = 1,
-        Image = "rbxassetid://7733964719",  -- Icône de recherche
+        Image = "rbxassetid://3926305904",  -- Icône loupe
         ImageColor3 = SelectedTheme.Accent,
         ZIndex = 20002,
         ThemeTag = "Accent"
@@ -1841,15 +1842,15 @@ function Library:CreateWindow(Settings)
     
     local SearchBox = Create("TextBox", {
         Parent = SearchContainer,
-        Size = UDim2.new(1, -50, 1, 0),
-        Position = UDim2.new(0, 40, 0, 0),
+        Size = UDim2.new(1, -60, 1, 0),
+        Position = UDim2.new(0, 45, 0, 0),
         BackgroundTransparency = 1,
         Text = "",
         PlaceholderText = "Rechercher...",
         PlaceholderColor3 = SelectedTheme.TextDark,
         Font = Library.GlobalFont,
         TextColor3 = SelectedTheme.Text,
-        TextSize = 15,
+        TextSize = 16,
         TextXAlignment = Enum.TextXAlignment.Left,
         ClearTextOnFocus = false,
         ZIndex = 20002,
@@ -1865,7 +1866,7 @@ function Library:CreateWindow(Settings)
     SearchContainer.MouseLeave:Connect(function()
         if not SearchBox:IsFocused() then
             TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.6}):Play()
-            TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.1}):Play()
+            TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.15}):Play()
         end
     end)
     
@@ -1878,7 +1879,7 @@ function Library:CreateWindow(Settings)
     
     SearchBox.FocusLost:Connect(function()
         TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.6}):Play()
-        TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.1}):Play()
+        TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.15}):Play()
         TS:Create(SearchIcon, TweenInfo.new(0.2), {ImageColor3 = SelectedTheme.TextDark}):Play()
     end)
     
