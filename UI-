@@ -1801,75 +1801,84 @@ function Library:CreateWindow(Settings)
     end)
     
     -- 🔍 BARRE DE RECHERCHE GLOBALE
+    -- 🔍 BARRE DE RECHERCHE GLOBALE - Centrée en haut avec animation smooth
     local SearchContainer = Create("Frame", {
-        Parent = TopBar,
-        Size = UDim2.new(0, 180, 0, 26),
-        Position = UDim2.new(1, -235, 0.5, -13),  -- À droite du titre, à gauche du bouton fermer
+        Parent = Main,
+        Size = UDim2.new(0, 300, 0, 40),
+        Position = UDim2.new(0.5, -150, -0.2, 0),  -- Commencer au-dessus
+        AnchorPoint = Vector2.new(0.5, 0),
         BackgroundColor3 = SelectedTheme.Second,
-        BackgroundTransparency = 0.7,
-        ZIndex = 6,
+        BackgroundTransparency = 0.2,
+        ZIndex = 10,  -- Par-dessus tout
         ThemeTag = "Second"
     })
-    AddCorner(SearchContainer, 6)
+    AddCorner(SearchContainer, 12)
+    
+    -- Animation d'apparition smooth
+    TS:Create(SearchContainer, TweenInfo.new(0.8, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+        Position = UDim2.new(0.5, -150, 0.05, 0)
+    }):Play()
     
     local SearchStroke = Create("UIStroke", {
         Parent = SearchContainer,
         Color = SelectedTheme.Accent,
         Transparency = 0.8,
-        Thickness = 1,
+        Thickness = 1.5,
         ThemeTag = "Accent"
     })
     
     local SearchIcon = Create("ImageLabel", {
         Parent = SearchContainer,
-        Size = UDim2.new(0, 16, 0, 16),
-        Position = UDim2.new(0, 8, 0.5, -8),
+        Size = UDim2.new(0, 20, 0, 20),
+        Position = UDim2.new(0, 15, 0.5, -10),
         BackgroundTransparency = 1,
         Image = "rbxassetid://7733964719",  -- Icône de recherche
-        ImageColor3 = SelectedTheme.TextDark,
-        ZIndex = 7,
-        ThemeTag = "TextDark"
+        ImageColor3 = SelectedTheme.Accent,
+        ZIndex = 11,
+        ThemeTag = "Accent"
     })
     
     local SearchBox = Create("TextBox", {
         Parent = SearchContainer,
-        Size = UDim2.new(1, -30, 1, 0),
-        Position = UDim2.new(0, 26, 0, 0),
+        Size = UDim2.new(1, -50, 1, 0),
+        Position = UDim2.new(0, 40, 0, 0),
         BackgroundTransparency = 1,
         Text = "",
         PlaceholderText = "Rechercher...",
         PlaceholderColor3 = SelectedTheme.TextDark,
         Font = Library.GlobalFont,
         TextColor3 = SelectedTheme.Text,
-        TextSize = 13,
+        TextSize = 15,
         TextXAlignment = Enum.TextXAlignment.Left,
         ClearTextOnFocus = false,
-        ZIndex = 7,
+        ZIndex = 11,
         ThemeTag = "Text"
     })
     
     -- Animation hover pour la barre de recherche
     SearchContainer.MouseEnter:Connect(function()
-        TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.4}):Play()
-        TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.5}):Play()
+        TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.3}):Play()
+        TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.05}):Play()
     end)
     
     SearchContainer.MouseLeave:Connect(function()
         if not SearchBox:IsFocused() then
             TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.8}):Play()
-            TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.7}):Play()
+            TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.2}):Play()
         end
     end)
     
     -- Animation focus pour la barre de recherche
     SearchBox.Focused:Connect(function()
-        TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.2}):Play()
-        TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.3}):Play()
+        TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.1}):Play()
+        TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0}):Play()
+        TS:Create(SearchIcon, TweenInfo.new(0.2), {ImageColor3 = SelectedTheme.Accent}):Play()
     end)
     
     SearchBox.FocusLost:Connect(function()
         TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.8}):Play()
-        TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.7}):Play()
+        TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.2}):Play()
+        TS:Create(SearchIcon, TweenInfo.new(0.2), {ImageColor3 = SelectedTheme.TextDark}):Play()
     end)
     
     -- 🔍 LOGIQUE DE RECHERCHE GLOBALE
