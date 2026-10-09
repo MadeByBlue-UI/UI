@@ -1,4 +1,4 @@
--- 🎵 ENHANCED UI LIBRARY WITH SOUNDS & SMOOTH ANIMATIONS 🎵 (version corrigée)
+-- 🎵 ENHANCED UI LIBRARY WITH SOUNDS & SMOOTH ANIMATIONS 🎵 (version corrigée + MultiDropdown/Search, Sliders décimaux, Notifs typées, Callbacks protégés)
 
 local Library = {}
 local TS = game:GetService("TweenService")
@@ -29,6 +29,16 @@ local function Tween(obj, time, props, style, dir)
     local t = TS:Create(obj, TweenInfo.new(time, style or Enum.EasingStyle.Quart, dir or Enum.EasingDirection.Out), props)
     t:Play()
     return t
+end
+
+-- Exécute un callback sans jamais casser l'UI : l'erreur est affichée en notif + console
+local function SafeCall(fn, ...)
+    if type(fn) ~= "function" then return end
+    local ok, err = pcall(fn, ...)
+    if not ok then
+        warn("[UI Callback Error] " .. tostring(err))
+        Library:Notify({Title = "Callback Error", Content = tostring(err), Type = "Error", Duration = 5})
+    end
 end
 
 -- 🔊 SYSTÈME DE SONS (pool réutilisable + cooldown anti-spam)
@@ -1456,19 +1466,38 @@ function Library:CreateWindow(Settings)
         Padding = UDim.new(0, 12)
     })
 
+    -- 🔔 NOTIFICATIONS TYPÉES
+    -- Options : Title, Content, Duration, ImageID, Type = "Info" | "Success" | "Warning" | "Error"
+    -- Clic = fermeture, survol = pause du timer. Sans Type, il est deviné depuis le titre.
     function Library:Notify(NConfig)
-        local NTitle = NConfig.Title or "Notification"
-        local Content = NConfig.Content or "Message"
+        NConfig = NConfig or {}
+        local NTitle = tostring(NConfig.Title or "Notification")
+        local Content = tostring(NConfig.Content or "Message")
         local Duration = NConfig.Duration or 3
 
-        local lowerTitle = NTitle:lower()
-        if lowerTitle:find("error") or lowerTitle:find("erreur") then
-            PlaySound("Error")
-        elseif lowerTitle:find("success") or lowerTitle:find("saved") or lowerTitle:find("loaded") then
-            PlaySound("Success")
-        else
-            PlaySound("Notification")
+        local NType = NConfig.Type
+        if not NType then
+            local lt = NTitle:lower()
+            if lt:find("error") or lt:find("erreur") then
+                NType = "Error"
+            elseif lt:find("success") or lt:find("saved") or lt:find("loaded") then
+                NType = "Success"
+            else
+                NType = "Info"
+            end
         end
+
+        local TypeColors = {
+            Info = SelectedTheme.ElementAccent,
+            Success = Color3.fromRGB(80, 220, 120),
+            Warning = Color3.fromRGB(255, 190, 60),
+            Error = SelectedTheme.Error
+        }
+        local TypeSounds = {Info = "Notification", Success = "Success", Warning = "Notification", Error = "Error"}
+        if not TypeColors[NType] then NType = "Info" end
+        local AccentColor = TypeColors[NType]
+
+        PlaySound(TypeSounds[NType])
 
         if #NTitle > 30 then
             NTitle = string.sub(NTitle, 1, 27) .. "..."
@@ -1493,6 +1522,7 @@ function Library:CreateWindow(Settings)
             BackgroundTransparency = 1,
             ZIndex = 10001,
             ClipsDescendants = true,
+            Active = true, -- nécessaire pour capter le clic
             ThemeTag = "Main"
         })
         AddCorner(Frame, 10)
@@ -1508,7 +1538,7 @@ function Library:CreateWindow(Settings)
             Size = UDim2.new(0, 0, 0, 0),
             Position = UDim2.new(0, 31, 0, 31),
             BackgroundTransparency = 1,
-            ImageColor3 = Color3.fromRGB(255, 255, 255),
+            ImageColor3 = (NType == "Info") and Color3.fromRGB(255, 255, 255) or AccentColor,
             ZIndex = 10002,
             ImageTransparency = 1,
             Rotation = -15
@@ -1562,11 +1592,11 @@ function Library:CreateWindow(Settings)
         local Bar = Create("Frame", {
             Parent = BarBg,
             Size = UDim2.new(1, 0, 1, 0),
-            BackgroundColor3 = SelectedTheme.ElementAccent,
+            BackgroundColor3 = AccentColor,
             BorderSizePixel = 0,
             ZIndex = 10003,
             BackgroundTransparency = 1,
-            ThemeTag = "ElementAccent"
+            ThemeTag = (NType == "Info") and "ElementAccent" or nil -- les types colorés gardent leur couleur
         })
         AddCorner(Bar, 3)
 
@@ -1586,7 +1616,12 @@ function Library:CreateWindow(Settings)
         local TimerTween = TS:Create(Bar, TweenInfo.new(Duration, Enum.EasingStyle.Linear), {Size = UDim2.new(0, 0, 1, 0)})
         TimerTween:Play()
 
-        TimerTween.Completed:Connect(function()
+        local Closed = false
+        local function Dismiss()
+            if Closed then return end
+            Closed = true
+            TimerTween:Cancel()
+
             local OutInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
             TS:Create(NotifHolder, OutInfo, {Size = UDim2.new(1, 0, 0, 0)}):Play()
             TS:Create(Frame, OutInfo, {BackgroundTransparency = 1}):Play()
@@ -1600,6 +1635,21 @@ function Library:CreateWindow(Settings)
             task.delay(0.5, function()
                 NotifHolder:Destroy()
             end)
+        end
+
+        TimerTween.Completed:Connect(Dismiss)
+
+        -- Survol = pause du timer, clic = fermeture immédiate
+        Frame.MouseEnter:Connect(function()
+            if not Closed then TimerTween:Pause() end
+        end)
+        Frame.MouseLeave:Connect(function()
+            if not Closed then TimerTween:Play() end
+        end)
+        Frame.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                Dismiss()
+            end
         end)
     end
 
@@ -1786,7 +1836,7 @@ function Library:CreateWindow(Settings)
     local SearchContainer = Create("Frame", {
         Parent = ScreenGui,
         Size = UDim2.new(0, 500, 0, 45),
-        Position = UDim2.new(0.5, 0, 0, -60),
+        Position = UDim2.new(0.5, 0, 0, -150),
         AnchorPoint = Vector2.new(0.5, 0.5),
         BackgroundColor3 = SelectedTheme.Second,
         BackgroundTransparency = 0.15,
@@ -1827,7 +1877,7 @@ function Library:CreateWindow(Settings)
         Position = UDim2.new(0, 45, 0, 0),
         BackgroundTransparency = 1,
         Text = "",
-        PlaceholderText = "Rechercher...",
+        PlaceholderText = Config.SearchPlaceholder or "Rechercher...",
         PlaceholderColor3 = SelectedTheme.TextDark,
         Font = Library.GlobalFont,
         TextColor3 = SelectedTheme.Text,
@@ -2086,6 +2136,7 @@ function Library:CreateWindow(Settings)
         if IsOpen then
             PlaySound("Open")
             WindowContainer.Visible = true
+            SearchContainer.Visible = true
             WindowContainer.Size = UDim2.fromOffset(0, 0)
             Tween(WindowContainer, 0.45, {Size = LastSize}, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
             Tween(Shadow1, 0.45, {ImageTransparency = 0.35})
@@ -2096,10 +2147,16 @@ function Library:CreateWindow(Settings)
             local t = Tween(WindowContainer, 0.3, {Size = UDim2.fromOffset(0, 0)}, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
             Tween(Shadow1, 0.3, {ImageTransparency = 1})
             Tween(Shadow2, 0.3, {ImageTransparency = 1})
-            Tween(SearchContainer, 0.4, {Position = UDim2.new(0.5, 0, 0, -60)}, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+            -- -150 : sort largement de l'écran (la barre Roblox du haut décale le (0,0) de ~36px)
+            local st = Tween(SearchContainer, 0.4, {Position = UDim2.new(0.5, 0, 0, -150)}, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
             t.Completed:Connect(function()
                 if not IsOpen then
                     WindowContainer.Visible = false
+                end
+            end)
+            st.Completed:Connect(function()
+                if not IsOpen then
+                    SearchContainer.Visible = false -- totalement caché, plus rien en bordure
                 end
             end)
         end
@@ -2666,12 +2723,42 @@ function Library:CreateWindow(Settings)
                 Index(Btn, Cfg.Name or "Toggle")
             end
 
+            -- 🎚️ SLIDER AVEC DÉCIMALES
+            -- Options : Min, Max, Default, Decimals (0-6), Step, Suffix
+            --   CreateSlider({Name="Speed", Min=0, Max=5, Decimals=2, Suffix="x", Default=1})
+            --   CreateSlider({Name="Smoothing", Min=0, Max=1, Step=0.05})  -- Decimals déduit du Step
+            -- Retourne {Set, Get}.
             function Elements:CreateSlider(Cfg)
                 ElementOrder = ElementOrder + 1
                 local Min = Cfg.Min or 0
                 local Max = Cfg.Max or 100
-                local Val = Cfg.Default or Min -- fix : Cfg.Min pouvait être nil
                 local Flag = Cfg.Flag or Cfg.Name
+                local Suffix = Cfg.Suffix or ""
+
+                local Decimals = Cfg.Decimals
+                if Decimals == nil then
+                    Decimals = 0
+                    if Cfg.Step then
+                        local frac = tostring(Cfg.Step):match("%.(%d+)")
+                        Decimals = frac and #frac or 0
+                    end
+                end
+                Decimals = math.clamp(Decimals, 0, 6)
+                local Step = Cfg.Step or (10 ^ -Decimals)
+                local range = math.max(Max - Min, 1e-9)
+
+                local function Snap(v)
+                    v = math.clamp(v, Min, Max)
+                    v = Min + math.floor((v - Min) / Step + 0.5) * Step
+                    local m = 10 ^ Decimals
+                    return math.clamp(math.floor(v * m + 0.5) / m, Min, Max)
+                end
+
+                local function Format(v)
+                    return string.format("%." .. Decimals .. "f", v) .. Suffix
+                end
+
+                local Val = Snap(Cfg.Default or Min)
                 Library.Flags[Flag] = Val
 
                 local Frame = Create("Frame", {
@@ -2688,7 +2775,7 @@ function Library:CreateWindow(Settings)
 
                 Create("TextLabel", {
                     Parent = Frame,
-                    Size = UDim2.new(1, -70, 0, 24),
+                    Size = UDim2.new(1, -85, 0, 24),
                     Position = UDim2.new(0, 12, 0, 2),
                     BackgroundTransparency = 1,
                     Text = Cfg.Name,
@@ -2703,8 +2790,8 @@ function Library:CreateWindow(Settings)
 
                 local ValBg = Create("ScrollingFrame", {
                     Parent = Frame,
-                    Size = UDim2.new(0, 36, 0, 20),
-                    Position = UDim2.new(1, -48, 0, 4),
+                    Size = UDim2.new(0, 52, 0, 20),
+                    Position = UDim2.new(1, -64, 0, 4),
                     BackgroundColor3 = Color3.new(0, 0, 0),
                     BackgroundTransparency = 0.85,
                     ZIndex = 8,
@@ -2722,7 +2809,7 @@ function Library:CreateWindow(Settings)
                     Size = UDim2.new(1, 0, 1, 0),
                     AutomaticSize = Enum.AutomaticSize.X,
                     BackgroundTransparency = 1,
-                    Text = tostring(Val),
+                    Text = Format(Val),
                     Font = Library.GlobalFontBold,
                     TextColor3 = SelectedTheme.Text,
                     TextSize = 12,
@@ -2749,8 +2836,6 @@ function Library:CreateWindow(Settings)
                     PlaySound("Hover")
                 end)
 
-                local range = math.max(Max - Min, 1)
-
                 local Fill = Create("Frame", {
                     Parent = SlideBar,
                     Size = UDim2.new((Val - Min) / range, 0, 1, 0),
@@ -2770,19 +2855,21 @@ function Library:CreateWindow(Settings)
                 })
                 AddCorner(Thumb, 10)
 
-                local function Update(val)
-                    val = math.clamp(val, Min, Max)
-                    Val = val
-                    Library.Flags[Flag] = val
-                    ValLbl.Text = tostring(Val)
+                -- force = true : déclenche le callback même si la valeur n'a pas changé
+                local function Update(v, force)
+                    v = Snap(v)
+                    local changed = v ~= Val
+                    Val = v
+                    Library.Flags[Flag] = Val
+                    ValLbl.Text = Format(Val)
                     TS:Create(Fill, TweenInfo.new(0.08, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {Size = UDim2.new((Val - Min) / range, 0, 1, 0)}):Play()
-                    if Cfg.Callback then
+                    if (changed or force) and Cfg.Callback then
                         Cfg.Callback(Val)
                     end
                 end
 
-                if Cfg.Default then
-                    Update(Cfg.Default)
+                if Cfg.Default ~= nil then
+                    Update(Val, true)
                 elseif Cfg.Callback then
                     task.spawn(Cfg.Callback, Val)
                 end
@@ -2791,7 +2878,7 @@ function Library:CreateWindow(Settings)
 
                 local function DragUpdate(input)
                     local p = math.clamp((input.Position.X - SlideBar.AbsolutePosition.X) / SlideBar.AbsoluteSize.X, 0, 1)
-                    Update(math.floor(Min + ((Max - Min) * p)))
+                    Update(Min + (Max - Min) * p)
                 end
 
                 SlideBar.InputBegan:Connect(function(i)
@@ -2817,18 +2904,26 @@ function Library:CreateWindow(Settings)
                     end
                 end)
 
+                -- Saisie manuelle : accepte "0.75", "75%", "1,5x"... (virgule tolérée)
                 ValLbl.FocusLost:Connect(function()
-                    local number = tonumber(ValLbl.Text)
+                    local number = tonumber((ValLbl.Text:gsub(",", "."):match("-?%d+%.?%d*")))
                     if number then
                         Update(number)
-                    else
-                        ValLbl.Text = tostring(Val)
                     end
+                    ValLbl.Text = Format(Val)
                 end)
 
-                Library.Items[Flag] = {Set = Update}
+                local Object = {
+                    Set = function(v)
+                        if type(v) == "number" then Update(v) end
+                    end,
+                    Get = function() return Val end
+                }
+                Library.Items[Flag] = Object
 
                 Index(Frame, Cfg.Name or "Slider")
+
+                return Object
             end
 
             function Elements:CreateInput(Cfg)
@@ -2940,20 +3035,38 @@ function Library:CreateWindow(Settings)
                 Index(Frame, Cfg.Name or "Input")
             end
 
+            -- 📂 DROPDOWN SIMPLE / MULTI + RECHERCHE
+            -- Options :
+            --   Items, Default (valeur, ou tableau si Multi), Callback, UpdateList
+            --   Multi     = true       -> cases cochables, Callback reçoit un tableau {"A","B"}
+            --   Search    = true/false -> barre de recherche (auto si plus de 8 éléments)
+            --   MaxHeight = 150        -> hauteur max de la liste
+            -- Retourne {Set, Get, Refresh}. Le flag Multi est sauvegardé comme tableau dans les configs.
             function Elements:CreateDropdown(Cfg)
                 ElementOrder = ElementOrder + 1
                 local Flag = Cfg.Flag or Cfg.Name
-                local Expanded = false
-                local Selected = Cfg.Default
+                local Multi = Cfg.Multi == true
                 local Options = Cfg.Items or {}
+                local MaxListH = Cfg.MaxHeight or 150
+                local Expanded = false
+                local Selected = nil
+                local SelectedSet = {}
+                local ItemButtons = {}
+                local SearchH = 0
 
-                local Drop = Create("TextButton", {
+                if Multi then
+                    if type(Cfg.Default) == "table" then
+                        for _, v in ipairs(Cfg.Default) do SelectedSet[v] = true end
+                    end
+                else
+                    Selected = Cfg.Default
+                end
+
+                local Drop = Create("Frame", {
                     Parent = TargetParent,
                     Size = UDim2.new(1, 0, 0, 34),
                     BackgroundColor3 = SelectedTheme.Second,
                     BackgroundTransparency = 0.5,
-                    Text = "",
-                    AutoButtonColor = false,
                     ClipsDescendants = true,
                     ZIndex = 7,
                     LayoutOrder = ElementOrder,
@@ -2962,33 +3075,75 @@ function Library:CreateWindow(Settings)
                 AddCorner(Drop, 8)
                 AddStroke(Drop, SelectedTheme).Transparency = 0.8
 
-                DefaultHover(Drop)
+                local Header = Create("TextButton", {
+                    Parent = Drop,
+                    Size = UDim2.new(1, 0, 0, 34),
+                    BackgroundTransparency = 1,
+                    Text = "",
+                    AutoButtonColor = false,
+                    ZIndex = 8
+                })
 
                 local DTitle = Create("TextLabel", {
-                    Parent = Drop,
-                    Size = UDim2.new(1, -40, 0, 34),
+                    Parent = Header,
+                    Size = UDim2.new(1, -40, 1, 0),
                     Position = UDim2.new(0, 12, 0, 0),
                     BackgroundTransparency = 1,
-                    Text = (Cfg.Name or "Dropdown") .. (Selected and " - " .. tostring(Selected) or ""),
+                    Text = Cfg.Name or "Dropdown",
                     Font = Library.GlobalFont,
                     TextColor3 = SelectedTheme.Text,
                     TextSize = 14,
                     TextXAlignment = Enum.TextXAlignment.Left,
-                    ZIndex = 8,
+                    ZIndex = 9,
                     TextTruncate = Enum.TextTruncate.AtEnd,
                     ThemeTag = "Text"
                 })
 
                 local Arrow = Create("ImageLabel", {
-                    Parent = Drop,
+                    Parent = Header,
                     Size = UDim2.new(0, 16, 0, 16),
                     Position = UDim2.new(1, -28, 0, 9),
                     BackgroundTransparency = 1,
                     Image = "rbxassetid://6031091004",
                     ImageColor3 = SelectedTheme.TextDark,
-                    ZIndex = 8
+                    ZIndex = 9
                 })
                 table.insert(Library.ThemeObjects.TextDark, Arrow)
+
+                -- Barre de recherche (visible seulement si utile)
+                local SearchFrame = Create("Frame", {
+                    Parent = Drop,
+                    Size = UDim2.new(1, -20, 0, 24),
+                    Position = UDim2.new(0, 10, 0, 36),
+                    BackgroundColor3 = Color3.new(0, 0, 0),
+                    BackgroundTransparency = 0.85,
+                    Visible = false,
+                    ZIndex = 9
+                })
+                AddCorner(SearchFrame, 6)
+                local DropSearchStroke = Create("UIStroke", {
+                    Parent = SearchFrame,
+                    Color = SelectedTheme.TextDark,
+                    Transparency = 0.8,
+                    Thickness = 1
+                })
+                table.insert(Library.ThemeObjects.TextDark, DropSearchStroke)
+
+                local DropSearchBox = Create("TextBox", {
+                    Parent = SearchFrame,
+                    Size = UDim2.new(1, -16, 1, 0),
+                    Position = UDim2.new(0, 8, 0, 0),
+                    BackgroundTransparency = 1,
+                    Text = "",
+                    PlaceholderText = "Search...",
+                    PlaceholderColor3 = SelectedTheme.TextDark,
+                    TextColor3 = SelectedTheme.Text,
+                    TextSize = 13,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    ClearTextOnFocus = false,
+                    ZIndex = 10,
+                    ThemeTag = "Text"
+                })
 
                 local Container = Create("ScrollingFrame", {
                     Parent = Drop,
@@ -3009,46 +3164,135 @@ function Library:CreateWindow(Settings)
                     PaddingLeft = UDim.new(0, 10),
                     PaddingRight = UDim.new(0, 10)
                 })
+                Create("UIListLayout", { Parent = Container, Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder })
 
-                Create("UIListLayout", { Parent = Container, Padding = UDim.new(0, 4) })
-
-                local function Update(val)
-                    Selected = val
-                    DTitle.Text = (Cfg.Name or "Dropdown") .. " - " .. tostring(Selected)
-                    if Cfg.Callback then
-                        Cfg.Callback(val)
+                ---------------------------------------------------------- état
+                local function GetSelectedList()
+                    local list = {}
+                    for _, o in ipairs(Options) do
+                        if SelectedSet[o] then table.insert(list, o) end
                     end
-                    Library.Flags[Flag] = val
+                    return list
                 end
 
+                local function TitleText()
+                    local base = Cfg.Name or "Dropdown"
+                    if Multi then
+                        local names = {}
+                        for _, o in ipairs(GetSelectedList()) do table.insert(names, tostring(o)) end
+                        if #names == 0 then return base end
+                        return base .. " - " .. table.concat(names, ", ")
+                    end
+                    if Selected ~= nil then
+                        return base .. " - " .. tostring(Selected)
+                    end
+                    return base
+                end
+
+                local function IsSelected(item)
+                    if Multi then return SelectedSet[item] == true end
+                    return Selected == item
+                end
+
+                local function ApplyVisual(item, btn)
+                    local sel = IsSelected(item)
+                    btn.Text = ((Multi and sel) and "✓  " or "") .. tostring(item)
+                    btn.TextColor3 = sel and SelectedTheme.ElementAccent or SelectedTheme.TextDark
+                    btn.BackgroundTransparency = sel and 0.45 or 0.8
+                end
+
+                local function RefreshVisuals()
+                    for item, btn in pairs(ItemButtons) do
+                        ApplyVisual(item, btn)
+                    end
+                end
+
+                local function CurrentValue()
+                    if Multi then return GetSelectedList() end
+                    return Selected
+                end
+
+                local function Commit()
+                    DTitle.Text = TitleText()
+                    local value = CurrentValue()
+                    Library.Flags[Flag] = value
+                    if Cfg.Callback then
+                        Cfg.Callback(value)
+                    end
+                end
+
+                ---------------------------------------------------------- taille / recherche
+                local function VisibleCount()
+                    local n = 0
+                    for _, btn in pairs(ItemButtons) do
+                        if btn.Visible then n = n + 1 end
+                    end
+                    return n
+                end
+
+                local function ConfigureSearch()
+                    local show = Cfg.Search == true or (Cfg.Search ~= false and #Options > 8)
+                    SearchFrame.Visible = show
+                    SearchH = show and 32 or 0
+                end
+
+                local function Resize()
+                    local n = VisibleCount()
+                    local listH = math.min(n * 32 + 10, MaxListH)
+                    Container.CanvasSize = UDim2.new(0, 0, 0, n * 32 + 10)
+                    Container.Position = UDim2.new(0, 0, 0, 34 + SearchH)
+                    Tween(Container, 0.25, {Size = UDim2.new(1, 0, 0, listH)})
+                    Tween(Drop, 0.35, {Size = UDim2.new(1, 0, 0, Expanded and (34 + SearchH + listH) or 34)})
+                end
+
+                local function ApplySearch()
+                    local q = DropSearchBox.Text:lower()
+                    for item, btn in pairs(ItemButtons) do
+                        btn.Visible = (q == "") or (tostring(item):lower():find(q, 1, true) ~= nil)
+                    end
+                    Resize()
+                end
+
+                local function Collapse()
+                    Expanded = false
+                    DropSearchBox.Text = ""
+                    Tween(Arrow, 0.4, {Rotation = 0})
+                    Resize()
+                end
+
+                DropSearchBox:GetPropertyChangedSignal("Text"):Connect(ApplySearch)
+                DropSearchBox.Focused:Connect(function()
+                    TS:Create(DropSearchStroke, TweenInfo.new(0.3), {Color = SelectedTheme.ElementAccent, Transparency = 0}):Play()
+                end)
+                DropSearchBox.FocusLost:Connect(function()
+                    TS:Create(DropSearchStroke, TweenInfo.new(0.3), {Color = SelectedTheme.TextDark, Transparency = 0.8}):Play()
+                end)
+
+                ---------------------------------------------------------- liste
                 local function RefreshList(newOptions)
                     Options = newOptions or Options
+
                     for _, v in pairs(Container:GetChildren()) do
-                        if v:IsA("TextButton") then
-                            v:Destroy()
-                        end
+                        if v:IsA("TextButton") then v:Destroy() end
                     end
+                    ItemButtons = {}
 
-                    local found = false
-                    for _, v in pairs(Options) do
-                        if v == Selected then
-                            found = true
-                            break
+                    -- Retire de la sélection ce qui n'existe plus dans la liste
+                    local lookup = {}
+                    for _, o in ipairs(Options) do lookup[o] = true end
+                    if Multi then
+                        for k in pairs(SelectedSet) do
+                            if not lookup[k] then SelectedSet[k] = nil end
                         end
-                    end
-
-                    if found then
-                        DTitle.Text = (Cfg.Name or "Dropdown") .. " - " .. tostring(Selected)
-                    else
+                    elseif Selected ~= nil and not lookup[Selected] then
                         Selected = nil
-                        DTitle.Text = Cfg.Name or "Dropdown"
                     end
+                    DTitle.Text = TitleText()
 
-                    for _, item in pairs(Options) do
+                    for index, item in ipairs(Options) do
                         local Btn = Create("TextButton", {
                             Parent = Container,
                             Size = UDim2.new(1, 0, 0, 28),
-                            Position = UDim2.new(0, 0, 0, 0),
                             BackgroundColor3 = SelectedTheme.Main,
                             BackgroundTransparency = 0.8,
                             Text = tostring(item),
@@ -3056,12 +3300,15 @@ function Library:CreateWindow(Settings)
                             TextColor3 = SelectedTheme.TextDark,
                             TextSize = 13,
                             ZIndex = 9,
+                            LayoutOrder = index,
                             TextXAlignment = Enum.TextXAlignment.Center,
                             AutoButtonColor = false,
                             ThemeTag = "Main"
                         })
                         AddCorner(Btn, 6)
                         table.insert(Library.ThemeObjects.TextDark, Btn)
+                        ItemButtons[item] = Btn
+                        ApplyVisual(item, Btn)
 
                         local hoverTweenBtn, leaveTweenBtn
                         Btn.MouseEnter:Connect(function()
@@ -3072,46 +3319,88 @@ function Library:CreateWindow(Settings)
                         end)
                         Btn.MouseLeave:Connect(function()
                             if hoverTweenBtn then hoverTweenBtn:Cancel() end
-                            leaveTweenBtn = TS:Create(Btn, TweenInfo.new(0.2), {BackgroundTransparency = 0.8, TextColor3 = SelectedTheme.TextDark})
+                            local sel = IsSelected(item)
+                            leaveTweenBtn = TS:Create(Btn, TweenInfo.new(0.2), {
+                                BackgroundTransparency = sel and 0.45 or 0.8,
+                                TextColor3 = sel and SelectedTheme.ElementAccent or SelectedTheme.TextDark
+                            })
                             leaveTweenBtn:Play()
                         end)
                         Btn.MouseButton1Click:Connect(function()
                             PlaySound("Click")
-                            Update(item)
-                            Expanded = false
-                            TS:Create(Drop, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 34)}):Play()
-                            TS:Create(Arrow, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Rotation = 0}):Play()
+                            if Multi then
+                                SelectedSet[item] = (not SelectedSet[item]) or nil
+                                RefreshVisuals()
+                                Commit()
+                            else
+                                Selected = item
+                                RefreshVisuals()
+                                Commit()
+                                Collapse()
+                            end
                         end)
                     end
-                    Container.CanvasSize = UDim2.new(0, 0, 0, #Options * 32 + 10)
+
+                    ConfigureSearch()
+                    ApplySearch()
                 end
 
                 RefreshList(Options)
+                Library.Flags[Flag] = CurrentValue()
 
-                if Cfg.Default and Cfg.Callback then
-                    task.spawn(Cfg.Callback, Selected)
+                if Cfg.Default ~= nil and Cfg.Callback then
+                    task.spawn(Cfg.Callback, CurrentValue())
                 end
 
-                Drop.MouseButton1Click:Connect(function()
-                    if Cfg.UpdateList then
-                        RefreshList(Cfg.UpdateList())
-                    end
-                    Expanded = not Expanded
-                    local H = Expanded and math.min(#Options * 32 + 44, 180) or 34
-                    TS:Create(Drop, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, H)}):Play()
-                    TS:Create(Arrow, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Rotation = Expanded and 180 or 0}):Play()
-                    TS:Create(Container, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 1, -34)}):Play()
+                ---------------------------------------------------------- interactions
+                Header.MouseEnter:Connect(function()
+                    PlaySound("Hover")
+                    Tween(Drop, 0.2, {BackgroundTransparency = 0.3})
+                end)
+                Header.MouseLeave:Connect(function()
+                    Tween(Drop, 0.2, {BackgroundTransparency = 0.5})
                 end)
 
-                Library.Items[Flag] = {
-                    Set = Update,
-                    Refresh = function(self, list) RefreshList(list) end,
-                    Get = function() return Selected end
+                Header.MouseButton1Click:Connect(function()
+                    PlaySound("Click")
+                    if Expanded then
+                        Collapse()
+                    else
+                        if Cfg.UpdateList then
+                            RefreshList(Cfg.UpdateList())
+                        end
+                        Expanded = true
+                        ConfigureSearch()
+                        Tween(Arrow, 0.4, {Rotation = 180})
+                        Resize()
+                    end
+                end)
+
+                local Object = {
+                    Set = function(val)
+                        if Multi then
+                            SelectedSet = {}
+                            if type(val) == "table" then
+                                for _, v in ipairs(val) do SelectedSet[v] = true end
+                            end
+                        else
+                            Selected = val
+                        end
+                        RefreshVisuals()
+                        Commit()
+                    end,
+                    Refresh = function(self, list)
+                        RefreshList(list)
+                    end,
+                    Get = function()
+                        return CurrentValue()
+                    end
                 }
+                Library.Items[Flag] = Object
 
                 Index(Drop, Cfg.Name or "Dropdown")
 
-                return Library.Items[Flag]
+                return Object
             end
 
             function Elements:CreateColorPicker(Cfg)
@@ -3506,6 +3795,24 @@ function Library:CreateWindow(Settings)
                 }
 
                 Index(Frame, Cfg.Name or "Keybind")
+            end
+
+            -- 🛡️ CALLBACKS PROTÉGÉS
+            -- Enveloppe automatiquement le Callback de TOUS les éléments Create* :
+            -- une erreur dans le code de l'utilisateur affiche une notif d'erreur au lieu de casser l'UI.
+            for name, fn in pairs(Elements) do
+                if type(fn) == "function" and name:sub(1, 6) == "Create" then
+                    Elements[name] = function(self, Cfg, ...)
+                        if type(Cfg) == "table" and type(Cfg.Callback) == "function" then
+                            local copy = {}
+                            for k, v in pairs(Cfg) do copy[k] = v end
+                            local raw = Cfg.Callback
+                            copy.Callback = function(...) SafeCall(raw, ...) end
+                            Cfg = copy
+                        end
+                        return fn(self, Cfg, ...)
+                    end
+                end
             end
 
             return Elements
@@ -4001,7 +4308,7 @@ function Library:CreateWindow(Settings)
                 delfile(Library.ThemeFolder .. "/" .. selected .. ".json")
                 Library:Notify({Title = "Theme Deleted", Content = "Deleted " .. selected})
             else
-                Library:Notify({Title = "Error", Content = "Select a valid theme first"})
+                Library:Notify({Title = "Error", Content = "Select a valid theme first", Type = "Error"})
             end
         end
     })
