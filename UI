@@ -768,7 +768,7 @@ local function CreateRipple(btn, color)
     end)
 end
 
-local function MakeDraggable(topbar, frame)
+local function MakeDraggable(topbar, frame, onEnd)
     local dragging, dragInput, dragStart, startPos
     topbar.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -778,6 +778,7 @@ local function MakeDraggable(topbar, frame)
             input.Changed:Connect(function()
                 if input.UserInputState == Enum.UserInputState.End then
                     dragging = false
+                    if onEnd then onEnd() end
                 end
             end)
         end
@@ -795,7 +796,7 @@ local function MakeDraggable(topbar, frame)
     end)
 end
 
-local function MakeResizable(handle, frame, onResized)
+local function MakeResizable(handle, frame, onResized, onEnd)
     local dragging, dragStart, startSize
     local MinSize = Vector2.new(320, 250)
     local MaxSize = Vector2.new(1000, 800)
@@ -808,6 +809,7 @@ local function MakeResizable(handle, frame, onResized)
             input.Changed:Connect(function()
                 if input.UserInputState == Enum.UserInputState.End then
                     dragging = false
+                    if onEnd then onEnd() end
                 end
             end)
         end
@@ -1372,13 +1374,19 @@ function Library:CreateWindow(Settings)
     end
 
     -- ✨ Les bordures dégradées tournent en continu (en pause quand l'UI est fermée)
-    Bind(RS.RenderStepped, function()
-        if not Library.UIOpen then return end
-        local r = (os.clock() * 40) % 360
-        for _, g in ipairs(Library.GradientObjects) do
-            if g.Parent then g.Rotation = r end
-        end
-    end)
+    do
+        local lastRot = 0
+        Bind(RS.RenderStepped, function()
+            if not Library.UIOpen then return end
+            local now = os.clock()
+            if now - lastRot < 1 / 30 then return end
+            lastRot = now
+            local r = (now * 40) % 360
+            for _, g in ipairs(Library.GradientObjects) do
+                if g.Parent then g.Rotation = r end
+            end
+        end)
+    end
 
     function Library:GetThemes()
         local list = {}
@@ -1920,12 +1928,81 @@ function Library:CreateWindow(Settings)
 
     local OrbContainer = AddSoftOrbs(ContentBubble, SelectedTheme)
 
+    -- Affichage net : plus d'animation d'ouverture
     local Panels = {BrandScale, TabsScale, ContentScale}
-    for i, sc in ipairs(Panels) do
-        task.delay((i - 1) * 0.1, function()
-            Tween(sc, 0.6, {Scale = 1}, Enum.EasingStyle.Back)
+    for _, sc in ipairs(Panels) do
+        sc.Scale = 1
+    end
+
+    -- 💾 SAUVEGARDE POSITION / TAILLE (un fichier par fenêtre, dans le dossier des configs)
+    local LayoutPath = Library.ConfigFolder .. "/Layout_" .. (tostring(Title):gsub("[^%w_%-]", "_")) .. ".layout"
+    local DefaultSidePos = SideColumn.Position
+    local DefaultContentPos = ContentHolder.Position
+    local DefaultContentSize = ContentHolder.Size
+
+    local function SaveLayout()
+        local function pack(u) return {u.X.Scale, u.X.Offset, u.Y.Scale, u.Y.Offset} end
+        local data = {
+            Side = pack(SideColumn.Position),
+            Content = pack(ContentHolder.Position),
+            Size = {ContentHolder.Size.X.Offset, ContentHolder.Size.Y.Offset}
+        }
+        pcall(function() writefile(LayoutPath, HS:JSONEncode(data)) end)
+    end
+
+    -- Appelé à la fin d'un déplacement / redimensionnement (petit délai : laisse finir le tween)
+    local function SaveLayoutSoon()
+        task.delay(0.2, SaveLayout)
+    end
+
+    local function LoadLayout()
+        local ok, data = pcall(function()
+            if isfile(LayoutPath) then return HS:JSONDecode(readfile(LayoutPath)) end
+        end)
+        if not ok or type(data) ~= "table" then return end
+
+        local screen = ScreenGui.AbsoluteSize
+        if screen.X < 100 or screen.Y < 100 then screen = workspace.CurrentCamera.ViewportSize end
+
+        local function valid(t, n)
+            if type(t) ~= "table" then return false end
+            for i = 1, n do
+                if type(t[i]) ~= "number" then return false end
+            end
+            return true
+        end
+
+        -- Les positions sont converties en pixels et recadrées : la fenêtre reste visible même si la résolution a changé
+        if valid(data.Size, 2) then
+            local w = math.clamp(data.Size[1], 320, math.max(320, math.min(1000, screen.X)))
+            local h = math.clamp(data.Size[2], 250, math.max(250, math.min(800, screen.Y)))
+            ContentHolder.Size = UDim2.fromOffset(w, h)
+            LastSize = ContentHolder.Size
+        end
+        if valid(data.Content, 4) then
+            local x = math.clamp(data.Content[1] * screen.X + data.Content[2], 0, math.max(0, screen.X - 120))
+            local y = math.clamp(data.Content[3] * screen.Y + data.Content[4], 0, math.max(0, screen.Y - 80))
+            ContentHolder.Position = UDim2.fromOffset(x, y)
+        end
+        if valid(data.Side, 4) then
+            local halfH = (BrandH + 10 + TabsH) / 2
+            local x = math.clamp(data.Side[1] * screen.X + data.Side[2], 0, math.max(0, screen.X - SideW))
+            local y = math.clamp(data.Side[3] * screen.Y + data.Side[4], halfH, math.max(halfH, screen.Y - halfH))
+            SideColumn.Position = UDim2.new(0, x, 0, y)
+        end
+    end
+
+    local function ResetLayout()
+        SideColumn.Position = DefaultSidePos
+        ContentHolder.Position = DefaultContentPos
+        ContentHolder.Size = DefaultContentSize
+        LastSize = DefaultContentSize
+        pcall(function()
+            if isfile(LayoutPath) then delfile(LayoutPath) end
         end)
     end
+
+    LoadLayout()
 
     local ResizeBtn = Create("TextButton", {
         Parent = ContentBubble,
@@ -1942,10 +2019,10 @@ function Library:CreateWindow(Settings)
     })
     MakeResizable(ResizeBtn, ContentHolder, function(newSize)
         LastSize = newSize
-    end)
+    end, SaveLayoutSoon)
 
     -- 🏷️ PANNEAU LOGO + TITRE (glisser ici déplace toute la colonne de gauche)
-    MakeDraggable(BrandBubble, SideColumn)
+    MakeDraggable(BrandBubble, SideColumn, SaveLayoutSoon)
 
     local LogoBubble = Create("Frame", {
         Parent = BrandBubble,
@@ -2021,7 +2098,7 @@ function Library:CreateWindow(Settings)
         BackgroundTransparency = 1,
         ZIndex = 5
     })
-    MakeDraggable(TopBar, ContentHolder)
+    MakeDraggable(TopBar, ContentHolder, SaveLayoutSoon)
 
     Create("Frame", {
         Parent = TopBar,
@@ -2361,39 +2438,14 @@ function Library:CreateWindow(Settings)
         ClipsDescendants = true
     })
 
-    -- Ouverture / fermeture : les 3 panneaux apparaissent en cascade (pop), la barre de recherche suit
+    -- Ouverture / fermeture instantanée (aucune animation, aucun tween => pas de lag)
     local function ToggleUI()
         IsOpen = not IsOpen
         Library.UIOpen = IsOpen
-        if IsOpen then
-            PlaySound("Open")
-            SideColumn.Visible = true
-            ContentHolder.Visible = true
-            SearchContainer.Visible = true
-            for i, sc in ipairs(Panels) do
-                task.delay((i - 1) * 0.08, function()
-                    if IsOpen then Tween(sc, 0.5, {Scale = 1}, Enum.EasingStyle.Back) end
-                end)
-            end
-            Tween(SearchContainer, 0.6, {Position = UDim2.new(0.5, 0, 0, 30)}, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-        else
-            PlaySound("Close")
-            for i, sc in ipairs(Panels) do
-                task.delay((i - 1) * 0.05, function()
-                    if not IsOpen then Tween(sc, 0.3, {Scale = 0.001}, Enum.EasingStyle.Quint, Enum.EasingDirection.In) end
-                end)
-            end
-            local st = Tween(SearchContainer, 0.4, {Position = UDim2.new(0.5, 0, 0, -150)}, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-            task.delay(0.55, function()
-                if not IsOpen then
-                    SideColumn.Visible = false
-                    ContentHolder.Visible = false
-                end
-            end)
-            st.Completed:Connect(function()
-                if not IsOpen then SearchContainer.Visible = false end
-            end)
-        end
+        PlaySound(IsOpen and "Open" or "Close")
+        SideColumn.Visible = IsOpen
+        ContentHolder.Visible = IsOpen
+        SearchContainer.Visible = IsOpen
     end
 
     if UIS.TouchEnabled then
@@ -4335,6 +4387,14 @@ function Library:CreateWindow(Settings)
         Default = true,
         Callback = function(val)
             Library.SoundsEnabled = val
+        end
+    })
+
+    KeyBlock:CreateButton({
+        Name = "Reset UI Position / Size",
+        Callback = function()
+            ResetLayout()
+            Library:Notify({Title = "Layout Reset", Content = "Position and size restored", Type = "Success"})
         end
     })
 
