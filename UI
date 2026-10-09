@@ -1,4 +1,5 @@
--- 🎵 ENHANCED UI LIBRARY WITH SOUNDS & SMOOTH ANIMATIONS 🎵 (version corrigée + MultiDropdown/Search, Sliders décimaux, Notifs typées, Callbacks protégés)
+-- 🎵 ENHANCED UI LIBRARY : intro animée + animations + layout 3 panneaux séparés (Brand / Tabs / Fonctions)
+-- (MultiDropdown/Search, Sliders décimaux, Notifs typées, Callbacks protégés)
 
 local Library = {}
 local TS = game:GetService("TweenService")
@@ -29,6 +30,17 @@ local function Tween(obj, time, props, style, dir)
     local t = TS:Create(obj, TweenInfo.new(time, style or Enum.EasingStyle.Quart, dir or Enum.EasingDirection.Out), props)
     t:Play()
     return t
+end
+
+-- UIScale partagé (hover + animation d'entrée) : ne casse jamais les layouts
+local function GetPopScale(obj)
+    local s = obj:FindFirstChild("PopScale")
+    if not s then
+        s = Instance.new("UIScale")
+        s.Name = "PopScale"
+        s.Parent = obj
+    end
+    return s
 end
 
 -- Exécute un callback sans jamais casser l'UI : l'erreur est affichée en notif + console
@@ -785,7 +797,7 @@ end
 
 local function MakeResizable(handle, frame, onResized)
     local dragging, dragStart, startSize
-    local MinSize = Vector2.new(500, 350)
+    local MinSize = Vector2.new(320, 250)
     local MaxSize = Vector2.new(1000, 800)
 
     handle.InputBegan:Connect(function(input)
@@ -878,6 +890,142 @@ function Library:Destroy()
     end
     Library.UIOpen = true
     function Library:Notify() end
+end
+
+-- 🚀 INTRO : anneau qui tourne + logo + titre en machine à écrire + barre de progression
+-- Config de CreateWindow : Intro = false pour désactiver, IntroDuration = 2.4, IntroTexts = {"...", "..."}
+local function PlayIntro(gui, theme, cfg, title, iconId)
+    local duration = cfg.IntroDuration or 2.4
+    local texts = cfg.IntroTexts or {"Initializing...", "Loading modules...", "Building interface...", "Ready!"}
+
+    local Overlay = Create("Frame", {
+        Parent = gui,
+        Position = UDim2.new(0, 0, 0, -60),
+        Size = UDim2.new(1, 0, 1, 120),
+        BackgroundColor3 = theme.Main,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 30000,
+        Active = true
+    })
+
+    local Card = Create("CanvasGroup", {
+        Parent = Overlay,
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromOffset(320, 215),
+        BackgroundTransparency = 1,
+        GroupTransparency = 1,
+        ZIndex = 30001
+    })
+    local Scale = Create("UIScale", {Parent = Card, Scale = 0.85})
+
+    -- Cercle de fond + arc dégradé qui tourne
+    local Track = Create("Frame", {
+        Parent = Card, AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 10),
+        Size = UDim2.fromOffset(90, 90), BackgroundTransparency = 1, ZIndex = 30002
+    })
+    Create("UICorner", {Parent = Track, CornerRadius = UDim.new(1, 0)})
+    Create("UIStroke", {Parent = Track, Color = theme.TextDark, Transparency = 0.85, Thickness = 3})
+
+    local Ring = Create("Frame", {
+        Parent = Card, AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 10),
+        Size = UDim2.fromOffset(90, 90), BackgroundTransparency = 1, ZIndex = 30003
+    })
+    Create("UICorner", {Parent = Ring, CornerRadius = UDim.new(1, 0)})
+    local RingStroke = Create("UIStroke", {Parent = Ring, Color = Color3.new(1, 1, 1), Thickness = 3})
+    local RingGrad = Create("UIGradient", {
+        Parent = RingStroke,
+        Color = theme.Gradient,
+        Transparency = NumberSequence.new{
+            NumberSequenceKeypoint.new(0, 0),
+            NumberSequenceKeypoint.new(0.55, 0.15),
+            NumberSequenceKeypoint.new(0.56, 1),
+            NumberSequenceKeypoint.new(1, 1)
+        }
+    })
+
+    local Logo = Create("ImageLabel", {
+        Parent = Track, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1,
+        Image = GetAssetId(iconId), ImageColor3 = theme.Accent, ZIndex = 30004
+    })
+
+    local TitleLbl = Create("TextLabel", {
+        Parent = Card, Position = UDim2.new(0, 0, 0, 114), Size = UDim2.new(1, 0, 0, 26),
+        BackgroundTransparency = 1, Text = title, MaxVisibleGraphemes = 0,
+        Font = Library.GlobalFontBold, TextSize = 22, TextColor3 = theme.Text, ZIndex = 30002
+    })
+
+    local Status = Create("TextLabel", {
+        Parent = Card, Position = UDim2.new(0, 0, 0, 144), Size = UDim2.new(1, 0, 0, 18),
+        BackgroundTransparency = 1, Text = texts[1],
+        Font = Library.GlobalFont, TextSize = 13, TextColor3 = theme.TextDark, ZIndex = 30002
+    })
+
+    local BarBg = Create("Frame", {
+        Parent = Card, AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 176),
+        Size = UDim2.fromOffset(240, 4), BackgroundColor3 = theme.Second,
+        BackgroundTransparency = 0.3, BorderSizePixel = 0, ZIndex = 30002
+    })
+    Create("UICorner", {Parent = BarBg, CornerRadius = UDim.new(1, 0)})
+    local Fill = Create("Frame", {
+        Parent = BarBg, Size = UDim2.fromScale(0, 1), BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0, ZIndex = 30003
+    })
+    Create("UICorner", {Parent = Fill, CornerRadius = UDim.new(1, 0)})
+    Create("UIGradient", {Parent = Fill, Color = theme.Gradient})
+
+    local Percent = Create("TextLabel", {
+        Parent = Card, Position = UDim2.new(0, 0, 0, 186), Size = UDim2.new(1, 0, 0, 16),
+        BackgroundTransparency = 1, Text = "0%",
+        Font = Library.GlobalFont, TextSize = 12, TextColor3 = theme.TextDark, ZIndex = 30002
+    })
+
+    -- Entrée
+    PlaySound("Open")
+    TS:Create(Overlay, TweenInfo.new(0.35), {BackgroundTransparency = 0.05}):Play()
+    TS:Create(Card, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {GroupTransparency = 0}):Play()
+    TS:Create(Scale, TweenInfo.new(0.6, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+    TS:Create(Logo, TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.fromOffset(44, 44)}):Play()
+    local Spin = TS:Create(RingGrad, TweenInfo.new(1.1, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1), {Rotation = 360})
+    Spin:Play()
+
+    -- Titre en machine à écrire
+    task.spawn(function()
+        task.wait(0.3)
+        local n = utf8.len(title) or #title
+        for i = 1, n do
+            TitleLbl.MaxVisibleGraphemes = i
+            task.wait(math.clamp(0.6 / n, 0.02, 0.08))
+        end
+        TitleLbl.MaxVisibleGraphemes = -1
+    end)
+
+    -- Progression (courbe douce) + messages d'état
+    task.wait(0.4)
+    local start = os.clock()
+    while true do
+        local a = math.clamp((os.clock() - start) / duration, 0, 1)
+        local p = TS:GetValue(a, Enum.EasingStyle.Quart, Enum.EasingDirection.InOut)
+        Fill.Size = UDim2.fromScale(p, 1)
+        Percent.Text = math.floor(p * 100) .. "%"
+        local txt = texts[math.clamp(math.floor(a * #texts) + 1, 1, #texts)]
+        if Status.Text ~= txt then Status.Text = txt end
+        if a >= 1 then break end
+        RS.RenderStepped:Wait()
+    end
+
+    -- Sortie : petit "pop" puis fondu
+    PlaySound("Success")
+    TS:Create(Scale, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = 1.06}):Play()
+    task.wait(0.25)
+    TS:Create(Scale, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {Scale = 0.85}):Play()
+    TS:Create(Card, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {GroupTransparency = 1}):Play()
+    TS:Create(Overlay, TweenInfo.new(0.5), {BackgroundTransparency = 1}):Play()
+    task.wait(0.5)
+    Spin:Cancel()
+    Overlay:Destroy()
 end
 
 function Library:KeySystem(Settings)
@@ -1204,6 +1352,11 @@ function Library:CreateWindow(Settings)
     Library.CurrentGui = ScreenGui
     Library.UIOpen = true
 
+    -- 🚀 Écran de chargement d'intro (désactivable avec Intro = false)
+    if Config.Intro ~= false then
+        PlayIntro(ScreenGui, SelectedTheme, Config, Title, (CustomIconID and CustomIconID ~= "") and CustomIconID or "rbxassetid://5436396975")
+    end
+
     -- Compteur FPS (lié à la fenêtre, donc nettoyé par Destroy)
     do
         local frames, lastTick = 0, os.clock()
@@ -1217,6 +1370,15 @@ function Library:CreateWindow(Settings)
             end
         end)
     end
+
+    -- ✨ Les bordures dégradées tournent en continu (en pause quand l'UI est fermée)
+    Bind(RS.RenderStepped, function()
+        if not Library.UIOpen then return end
+        local r = (os.clock() * 40) % 360
+        for _, g in ipairs(Library.GradientObjects) do
+            if g.Parent then g.Rotation = r end
+        end
+    end)
 
     function Library:GetThemes()
         local list = {}
@@ -1653,72 +1815,120 @@ function Library:CreateWindow(Settings)
         end)
     end
 
+    ----------------------------------------------------------------------
+    -- 🧩 LAYOUT EN 3 PANNEAUX SÉPARÉS
+    --   ◀ colonne de gauche : [Brand : logo + titre] au-dessus de [Tabs]
+    --   ▣ panneau central   : les fonctions (avec le nom de l'onglet actif)
+    ----------------------------------------------------------------------
     local VP = workspace.CurrentCamera.ViewportSize
     local IsMobile = UIS.TouchEnabled and (VP.X < 850 or VP.Y < 600)
-    local WindowSizeX = IsMobile and math.clamp(VP.X - 40, 300, 780) or 780
-    local WindowSizeY = IsMobile and math.clamp(VP.Y - 40, 200, 540) or 540
-    local WindowSize = UDim2.fromOffset(WindowSizeX, WindowSizeY)
+    local IsOpen = true
 
-    local IsOpen, LastSize = true, WindowSize
+    local SideW = IsMobile and 130 or 200
+    local BrandH = 70
+    local TabsH = IsMobile and math.clamp(VP.Y - 200, 150, 340) or 340
+    local ContentW = IsMobile and math.clamp(VP.X - SideW - 60, 260, 640) or 620
+    local ContentH = IsMobile and math.clamp(VP.Y - 80, 200, 460) or 470
+    local LastSize = UDim2.fromOffset(ContentW, ContentH)
 
-    local WindowContainer = Create("Frame", {
-        Name = "WindowContainer",
+    -- Crée un panneau flottant indépendant (ombre + fond + bordure + animation d'ouverture)
+    local function MakePanel(name, parent, anchor, position, size)
+        local Holder = Create("Frame", {
+            Name = name,
+            Parent = parent,
+            AnchorPoint = anchor,
+            Position = position,
+            Size = size,
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            ZIndex = 2
+        })
+        local Scale = Create("UIScale", {Parent = Holder, Scale = 0.001})
+        CreateDropShadow(Holder, 45, 0.45)
+
+        local Bubble = Create("Frame", {
+            Parent = Holder,
+            Size = UDim2.fromScale(1, 1),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            ClipsDescendants = true,
+            ZIndex = 2
+        })
+        local Img = Create("ImageLabel", {
+            Parent = Bubble,
+            Size = UDim2.fromScale(1, 1),
+            BackgroundTransparency = 1,
+            ImageTransparency = ImageTrans,
+            ScaleType = Enum.ScaleType.Crop,
+            ZIndex = 1
+        })
+        SetImageAsync(Img, "Image", SelectedTheme.Background)
+        AddCorner(Img, 12)
+
+        local Col = Create("Frame", {
+            Parent = Bubble,
+            Size = UDim2.fromScale(1, 1),
+            BackgroundColor3 = SelectedTheme.Main,
+            BackgroundTransparency = WindowTrans,
+            BorderSizePixel = 0,
+            ZIndex = 2,
+            ThemeTag = "Main"
+        })
+        AddCorner(Col, 12)
+        AddCorner(Bubble, 12)
+        AddStroke(Bubble, SelectedTheme)
+        return Holder, Bubble, Img, Col, Scale
+    end
+
+    -- Proxy : toute écriture (transparence, couleur, image) est appliquée à tous les panneaux
+    local function MirrorObject(...)
+        local list = {...}
+        return setmetatable({}, {
+            __index = function(_, k) return list[1][k] end,
+            __newindex = function(_, k, v)
+                for _, o in ipairs(list) do o[k] = v end
+            end
+        })
+    end
+
+    -- ◀ COLONNE DE GAUCHE : logo/titre (haut) + onglets (dessous)
+    local SideColumn = Create("Frame", {
+        Name = "LeftColumn",
         Parent = ScreenGui,
-        Size = UDim2.fromOffset(0, 0),
-        Position = UDim2.fromScale(0.5, 0.5),
-        AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundTransparency = 1,
-        ZIndex = 1
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, 20, 0.5, 0),
+        Size = UDim2.fromOffset(SideW, BrandH + 10 + TabsH),
+        BackgroundTransparency = 1
     })
 
-    local Main = Create("Frame", {
-        Name = "Main",
-        Parent = WindowContainer,
-        Size = UDim2.fromScale(1, 1),
-        BackgroundColor3 = SelectedTheme.Main,
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        ClipsDescendants = true,
-        ZIndex = 2
-    })
+    local BrandHolder, BrandBubble, BrandImg, BrandCol, BrandScale =
+        MakePanel("Brand", SideColumn, Vector2.new(0, 0), UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, BrandH))
 
-    local Shadow1 = CreateDropShadow(WindowContainer, 120, 0.35)
-    local Shadow2 = CreateDropShadow(WindowContainer, 35, 0.4)
-    Shadow1.ImageTransparency = 1
-    Shadow2.ImageTransparency = 1
+    local TabsHolder, SideBubble, TabsImg, TabsCol, TabsScale =
+        MakePanel("Tabs", SideColumn, Vector2.new(0, 0), UDim2.new(0, 0, 0, BrandH + 10), UDim2.new(1, 0, 1, -(BrandH + 10)))
 
-    local MainBgImage = Create("ImageLabel", {
-        Parent = Main,
-        Size = UDim2.fromScale(1, 1),
-        BackgroundTransparency = 1,
-        ImageTransparency = ImageTrans,
-        ScaleType = Enum.ScaleType.Crop,
-        ZIndex = 1
-    })
-    SetImageAsync(MainBgImage, "Image", SelectedTheme.Background)
-    AddCorner(MainBgImage, 12)
+    -- ▣ PANNEAU CENTRAL : les fonctions
+    local ContentPos = IsMobile
+        and UDim2.new(0, SideW + 40, 0.5, -ContentH / 2)
+        or UDim2.new(0.5, -ContentW / 2, 0.5, -ContentH / 2)
 
-    local MainBgColor = Create("Frame", {
-        Parent = Main,
-        Size = UDim2.fromScale(1, 1),
-        BackgroundColor3 = SelectedTheme.Main,
-        BackgroundTransparency = WindowTrans,
-        ZIndex = 2,
-        ThemeTag = "Main"
-    })
-    AddCorner(MainBgColor, 12)
+    local ContentHolder, ContentBubble, ContentImg, ContentCol, ContentScale =
+        MakePanel("Content", ScreenGui, Vector2.new(0, 0), ContentPos, UDim2.fromOffset(ContentW, ContentH))
 
-    local OrbContainer = AddSoftOrbs(Main, SelectedTheme)
+    local MainBgImage = MirrorObject(ContentImg, TabsImg, BrandImg)
+    local MainBgColor = MirrorObject(ContentCol, TabsCol, BrandCol)
 
-    AddCorner(Main, 12)
-    AddStroke(Main, SelectedTheme)
+    local OrbContainer = AddSoftOrbs(ContentBubble, SelectedTheme)
 
-    TS:Create(WindowContainer, TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = WindowSize}):Play()
-    TS:Create(Shadow1, TweenInfo.new(0.7), {ImageTransparency = 0.35}):Play()
-    TS:Create(Shadow2, TweenInfo.new(0.7), {ImageTransparency = 0.4}):Play()
+    local Panels = {BrandScale, TabsScale, ContentScale}
+    for i, sc in ipairs(Panels) do
+        task.delay((i - 1) * 0.1, function()
+            Tween(sc, 0.6, {Scale = 1}, Enum.EasingStyle.Back)
+        end)
+    end
 
     local ResizeBtn = Create("TextButton", {
-        Parent = Main,
+        Parent = ContentBubble,
         Size = UDim2.fromOffset(25, 25),
         Position = UDim2.new(1, 0, 1, 0),
         AnchorPoint = Vector2.new(1, 1),
@@ -1730,22 +1940,93 @@ function Library:CreateWindow(Settings)
         ZIndex = 2000,
         ThemeTag = "TextDark"
     })
-    MakeResizable(ResizeBtn, WindowContainer, function(newSize)
+    MakeResizable(ResizeBtn, ContentHolder, function(newSize)
         LastSize = newSize
     end)
 
+    -- 🏷️ PANNEAU LOGO + TITRE (glisser ici déplace toute la colonne de gauche)
+    MakeDraggable(BrandBubble, SideColumn)
+
+    local LogoBubble = Create("Frame", {
+        Parent = BrandBubble,
+        Size = UDim2.fromOffset(42, 42),
+        Position = UDim2.new(0, 14, 0.5, -21),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0,
+        ZIndex = 6
+    })
+    AddCorner(LogoBubble, 12)
+    local LogoGrad = Create("UIGradient", {Parent = LogoBubble, Color = SelectedTheme.Gradient, Rotation = 45})
+    table.insert(Library.GradientObjects, LogoGrad)
+
+    local LogoIcon = Create("ImageLabel", {
+        Parent = LogoBubble,
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromOffset(25, 25),
+        BackgroundTransparency = 1,
+        ImageColor3 = Color3.new(1, 1, 1),
+        ZIndex = 7
+    })
+    SetImageAsync(LogoIcon, "Image", (CustomIconID and CustomIconID ~= "") and CustomIconID or "rbxassetid://5436396975")
+
+    Create("TextLabel", {
+        Parent = BrandBubble,
+        Size = UDim2.new(1, -74, 0, 20),
+        Position = UDim2.new(0, 64, 0, 16),
+        BackgroundTransparency = 1,
+        Text = Title,
+        Font = Library.GlobalFontBold,
+        TextColor3 = SelectedTheme.Text,
+        TextSize = 16,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 6,
+        ThemeTag = "Text"
+    })
+
+    Create("TextLabel", {
+        Parent = BrandBubble,
+        Size = UDim2.new(1, -74, 0, 16),
+        Position = UDim2.new(0, 64, 0, 37),
+        BackgroundTransparency = 1,
+        Text = tostring(Config.Subtitle or LP.DisplayName),
+        Font = Library.GlobalFont,
+        TextColor3 = SelectedTheme.TextDark,
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 6,
+        ThemeTag = "TextDark"
+    })
+
+    -- Pulsation douce du logo (pause quand l'UI est fermée)
+    task.spawn(function()
+        while LogoIcon.Parent do
+            if Library.UIOpen then
+                TS:Create(LogoIcon, TweenInfo.new(1.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Size = UDim2.fromOffset(28, 28)}):Play()
+                task.wait(1.5)
+                TS:Create(LogoIcon, TweenInfo.new(1.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Size = UDim2.fromOffset(23, 23)}):Play()
+                task.wait(1.5)
+            else
+                task.wait(0.5)
+            end
+        end
+    end)
+
+    -- 📄 EN-TÊTE DU PANNEAU CENTRAL : nom de l'onglet actif (glisser ici déplace le panneau)
     local TopBar = Create("Frame", {
-        Parent = Main,
-        Size = UDim2.new(1, 0, 0, 45),
+        Parent = ContentBubble,
+        Size = UDim2.new(1, 0, 0, 54),
         BackgroundTransparency = 1,
         ZIndex = 5
     })
-    MakeDraggable(TopBar, WindowContainer)
+    MakeDraggable(TopBar, ContentHolder)
 
     Create("Frame", {
         Parent = TopBar,
-        Size = UDim2.new(1, 0, 0, 1),
-        Position = UDim2.new(0, 0, 1, 0),
+        Size = UDim2.new(1, -28, 0, 1),
+        Position = UDim2.new(0, 14, 1, 0),
         BackgroundColor3 = SelectedTheme.TextDark,
         BackgroundTransparency = 0.8,
         BorderSizePixel = 0,
@@ -1753,82 +2034,34 @@ function Library:CreateWindow(Settings)
         ThemeTag = "TextDark"
     })
 
-    local TitleOffsetX = 18
-    if CustomIconID and CustomIconID ~= "" then
-        TitleOffsetX = 48
-        local TopIcon = Create("ImageLabel", {
-            Parent = TopBar,
-            Size = UDim2.new(0, 26, 0, 26),
-            Position = UDim2.new(0, 16, 0.5, -13),
-            BackgroundTransparency = 1,
-            ZIndex = 6
-        })
-        SetImageAsync(TopIcon, "Image", CustomIconID)
-    end
-
-    local TitleLabel = Create("TextLabel", {
+    local ContentTitle = Create("TextLabel", {
         Parent = TopBar,
-        Size = UDim2.new(0, 200, 0, 18),
-        Position = UDim2.new(0, TitleOffsetX, 0.5, -9),
+        Size = UDim2.new(1, -90, 0, 22),
+        Position = UDim2.new(0, 20, 0, 9),
         BackgroundTransparency = 1,
-        Text = Title,
+        Text = "",
         Font = Library.GlobalFontBold,
         TextColor3 = SelectedTheme.Text,
-        TextSize = 16,
+        TextSize = 18,
         TextXAlignment = Enum.TextXAlignment.Left,
-        TextYAlignment = Enum.TextYAlignment.Center,
-        TextScaled = false,
+        TextTruncate = Enum.TextTruncate.AtEnd,
         ZIndex = 6,
         ThemeTag = "Text"
     })
 
-    -- 🎯 EFFET STRETCHED
-    TitleLabel.TextScaled = true
-    Create("UITextSizeConstraint", {
-        Parent = TitleLabel,
-        MaxTextSize = 20,
-        MinTextSize = 10
-    })
-
-    Create("UIAspectRatioConstraint", {
-        Parent = TitleLabel,
-        AspectRatio = 11,
-        AspectType = Enum.AspectType.ScaleWithParentSize,
-        DominantAxis = Enum.DominantAxis.Height
-    })
-
-    -- 💎 ICÔNE À DROITE DU TITRE
-    local CrownIcon = Create("ImageLabel", {
+    Create("TextLabel", {
         Parent = TopBar,
-        Size = UDim2.new(0, 35, 0, 35),
-        Position = UDim2.new(0, TitleOffsetX + 105, 0.5, -12),
+        Size = UDim2.new(1, -90, 0, 14),
+        Position = UDim2.new(0, 20, 0, 31),
         BackgroundTransparency = 1,
-        ImageColor3 = Color3.fromRGB(255, 255, 255),
-        ImageTransparency = 0,
-        ZIndex = 6
+        Text = Title,
+        Font = Library.GlobalFont,
+        TextColor3 = SelectedTheme.TextDark,
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 6,
+        ThemeTag = "TextDark"
     })
-    SetImageAsync(CrownIcon, "Image", "rbxassetid://5436396975")
-
-    -- Pulsation douce (fix : TweenService -> TS, et pause quand l'UI est fermée)
-    task.spawn(function()
-        while CrownIcon.Parent do
-            if Library.UIOpen then
-                TS:Create(CrownIcon, TweenInfo.new(1.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-                    Size = UDim2.new(0, 26, 0, 26),
-                    ImageTransparency = 0
-                }):Play()
-                task.wait(1.5)
-
-                TS:Create(CrownIcon, TweenInfo.new(1.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-                    Size = UDim2.new(0, 24, 0, 24),
-                    ImageTransparency = 0.1
-                }):Play()
-                task.wait(1.5)
-            else
-                task.wait(0.5)
-            end
-        end
-    end)
 
     local ActiveTab = nil
 
@@ -1975,12 +2208,16 @@ function Library:CreateWindow(Settings)
 
     local Close = Create("TextButton", {
         Parent = TopBar,
-        Size = UDim2.new(0, 45, 1, 0),
-        Position = UDim2.new(1, -45, 0, 0),
-        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 32, 0, 32),
+        Position = UDim2.new(1, -46, 0.5, -16),
+        BackgroundColor3 = SelectedTheme.Second,
+        BackgroundTransparency = 0.5,
         Text = "",
-        ZIndex = 6
+        AutoButtonColor = false,
+        ZIndex = 6,
+        ThemeTag = "Second"
     })
+    AddCorner(Close, 10)
 
     local Cross1 = Create("Frame", {
         Parent = Close,
@@ -2019,49 +2256,44 @@ function Library:CreateWindow(Settings)
         Library:Destroy() -- nettoie connexions, sons et GUI
     end)
 
-    -- 📱 SIDEBAR VERTICALE POUR LES TABS
-    local TabContainer = Create("Frame", {
-        Parent = Main,
-        Size = UDim2.new(0, 200, 1, -120),
-        Position = UDim2.new(0, 10, 0, 60),
-        BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-        BackgroundTransparency = 0.2,
+    -- 📱 LISTE DES ONGLETS (dans le panneau de gauche, scrollable)
+    local TabContainer = Create("ScrollingFrame", {
+        Parent = SideBubble,
+        Size = UDim2.new(1, 0, 1, -70),
+        Position = UDim2.new(0, 0, 0, 10),
+        BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        ZIndex = 5,
-        ClipsDescendants = true,
-        ThemeTag = "Main"
+        ScrollBarThickness = 0,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        ZIndex = 5
     })
-    AddCorner(TabContainer, 12)
-
-    local TabContainerStroke = AddStroke(TabContainer, SelectedTheme)
-    TabContainerStroke.Transparency = 0.7
-    TabContainerStroke.Thickness = 1.5
 
     Create("UIListLayout", {
         Parent = TabContainer,
-        Padding = UDim.new(0, 4),
+        Padding = UDim.new(0, 6),
         HorizontalAlignment = Enum.HorizontalAlignment.Center
     })
     Create("UIPadding", {
         Parent = TabContainer,
-        PaddingTop = UDim.new(0, 10),
-        PaddingBottom = UDim.new(0, 10),
-        PaddingLeft = UDim.new(0, 8),
-        PaddingRight = UDim.new(0, 8)
+        PaddingTop = UDim.new(0, 4),
+        PaddingBottom = UDim.new(0, 8),
+        PaddingLeft = UDim.new(0, 10),
+        PaddingRight = UDim.new(0, 10)
     })
 
+    -- ⚙️ BOUTON SETTINGS (en bas du panneau des onglets)
     local OpenSettingsBtn = Create("TextButton", {
-        Parent = Main,
-        Size = UDim2.new(0, 200, 0, 45),
-        Position = UDim2.new(0, 10, 1, -55),
-        BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-        BackgroundTransparency = 0.2,
+        Parent = SideBubble,
+        Size = UDim2.new(1, -20, 0, 44),
+        Position = UDim2.new(0, 10, 1, -54),
+        BackgroundColor3 = SelectedTheme.Second,
+        BackgroundTransparency = 0.5,
         Text = "",
-        Font = Library.GlobalFontBold,
-        TextColor3 = SelectedTheme.Text,
-        TextSize = 13,
+        AutoButtonColor = false,
         ZIndex = 6,
-        ThemeTag = "Main"
+        ThemeTag = "Second"
     })
     AddCorner(OpenSettingsBtn, 12)
 
@@ -2090,7 +2322,6 @@ function Library:CreateWindow(Settings)
         ThemeTag = "TextDark"
     })
 
-    -- fix : un seul stroke (avant il y en avait deux empilés)
     AddStroke(OpenSettingsBtn, SelectedTheme).Transparency = 0.8
 
     CreateRipple(OpenSettingsBtn, SelectedTheme.Accent)
@@ -2099,7 +2330,7 @@ function Library:CreateWindow(Settings)
     OpenSettingsBtn.MouseEnter:Connect(function()
         PlaySound("Hover")
         if leaveTweenSettings then leaveTweenSettings:Cancel() end
-        hoverTweenSettings = TS:Create(OpenSettingsBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.05})
+        hoverTweenSettings = TS:Create(OpenSettingsBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.25})
         hoverTweenSettings:Play()
 
         TS:Create(SettingsIcon, TweenInfo.new(0.25), {ImageColor3 = Themes.Default.Accent}):Play()
@@ -2107,57 +2338,60 @@ function Library:CreateWindow(Settings)
     end)
     OpenSettingsBtn.MouseLeave:Connect(function()
         if hoverTweenSettings then hoverTweenSettings:Cancel() end
-        leaveTweenSettings = TS:Create(OpenSettingsBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.2})
+        leaveTweenSettings = TS:Create(OpenSettingsBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quart), {BackgroundTransparency = 0.5})
         leaveTweenSettings:Play()
 
         TS:Create(SettingsIcon, TweenInfo.new(0.25), {ImageColor3 = Themes.Default.TextDark}):Play()
         TS:Create(SettingsLabel, TweenInfo.new(0.25), {TextColor3 = Themes.Default.TextDark}):Play()
     end)
     OpenSettingsBtn.MouseButton1Down:Connect(function()
-        TS:Create(OpenSettingsBtn, TweenInfo.new(0.1), {Size = UDim2.new(0, 196, 0, 42), Position = UDim2.new(0, 12, 1, -54)}):Play()
+        TS:Create(OpenSettingsBtn, TweenInfo.new(0.1), {Size = UDim2.new(1, -28, 0, 40), Position = UDim2.new(0, 14, 1, -52)}):Play()
     end)
     OpenSettingsBtn.MouseButton1Up:Connect(function()
-        TS:Create(OpenSettingsBtn, TweenInfo.new(0.1), {Size = UDim2.new(0, 200, 0, 45), Position = UDim2.new(0, 10, 1, -55)}):Play()
+        TS:Create(OpenSettingsBtn, TweenInfo.new(0.1), {Size = UDim2.new(1, -20, 0, 44), Position = UDim2.new(0, 10, 1, -54)}):Play()
     end)
 
+    -- 🫧 ZONE DE CONTENU (dans le panneau central, sous l'en-tête)
     local PageContainer = Create("Frame", {
-        Parent = Main,
-        Size = UDim2.new(1, -235, 1, -75),
-        Position = UDim2.new(0, 220, 0, 60),
+        Parent = ContentBubble,
+        Size = UDim2.new(1, -24, 1, -66),
+        Position = UDim2.new(0, 12, 0, 60),
         BackgroundTransparency = 1,
         ZIndex = 5,
         ClipsDescendants = true
     })
 
-    -- Ouverture / fermeture animées (fade + scale), barre de recherche synchronisée
+    -- Ouverture / fermeture : les 3 panneaux apparaissent en cascade (pop), la barre de recherche suit
     local function ToggleUI()
         IsOpen = not IsOpen
         Library.UIOpen = IsOpen
         if IsOpen then
             PlaySound("Open")
-            WindowContainer.Visible = true
+            SideColumn.Visible = true
+            ContentHolder.Visible = true
             SearchContainer.Visible = true
-            WindowContainer.Size = UDim2.fromOffset(0, 0)
-            Tween(WindowContainer, 0.45, {Size = LastSize}, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-            Tween(Shadow1, 0.45, {ImageTransparency = 0.35})
-            Tween(Shadow2, 0.45, {ImageTransparency = 0.4})
+            for i, sc in ipairs(Panels) do
+                task.delay((i - 1) * 0.08, function()
+                    if IsOpen then Tween(sc, 0.5, {Scale = 1}, Enum.EasingStyle.Back) end
+                end)
+            end
             Tween(SearchContainer, 0.6, {Position = UDim2.new(0.5, 0, 0, 30)}, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
         else
             PlaySound("Close")
-            local t = Tween(WindowContainer, 0.3, {Size = UDim2.fromOffset(0, 0)}, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-            Tween(Shadow1, 0.3, {ImageTransparency = 1})
-            Tween(Shadow2, 0.3, {ImageTransparency = 1})
-            -- -150 : sort largement de l'écran (la barre Roblox du haut décale le (0,0) de ~36px)
+            for i, sc in ipairs(Panels) do
+                task.delay((i - 1) * 0.05, function()
+                    if not IsOpen then Tween(sc, 0.3, {Scale = 0.001}, Enum.EasingStyle.Quint, Enum.EasingDirection.In) end
+                end)
+            end
             local st = Tween(SearchContainer, 0.4, {Position = UDim2.new(0.5, 0, 0, -150)}, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-            t.Completed:Connect(function()
+            task.delay(0.55, function()
                 if not IsOpen then
-                    WindowContainer.Visible = false
+                    SideColumn.Visible = false
+                    ContentHolder.Visible = false
                 end
             end)
             st.Completed:Connect(function()
-                if not IsOpen then
-                    SearchContainer.Visible = false -- totalement caché, plus rien en bordure
-                end
+                if not IsOpen then SearchContainer.Visible = false end
             end)
         end
     end
@@ -2417,6 +2651,7 @@ function Library:CreateWindow(Settings)
             -- fix : premier onglet sans OldTab => pas d'animation de slide
             local Direction = OldTab and ((MyIndex > OldTab.Index) and "Down" or "Up") or "None"
             ActiveTab = {Btn = TabBtn, Page = Page, Index = MyIndex}
+            ContentTitle.Text = TabName
 
             for _, v in pairs(TabContainer:GetChildren()) do
                 if v:IsA("TextButton") then
@@ -2464,6 +2699,23 @@ function Library:CreateWindow(Settings)
             if Direction ~= "None" then
                 TS:Create(Page, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position = UDim2.new(0, 0, 0, 0)}):Play()
             end
+
+            -- ✨ Apparition en cascade : chaque élément/bloc "pop" l'un après l'autre
+            task.defer(function()
+                local items = {}
+                local function collect(parent)
+                    for _, c in ipairs(parent:GetChildren()) do
+                        if c:IsA("GuiObject") then table.insert(items, c) end
+                    end
+                end
+                if LeftCol then collect(LeftCol); collect(RightCol) else collect(Page) end
+                table.sort(items, function(a, b) return a.AbsolutePosition.Y < b.AbsolutePosition.Y end)
+                for i, obj in ipairs(items) do
+                    local sc = GetPopScale(obj)
+                    sc.Scale = 0.92
+                    TS:Create(sc, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out, 0, false, math.min((i - 1) * 0.035, 0.4)), {Scale = 1}):Play()
+                end
+            end)
         end
 
         TabBtn.MouseButton1Click:Connect(Activate)
@@ -2488,18 +2740,28 @@ function Library:CreateWindow(Settings)
                 AddToSearch(element, name, TabRec, BlockFrame, BlockName)
             end
 
+            -- Hover : fond + léger "pop" (UIScale), pression = léger rétrécissement
             local function DefaultHover(btn)
                 local hoverTween, leaveTween
+                local pop = GetPopScale(btn)
                 btn.MouseEnter:Connect(function()
                     PlaySound("Hover")
                     if leaveTween then leaveTween:Cancel() end
                     hoverTween = TS:Create(btn, TweenInfo.new(0.2), {BackgroundTransparency = 0.3})
                     hoverTween:Play()
+                    Tween(pop, 0.25, {Scale = 1.015}, Enum.EasingStyle.Back)
                 end)
                 btn.MouseLeave:Connect(function()
                     if hoverTween then hoverTween:Cancel() end
                     leaveTween = TS:Create(btn, TweenInfo.new(0.2), {BackgroundTransparency = 0.5})
                     leaveTween:Play()
+                    Tween(pop, 0.2, {Scale = 1})
+                end)
+                btn.MouseButton1Down:Connect(function()
+                    Tween(pop, 0.08, {Scale = 0.97})
+                end)
+                btn.MouseButton1Up:Connect(function()
+                    Tween(pop, 0.15, {Scale = 1.015}, Enum.EasingStyle.Back)
                 end)
             end
 
@@ -2601,9 +2863,6 @@ function Library:CreateWindow(Settings)
                 DefaultHover(Btn)
 
                 Btn.MouseButton1Click:Connect(function()
-                    TS:Create(Btn, TweenInfo.new(0.1), {Size = UDim2.new(1, -4, 0, 30), Position = UDim2.new(0, 2, 0, 2)}):Play()
-                    task.wait(0.1)
-                    TS:Create(Btn, TweenInfo.new(0.1), {Size = UDim2.new(1, 0, 0, 34), Position = UDim2.new(0, 0, 0, 0)}):Play()
                     if Cfg.Callback then
                         Cfg.Callback()
                     end
@@ -3916,7 +4175,6 @@ function Library:CreateWindow(Settings)
                     ThemeTag = "Accent"
                 })
 
-                -- fix : Tween() n'était pas défini, c'est maintenant un helper local
                 CollapseButton.MouseEnter:Connect(function()
                     PlaySound("Hover")
                     Tween(CollapseButton, 0.2, { BackgroundTransparency = 0.3 })
