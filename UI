@@ -1,5 +1,5 @@
 -- 🎵 ENHANCED UI LIBRARY : intro animée + animations + layout 3 panneaux séparés (Brand / Tabs / Fonctions)
--- (MultiDropdown/Search, Sliders décimaux, Notifs V2, Callbacks protégés)
+-- (MultiDropdown/Search, Sliders décimaux, Notifs typées, Callbacks protégés)
 
 local Library = {}
 local TS = game:GetService("TweenService")
@@ -858,10 +858,8 @@ local function AttachHorizontalScroll(box, scrollingFrame, defaultAlignment)
     end)
 end
 
--- Stubs : évitent une erreur si appelés avant la création de la fenêtre
+-- Stub : évite une erreur si Notify est appelé avant la création de la fenêtre
 function Library:Notify() end
-function Library:ClearNotifications() end
-function Library:SetNotifyPosition() end
 
 -- Nettoyage complet : connexions, sons, GUI, tables internes
 function Library:Destroy()
@@ -894,8 +892,6 @@ function Library:Destroy()
     end
     Library.UIOpen = true
     function Library:Notify() end
-    function Library:ClearNotifications() end
-    function Library:SetNotifyPosition() end
 end
 
 -- 🚀 INTRO : anneau qui tourne + logo + titre en machine à écrire + barre de progression
@@ -1625,147 +1621,30 @@ function Library:CreateWindow(Settings)
         end)
     end
 
-    ----------------------------------------------------------------------
-    -- 🔔 NOTIFICATIONS V2
-    --
-    -- Options de Notify :
-    --   Title, Content, Duration (0 = persistante), Type = "Info"|"Success"|"Warning"|"Error"
-    --   ImageID  (remplace le glyphe du badge par une image)
-    --   Buttons  = {{Name = "Undo", Callback = function() end, KeepOpen = false}, ...}
-    -- Retourne un handle : {Dismiss, SetContent, SetTitle, SetProgress}
-    -- Option de CreateWindow : NotifyPosition = "TopRight" (défaut) | "TopLeft" | "BottomRight" | "BottomLeft"
-    -- Réglage global : Library.MaxNotifications = 5
-    -- Swipe vers le bord de l'écran = fermeture (souris ou tactile), sinon retour élastique
-    -- Library:ClearNotifications()        -> ferme tout en cascade
-    -- Library:SetNotifyPosition("TopLeft") -> change la position à chaud
-    -- Une pastille "Clear all" apparaît toute seule dès 3 notifs empilées
-    ----------------------------------------------------------------------
-    local NotifPos = tostring(Config.NotifyPosition or "TopRight")
-    local AtRight = NotifPos:find("Right") ~= nil
-    local AtBottom = NotifPos:find("Bottom") ~= nil
-
     local NotifContainer = Create("Frame", {
         Parent = ScreenGui,
-        Size = UDim2.new(0, 320, 1, -70),
-        AnchorPoint = Vector2.new(AtRight and 1 or 0, AtBottom and 1 or 0),
-        Position = UDim2.new(AtRight and 1 or 0, AtRight and -20 or 20, AtBottom and 1 or 0, AtBottom and -20 or 50),
+        Size = UDim2.new(0, 320, 1, -20),
+        Position = UDim2.new(1, -340, 0, 50),
         BackgroundTransparency = 1,
         ZIndex = 10000
     })
 
-    local NotifLayout = Create("UIListLayout", {
+    Create("UIListLayout", {
         Parent = NotifContainer,
         SortOrder = Enum.SortOrder.LayoutOrder,
-        VerticalAlignment = AtBottom and Enum.VerticalAlignment.Bottom or Enum.VerticalAlignment.Top,
-        Padding = UDim.new(0, 10)
+        VerticalAlignment = Enum.VerticalAlignment.Top,
+        Padding = UDim.new(0, 12)
     })
 
-    Library.MaxNotifications = Library.MaxNotifications or 5
-    local NotifStack = {}
-    local NotifOrder = 0
-    local TypeGlyphs = {Info = "i", Success = "✓", Warning = "!", Error = "✕"}
-    local TypeSounds = {Info = "Notification", Success = "Success", Warning = "Notification", Error = "Error"}
-
-    -- 🧹 Pastille "Clear all" : glisse/pop dans la pile dès 3 notifs ou plus
-    local function PillOrder()
-        return AtBottom and 1000000 or 0
-    end
-
-    local ClearPill = Create("Frame", {
-        Parent = NotifContainer,
-        Size = UDim2.new(1, 0, 0, 0),
-        BackgroundTransparency = 1,
-        ClipsDescendants = true,
-        Visible = false,
-        LayoutOrder = PillOrder()
-    })
-
-    local PillBtn = Create("TextButton", {
-        Parent = ClearPill,
-        AnchorPoint = Vector2.new(AtRight and 1 or 0, 0),
-        Position = UDim2.new(AtRight and 1 or 0, 0, 0, 0),
-        Size = UDim2.new(0, 0, 0, 26),
-        AutomaticSize = Enum.AutomaticSize.X,
-        BackgroundColor3 = SelectedTheme.Second,
-        BackgroundTransparency = 0.25,
-        Text = "✕  Clear all",
-        Font = Library.GlobalFontBold,
-        TextColor3 = SelectedTheme.Text,
-        TextSize = 12,
-        AutoButtonColor = false,
-        ZIndex = 10005,
-        ThemeTag = "Second"
-    })
-    AddCorner(PillBtn, 13)
-    AddStroke(PillBtn, SelectedTheme).Transparency = 0.6
-    Create("UIPadding", {Parent = PillBtn, PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14)})
-    local PillScale = Create("UIScale", {Parent = PillBtn, Scale = 1})
-
-    PillBtn.MouseEnter:Connect(function()
-        PlaySound("Hover")
-        Tween(PillBtn, 0.15, {BackgroundTransparency = 0.05})
-        Tween(PillScale, 0.2, {Scale = 1.06}, Enum.EasingStyle.Back)
-    end)
-    PillBtn.MouseLeave:Connect(function()
-        Tween(PillBtn, 0.15, {BackgroundTransparency = 0.25})
-        Tween(PillScale, 0.2, {Scale = 1})
-    end)
-    PillBtn.MouseButton1Down:Connect(function()
-        Tween(PillScale, 0.08, {Scale = 0.94})
-    end)
-    PillBtn.MouseButton1Click:Connect(function()
-        Library:ClearNotifications()
-    end)
-
-    local PillShown = false
-    local function UpdatePill()
-        local want = #NotifStack >= 3
-        if want == PillShown then return end
-        PillShown = want
-        if want then
-            ClearPill.Visible = true
-            PillScale.Scale = 0.6
-            Tween(ClearPill, 0.3, {Size = UDim2.new(1, 0, 0, 26)})
-            Tween(PillScale, 0.5, {Scale = 1}, Enum.EasingStyle.Back)
-        else
-            Tween(ClearPill, 0.25, {Size = UDim2.new(1, 0, 0, 0)}).Completed:Connect(function()
-                if not PillShown then ClearPill.Visible = false end
-            end)
-        end
-    end
-
-    -- Ferme tout en cascade (de la plus récente à la plus ancienne)
-    function Library:ClearNotifications()
-        local list = {}
-        for i, n in ipairs(NotifStack) do list[i] = n end
-        if #list == 0 then return end
-        PlaySound("Close")
-        for i = #list, 1, -1 do
-            task.delay((#list - i) * 0.07, list[i].Dismiss)
-        end
-    end
-
-    -- Change la position à chaud : "TopRight" | "TopLeft" | "BottomRight" | "BottomLeft"
-    function Library:SetNotifyPosition(pos)
-        pos = tostring(pos)
-        AtRight = pos:find("Right") ~= nil
-        AtBottom = pos:find("Bottom") ~= nil
-        NotifContainer.AnchorPoint = Vector2.new(AtRight and 1 or 0, AtBottom and 1 or 0)
-        NotifContainer.Position = UDim2.new(AtRight and 1 or 0, AtRight and -20 or 20, AtBottom and 1 or 0, AtBottom and -20 or 50)
-        NotifLayout.VerticalAlignment = AtBottom and Enum.VerticalAlignment.Bottom or Enum.VerticalAlignment.Top
-        PillBtn.AnchorPoint = Vector2.new(AtRight and 1 or 0, 0)
-        PillBtn.Position = UDim2.new(AtRight and 1 or 0, 0, 0, 0)
-        ClearPill.LayoutOrder = PillOrder()
-    end
-
+    -- 🔔 NOTIFICATIONS TYPÉES
+    -- Options : Title, Content, Duration, ImageID, Type = "Info" | "Success" | "Warning" | "Error"
+    -- Clic = fermeture, survol = pause du timer. Sans Type, il est deviné depuis le titre.
     function Library:Notify(NConfig)
         NConfig = NConfig or {}
         local NTitle = tostring(NConfig.Title or "Notification")
         local Content = tostring(NConfig.Content or "Message")
-        local Duration = tonumber(NConfig.Duration) or 3
-        local Sticky = Duration <= 0
+        local Duration = NConfig.Duration or 3
 
-        -- Type : explicite, sinon deviné depuis le titre
         local NType = NConfig.Type
         if not NType then
             local lt = NTitle:lower()
@@ -1784,123 +1663,68 @@ function Library:CreateWindow(Settings)
             Warning = Color3.fromRGB(255, 190, 60),
             Error = SelectedTheme.Error
         }
+        local TypeSounds = {Info = "Notification", Success = "Success", Warning = "Notification", Error = "Error"}
         if not TypeColors[NType] then NType = "Info" end
         local AccentColor = TypeColors[NType]
 
-        if #NTitle > 34 then
-            NTitle = string.sub(NTitle, 1, 31) .. "..."
-        end
-
-        -- 🔁 Doublon : on incrémente le compteur au lieu de créer une nouvelle notif
-        local Key = NType .. "|" .. NTitle .. "|" .. Content
-        for _, n in ipairs(NotifStack) do
-            if n.Key == Key then
-                n.Bump()
-                return n.Handle
-            end
-        end
-
         PlaySound(TypeSounds[NType])
 
-        local Buttons = (type(NConfig.Buttons) == "table") and NConfig.Buttons or {}
-        local HasButtons = #Buttons > 0
+        if #NTitle > 30 then
+            NTitle = string.sub(NTitle, 1, 27) .. "..."
+        end
 
-        local ContentSize = TxtS:GetTextSize(Content, 13, Library.GlobalFont, Vector2.new(234, 1000))
-        local BtnH = HasButtons and 32 or 0
-        local TotalHeight = math.max(64, 50 + ContentSize.Y + BtnH)
-        local OffX = AtRight and 1.15 or -1.15
+        local ImageUrl = NConfig.ImageID or "rbxassetid://5436396975"
 
-        NotifOrder = NotifOrder + 1
+        local ContentSize = TxtS:GetTextSize(Content, 13, Library.GlobalFont, Vector2.new(230, 1000))
+        local TotalHeight = math.max(70, 55 + ContentSize.Y)
+
         local NotifHolder = Create("Frame", {
             Parent = NotifContainer,
             Size = UDim2.new(1, 0, 0, 0),
             BackgroundTransparency = 1,
-            LayoutOrder = NotifOrder
-        })
-
-        -- "Slider" : conteneur qui glisse (ombre + carte ensemble)
-        local Slider = Create("Frame", {
-            Parent = NotifHolder,
-            Size = UDim2.fromScale(1, 1),
-            Position = UDim2.new(OffX, 0, 0, 0),
-            BackgroundTransparency = 1,
-            ZIndex = 10001
+            ClipsDescendants = false
         })
 
         local Frame = Create("Frame", {
-            Parent = Slider,
+            Parent = NotifHolder,
             Size = UDim2.fromScale(1, 1),
             BackgroundColor3 = SelectedTheme.Main,
-            BackgroundTransparency = 0.15,
+            BackgroundTransparency = 1,
             ZIndex = 10001,
             ClipsDescendants = true,
-            Active = true,
+            Active = true, -- nécessaire pour capter le clic
             ThemeTag = "Main"
         })
         AddCorner(Frame, 10)
+
         local Stroke = AddStroke(Frame, SelectedTheme)
-        Stroke.Transparency = 0.4
+        Stroke.Transparency = 1
 
-        local Shadow = CreateDropShadow(Slider, 40, 0.35)
+        local Shadow = CreateDropShadow(NotifHolder, 45, 0)
+        Shadow.ImageTransparency = 1
 
-        -- Barre d'accent à gauche
-        local Stripe = Create("Frame", {
+        local Icon = Create("ImageLabel", {
             Parent = Frame,
-            Size = UDim2.new(0, 3, 1, -20),
-            Position = UDim2.new(0, 6, 0, 10),
-            BackgroundColor3 = AccentColor,
-            BorderSizePixel = 0,
-            ZIndex = 10002
+            Size = UDim2.new(0, 0, 0, 0),
+            Position = UDim2.new(0, 31, 0, 31),
+            BackgroundTransparency = 1,
+            ImageColor3 = (NType == "Info") and Color3.fromRGB(255, 255, 255) or AccentColor,
+            ZIndex = 10002,
+            ImageTransparency = 1,
+            Rotation = -15
         })
-        AddCorner(Stripe, 2)
-
-        -- Badge d'icône (cercle teinté + glyphe, ou image perso)
-        local Badge = Create("Frame", {
-            Parent = Frame,
-            Size = UDim2.fromOffset(32, 32),
-            Position = UDim2.new(0, 16, 0, 14),
-            BackgroundColor3 = AccentColor,
-            BackgroundTransparency = 0.8,
-            BorderSizePixel = 0,
-            ZIndex = 10002
-        })
-        AddCorner(Badge, 1000)
-        local BadgeScale = Create("UIScale", {Parent = Badge, Scale = 0})
-
-        if NConfig.ImageID and NConfig.ImageID ~= "" then
-            local Img = Create("ImageLabel", {
-                Parent = Badge,
-                AnchorPoint = Vector2.new(0.5, 0.5),
-                Position = UDim2.fromScale(0.5, 0.5),
-                Size = UDim2.fromOffset(20, 20),
-                BackgroundTransparency = 1,
-                ZIndex = 10003
-            })
-            SetImageAsync(Img, "Image", NConfig.ImageID)
-        else
-            Create("TextLabel", {
-                Parent = Badge,
-                Size = UDim2.fromScale(1, 1),
-                BackgroundTransparency = 1,
-                Text = TypeGlyphs[NType],
-                Font = Library.GlobalFontBold,
-                TextColor3 = AccentColor,
-                TextSize = 16,
-                ZIndex = 10003
-            })
-        end
+        SetImageAsync(Icon, "Image", ImageUrl)
 
         local TitleLabel = Create("TextLabel", {
             Parent = Frame,
-            Size = UDim2.new(1, -110, 0, 20),
-            Position = UDim2.new(0, 58, 0, 10),
+            Size = UDim2.new(1, -64, 0, 20),
+            Position = UDim2.new(0, 60, 0, 12),
             BackgroundTransparency = 1,
             Text = NTitle,
             Font = Library.GlobalFontBold,
             TextColor3 = SelectedTheme.Text,
             TextSize = 15,
             TextXAlignment = Enum.TextXAlignment.Left,
-            TextTruncate = Enum.TextTruncate.AtEnd,
             ZIndex = 10002,
             TextTransparency = 1,
             ThemeTag = "Text"
@@ -1908,8 +1732,8 @@ function Library:CreateWindow(Settings)
 
         local ContentLabel = Create("TextLabel", {
             Parent = Frame,
-            Size = UDim2.new(1, -86, 0, ContentSize.Y + 2),
-            Position = UDim2.new(0, 58, 0, 32),
+            Size = UDim2.new(1, -64, 1, -34),
+            Position = UDim2.new(0, 60, 0, 34),
             BackgroundTransparency = 1,
             Text = Content,
             Font = Library.GlobalFont,
@@ -1917,51 +1741,21 @@ function Library:CreateWindow(Settings)
             TextSize = 13,
             TextXAlignment = Enum.TextXAlignment.Left,
             TextYAlignment = Enum.TextYAlignment.Top,
-            TextWrapped = true,
             ZIndex = 10002,
+            TextWrapped = true,
             TextTransparency = 1,
             ThemeTag = "TextDark"
         })
 
-        -- Compteur de doublons (caché tant que x1)
-        local CountLbl = Create("TextLabel", {
-            Parent = Frame,
-            Size = UDim2.fromOffset(26, 16),
-            Position = UDim2.new(1, -56, 0, 12),
-            BackgroundColor3 = AccentColor,
-            BackgroundTransparency = 0.75,
-            Text = "x2",
-            Font = Library.GlobalFontBold,
-            TextColor3 = AccentColor,
-            TextSize = 11,
-            Visible = false,
-            ZIndex = 10003
-        })
-        AddCorner(CountLbl, 8)
-
-        local CloseBtn = Create("TextButton", {
-            Parent = Frame,
-            Size = UDim2.fromOffset(22, 22),
-            Position = UDim2.new(1, -28, 0, 8),
-            BackgroundTransparency = 1,
-            Text = "✕",
-            Font = Library.GlobalFontBold,
-            TextColor3 = SelectedTheme.TextDark,
-            TextSize = 12,
-            ZIndex = 10004,
-            AutoButtonColor = false
-        })
-
-        -- Barre de timer / progression
         local BarBg = Create("Frame", {
             Parent = Frame,
             Size = UDim2.new(1, -28, 0, 3),
             Position = UDim2.new(0, 14, 1, -8),
             BackgroundColor3 = SelectedTheme.Second,
-            BackgroundTransparency = 0.5,
             BorderSizePixel = 0,
-            Visible = not Sticky,
-            ZIndex = 10002
+            ZIndex = 10002,
+            BackgroundTransparency = 1,
+            ThemeTag = "Second"
         })
         AddCorner(BarBg, 3)
 
@@ -1970,200 +1764,63 @@ function Library:CreateWindow(Settings)
             Size = UDim2.new(1, 0, 1, 0),
             BackgroundColor3 = AccentColor,
             BorderSizePixel = 0,
-            ZIndex = 10003
+            ZIndex = 10003,
+            BackgroundTransparency = 1,
+            ThemeTag = (NType == "Info") and "ElementAccent" or nil -- les types colorés gardent leur couleur
         })
         AddCorner(Bar, 3)
 
-        ----------------------------------------------------------- logique
+        local InInfo = TweenInfo.new(0.6, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        local LinearInfo = TweenInfo.new(0.6, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+
+        TS:Create(NotifHolder, InInfo, {Size = UDim2.new(1, 0, 0, TotalHeight)}):Play()
+        TS:Create(Frame, LinearInfo, {BackgroundTransparency = 0.15}):Play()
+        TS:Create(Stroke, LinearInfo, {Transparency = 0.4}):Play()
+        TS:Create(Shadow, LinearInfo, {ImageTransparency = 0.35}):Play()
+        TS:Create(Icon, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0, 38, 0, 38), Position = UDim2.new(0, 12, 0, 12), ImageTransparency = 0, Rotation = 0}):Play()
+        TS:Create(TitleLabel, LinearInfo, {TextTransparency = 0}):Play()
+        TS:Create(ContentLabel, LinearInfo, {TextTransparency = 0}):Play()
+        TS:Create(BarBg, LinearInfo, {BackgroundTransparency = 0.5}):Play()
+        TS:Create(Bar, LinearInfo, {BackgroundTransparency = 0}):Play()
+
+        local TimerTween = TS:Create(Bar, TweenInfo.new(Duration, Enum.EasingStyle.Linear), {Size = UDim2.new(0, 0, 1, 0)})
+        TimerTween:Play()
+
         local Closed = false
-        local Count = 1
-        local TimerTween
-        local Dismiss
-
-        local function StartTimer()
-            if Sticky or Closed then return end
-            if TimerTween then TimerTween:Cancel() end
-            Bar.Size = UDim2.new(1, 0, 1, 0)
-            local tw = TS:Create(Bar, TweenInfo.new(Duration, Enum.EasingStyle.Linear), {Size = UDim2.new(0, 0, 1, 0)})
-            TimerTween = tw
-            tw.Completed:Connect(function(state)
-                if state == Enum.PlaybackState.Completed then Dismiss() end
-            end)
-            tw:Play()
-        end
-
-        local Entry = {Key = Key}
-
-        Dismiss = function()
+        local function Dismiss()
             if Closed then return end
             Closed = true
-            if TimerTween then TimerTween:Cancel() end
-            for i, n in ipairs(NotifStack) do
-                if n == Entry then table.remove(NotifStack, i) break end
-            end
-            UpdatePill()
-            Tween(Slider, 0.35, {Position = UDim2.new(OffX, 0, 0, 0)}, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
-            Tween(Frame, 0.3, {BackgroundTransparency = 1})
-            Tween(Shadow, 0.3, {ImageTransparency = 1})
-            TS:Create(NotifHolder, TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.In, 0, false, 0.15), {Size = UDim2.new(1, 0, 0, 0)}):Play()
-            task.delay(0.6, function()
+            TimerTween:Cancel()
+
+            local OutInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+            TS:Create(NotifHolder, OutInfo, {Size = UDim2.new(1, 0, 0, 0)}):Play()
+            TS:Create(Frame, OutInfo, {BackgroundTransparency = 1}):Play()
+            TS:Create(Stroke, OutInfo, {Transparency = 1}):Play()
+            TS:Create(Shadow, OutInfo, {ImageTransparency = 1}):Play()
+            TS:Create(Icon, OutInfo, {ImageTransparency = 1, Size = UDim2.new(0, 0, 0, 0), Position = UDim2.new(0, 31, 0, 31)}):Play()
+            TS:Create(TitleLabel, OutInfo, {TextTransparency = 1}):Play()
+            TS:Create(ContentLabel, OutInfo, {TextTransparency = 1}):Play()
+            TS:Create(BarBg, OutInfo, {BackgroundTransparency = 1}):Play()
+            TS:Create(Bar, OutInfo, {BackgroundTransparency = 1}):Play()
+            task.delay(0.5, function()
                 NotifHolder:Destroy()
             end)
         end
 
-        Entry.Dismiss = Dismiss
-        Entry.Bump = function()
-            Count = Count + 1
-            CountLbl.Text = "x" .. Count
-            CountLbl.Visible = true
-            Tween(BadgeScale, 0.12, {Scale = 1.25}).Completed:Connect(function()
-                Tween(BadgeScale, 0.25, {Scale = 1}, Enum.EasingStyle.Back)
-            end)
-            StartTimer()
-        end
-        Entry.Handle = {
-            Dismiss = function() Dismiss() end,
-            SetTitle = function(t) TitleLabel.Text = tostring(t) end,
-            SetContent = function(t) ContentLabel.Text = tostring(t) end,
-            -- 0 → 1 : transforme la barre en barre de progression (idéal avec Duration = 0)
-            SetProgress = function(p)
-                if Closed then return end
-                if TimerTween then TimerTween:Cancel() end
-                BarBg.Visible = true
-                p = math.clamp(tonumber(p) or 0, 0, 1)
-                Tween(Bar, 0.2, {Size = UDim2.new(p, 0, 1, 0)})
-                if p >= 1 and Sticky then
-                    task.delay(1, Dismiss)
-                end
-            end
-        }
-        table.insert(NotifStack, Entry)
-        UpdatePill()
+        TimerTween.Completed:Connect(Dismiss)
 
-        -- Trop de notifs : on ferme les plus anciennes
-        while #NotifStack > Library.MaxNotifications do
-            NotifStack[1].Dismiss()
-        end
-
-        ----------------------------------------------------------- boutons d'action
-        if HasButtons then
-            local Row = Create("Frame", {
-                Parent = Frame,
-                Size = UDim2.new(1, -72, 0, 24),
-                Position = UDim2.new(0, 58, 0, 40 + ContentSize.Y),
-                BackgroundTransparency = 1,
-                ZIndex = 10003
-            })
-            Create("UIListLayout", {
-                Parent = Row,
-                FillDirection = Enum.FillDirection.Horizontal,
-                Padding = UDim.new(0, 6),
-                SortOrder = Enum.SortOrder.LayoutOrder
-            })
-            for i, b in ipairs(Buttons) do
-                local B = Create("TextButton", {
-                    Parent = Row,
-                    Size = UDim2.new(0, 0, 1, 0),
-                    AutomaticSize = Enum.AutomaticSize.X,
-                    BackgroundColor3 = AccentColor,
-                    BackgroundTransparency = 0.8,
-                    Text = tostring(b.Name or "OK"),
-                    Font = Library.GlobalFontBold,
-                    TextColor3 = SelectedTheme.Text,
-                    TextSize = 12,
-                    AutoButtonColor = false,
-                    LayoutOrder = i,
-                    ZIndex = 10004
-                })
-                AddCorner(B, 6)
-                Create("UIPadding", {Parent = B, PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12)})
-                B.MouseEnter:Connect(function()
-                    PlaySound("Hover")
-                    Tween(B, 0.15, {BackgroundTransparency = 0.5})
-                end)
-                B.MouseLeave:Connect(function()
-                    Tween(B, 0.15, {BackgroundTransparency = 0.8})
-                end)
-                B.MouseButton1Click:Connect(function()
-                    PlaySound("Click")
-                    SafeCall(b.Callback)
-                    if not b.KeepOpen then Dismiss() end
-                end)
-            end
-        end
-
-        ----------------------------------------------------------- entrée
-        Tween(NotifHolder, 0.35, {Size = UDim2.new(1, 0, 0, TotalHeight)})
-        Tween(Slider, 0.55, {Position = UDim2.new(0, 0, 0, 0)}, Enum.EasingStyle.Quint)
-        Tween(TitleLabel, 0.5, {TextTransparency = 0})
-        Tween(ContentLabel, 0.5, {TextTransparency = 0})
-        TS:Create(BadgeScale, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out, 0, false, 0.2), {Scale = 1}):Play()
-        StartTimer()
-
-        ----------------------------------------------------------- interactions
-        CloseBtn.MouseEnter:Connect(function()
-            Tween(CloseBtn, 0.15, {TextColor3 = SelectedTheme.Error})
-        end)
-        CloseBtn.MouseLeave:Connect(function()
-            Tween(CloseBtn, 0.15, {TextColor3 = SelectedTheme.TextDark})
-        end)
-        CloseBtn.MouseButton1Click:Connect(Dismiss)
-
-        local Dragging = false
-
-        -- Survol = pause du timer
+        -- Survol = pause du timer, clic = fermeture immédiate
         Frame.MouseEnter:Connect(function()
-            if TimerTween and not Closed then TimerTween:Pause() end
+            if not Closed then TimerTween:Pause() end
         end)
         Frame.MouseLeave:Connect(function()
-            if TimerTween and not Closed and not Dragging then TimerTween:Play() end
+            if not Closed then TimerTween:Play() end
         end)
-
-        -- 👉 SWIPE : tirer vers le bord de l'écran ferme la notif (la carte s'estompe en suivant le doigt).
-        -- Trop court = retour élastique. Simple clic = fermeture (sauf si la notif a des boutons).
         Frame.InputBegan:Connect(function(input)
-            if Closed or Dragging then return end
-            if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
-                return
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                Dismiss()
             end
-
-            Dragging = true
-            local startX = input.Position.X
-            local dir = AtRight and 1 or -1
-            local along, moved = 0, 0
-            if TimerTween then TimerTween:Pause() end
-
-            local moveConn = UIS.InputChanged:Connect(function(i)
-                if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then
-                    local dx = i.Position.X - startX
-                    moved = math.max(moved, math.abs(dx))
-                    along = dx * dir
-                    -- vers le bord : suit le doigt / dans l'autre sens : résistance élastique
-                    local shown = (along > 0) and along or along * 0.2
-                    Slider.Position = UDim2.new(0, shown * dir, 0, 0)
-                    Frame.BackgroundTransparency = 0.15 + math.clamp(along / 260, 0, 1) * 0.6
-                end
-            end)
-
-            input.Changed:Connect(function()
-                if input.UserInputState ~= Enum.UserInputState.End then return end
-                moveConn:Disconnect()
-                Dragging = false
-                if Closed then return end
-
-                if along > 90 then
-                    Dismiss()
-                elseif moved < 6 and not HasButtons then
-                    Dismiss()
-                else
-                    Tween(Slider, 0.45, {Position = UDim2.new(0, 0, 0, 0)}, Enum.EasingStyle.Back)
-                    Tween(Frame, 0.3, {BackgroundTransparency = 0.15})
-                    if TimerTween then TimerTween:Play() end
-                end
-            end)
         end)
-
-        return Entry.Handle
     end
 
     ----------------------------------------------------------------------
@@ -4712,24 +4369,6 @@ function Library:CreateWindow(Settings)
         Default = math.clamp(Library.GlobalCornerValue, 0, 50),
         Callback = function(val)
             UpdateCorners(val)
-        end
-    })
-
-    -- 🔔 Réglages des notifications V2
-    AppBlock:CreateDropdown({
-        Name = "Notification Position",
-        Flag = "Settings_NotifyPos",
-        Items = {"TopRight", "TopLeft", "BottomRight", "BottomLeft"},
-        Default = tostring(Config.NotifyPosition or "TopRight"),
-        Callback = function(val)
-            Library:SetNotifyPosition(val)
-        end
-    })
-
-    AppBlock:CreateButton({
-        Name = "Clear Notifications",
-        Callback = function()
-            Library:ClearNotifications()
         end
     })
 
