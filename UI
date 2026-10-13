@@ -1,6 +1,7 @@
 -- 🎵 ENHANCED UI LIBRARY : intro animée + animations + layout 3 panneaux séparés (Brand / Tabs / Fonctions)
 -- (MultiDropdown/Search, Sliders décimaux, Notifs typées, Callbacks protégés)
 -- v2 : Tooltips, liste des Keybinds (HUD + Settings), Export/Import config & thème, Ctrl+F, presets de thème, couleurs corrigées
+-- v3 : recherche intelligente (palette de commandes : contrôles en direct, tolérance aux fautes, synonymes, filtres, clavier)
 
 local Library = {}
 local TS = game:GetService("TweenService")
@@ -2378,12 +2379,399 @@ function Library:CreateWindow(Settings)
 
     local ActiveTab = nil
 
-    -- 🔍 BARRE DE RECHERCHE GLOBALE (raccourci : Ctrl + F)
+    local ToggleUI -- déclaré ici : utilisé par Library:OpenSearch (défini plus bas)
+
+    ----------------------------------------------------------------------
+    -- 🔍 RECHERCHE INTELLIGENTE (Ctrl + F)
+    -- Remplace l'ancien bloc "BARRE DE RECHERCHE GLOBALE" (voir SmartSearch_edits.md)
+    --   • palette de commandes animée : résultats en direct sous la barre
+    --   • chaque résultat affiche le VRAI contrôle (toggle, slider, bouton, liste...) utilisable sur place
+    --   • recherche tolérante : accents, fautes de frappe, lettres manquantes, synonymes FR/EN, mots-clés, @onglet
+    --   • filtres par type, récents, "vous vouliez dire ?", navigation clavier complète
+    ----------------------------------------------------------------------
+
+    local BAR_H, ROW_H, ROW_GAP, CHIPS_H, FOOT_H = 46, 46, 4, 36, 24
+    local MAX_LIST_H = IsMobile and 220 or 300
+    local MAX_RESULTS = 30
+    local SEARCH_W = math.clamp(VP.X - 24, 300, 540)
+    local BAR_Y = WatermarkConfig.Enabled and 70 or 16
+
+    Library.BlockSetters = setmetatable({}, {__mode = "k"})
+    Library.Synonyms = Library.Synonyms or {
+        son = {"sound", "audio", "volume"}, sons = {"sound", "audio"}, sound = {"son", "audio"},
+        couleur = {"color"}, couleurs = {"color"}, color = {"couleur"},
+        theme = {"preset", "couleur", "color"}, themes = {"theme"},
+        touche = {"key", "keybind", "bind"}, raccourci = {"keybind", "key"}, key = {"touche", "keybind"},
+        police = {"font"}, font = {"police"},
+        transparence = {"transparency", "opacity"}, transparency = {"transparence", "opacity"}, opacite = {"transparency"},
+        fond = {"background", "image"}, background = {"fond", "image"},
+        arrondi = {"corner", "radius"}, coin = {"corner"}, coins = {"corner"}, corner = {"arrondi", "radius"},
+        aide = {"tooltip", "hint"}, bulle = {"tooltip"}, tooltip = {"aide", "bulle"},
+        sauvegarder = {"save"}, save = {"sauvegarder", "config"}, charger = {"load"}, load = {"charger"},
+        supprimer = {"delete"}, delete = {"supprimer"}, exporter = {"export"}, importer = {"import"},
+        fenetre = {"window", "layout", "position"}, position = {"layout", "reset"},
+        reinitialiser = {"reset"}, reset = {"reinitialiser", "default"},
+        particules = {"orbs"}, orbes = {"orbs"}, vitesse = {"speed"}, speed = {"vitesse"},
+        activer = {"enable"}, desactiver = {"disable"}, interface = {"ui"}, ui = {"interface"}
+    }
+
+    -- Ajoute tes propres synonymes : Library:AddSynonym("fps", {"frames", "performance"})
+    function Library:AddSynonym(word, list)
+        Library.Synonyms[word:lower()] = list
+    end
+
+    local KIND_ALIASES = {
+        Toggle = "switch interrupteur on off activer option",
+        Slider = "curseur valeur range reglage",
+        Button = "bouton action",
+        Dropdown = "liste menu choix select",
+        Color = "couleur picker",
+        Keybind = "touche raccourci bind key",
+        Input = "texte champ saisie",
+        Label = "info texte"
+    }
+
+    local KIND_GLYPH = {Toggle = "✓", Slider = "═", Button = "▶", Dropdown = "▼", Color = "◆", Keybind = "⌨", Input = "T", Label = "i"}
+    local CTRL_W = {Toggle = 44, Slider = 134, Button = 68, Dropdown = 104, Color = 36, Keybind = 74, Input = 100}
+
+    local FILTERS = {
+        {Name = "Tout"},
+        {Name = "Toggles", Kinds = {Toggle = true}},
+        {Name = "Sliders", Kinds = {Slider = true}},
+        {Name = "Boutons", Kinds = {Button = true}},
+        {Name = "Listes", Kinds = {Dropdown = true}},
+        {Name = "Autres", Kinds = {Input = true, Color = true, Keybind = true, Label = true}}
+    }
+
+    local function KindColor(kind)
+        if kind == "Toggle" then return SelectedTheme.ElementAccent end
+        if kind == "Slider" then return Color3.fromRGB(110, 165, 255) end
+        if kind == "Button" then return Color3.fromRGB(255, 190, 60) end
+        if kind == "Dropdown" then return Color3.fromRGB(175, 120, 255) end
+        if kind == "Color" then return Color3.fromRGB(255, 110, 170) end
+        if kind == "Keybind" then return Color3.fromRGB(100, 220, 165) end
+        if kind == "Input" then return Color3.fromRGB(140, 200, 255) end
+        return SelectedTheme.TextDark
+    end
+
+    local function Contrast(c)
+        return (c.R * 0.299 + c.G * 0.587 + c.B * 0.114) > 0.6 and Color3.fromRGB(15, 15, 20) or Color3.new(1, 1, 1)
+    end
+
+    -- Création légère (sans enregistrement dans TextObjects : les lignes sont reconstruites souvent)
+    local function N(class, props)
+        local parent = props.Parent
+        props.Parent = nil
+        local o = Instance.new(class)
+        for k, v in pairs(props) do o[k] = v end
+        if (class == "TextLabel" or class == "TextButton" or class == "TextBox") and not props.Font then
+            o.Font = Library.GlobalFont
+        end
+        o.Parent = parent
+        return o
+    end
+
+    local function Round(parent, r)
+        return N("UICorner", {Parent = parent, CornerRadius = UDim.new(r >= 100 and 1 or 0, r >= 100 and 0 or r)})
+    end
+
+    ----------------------------------------------------------------------
+    -- 🧠 INDEX + MOTEUR DE RECHERCHE
+    ----------------------------------------------------------------------
+    local allSearchableElements = {}
+    local searchBlocks = {}
+    local searchTabs = {}
+    local IndexingEnabled = true -- les Settings sont maintenant indexés aussi
+
+    local ACCENTS = {
+        ["à"] = "a", ["â"] = "a", ["ä"] = "a", ["á"] = "a", ["ã"] = "a", ["å"] = "a",
+        ["ç"] = "c", ["é"] = "e", ["è"] = "e", ["ê"] = "e", ["ë"] = "e",
+        ["î"] = "i", ["ï"] = "i", ["í"] = "i", ["ô"] = "o", ["ö"] = "o", ["ó"] = "o", ["õ"] = "o",
+        ["ù"] = "u", ["û"] = "u", ["ü"] = "u", ["ú"] = "u", ["ñ"] = "n", ["œ"] = "oe", ["ÿ"] = "y",
+        ["É"] = "e", ["È"] = "e", ["Ê"] = "e", ["À"] = "a", ["Ç"] = "c", ["Ô"] = "o", ["Î"] = "i", ["Û"] = "u"
+    }
+
+    local function Norm(s)
+        s = tostring(s or ""):lower()
+        for k, v in pairs(ACCENTS) do
+            s = s:gsub(k, v)
+        end
+        return s
+    end
+
+    local function Esc(s)
+        return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+    end
+
+    -- Distance d'édition (avec sortie anticipée)
+    local function Lev(a, b, max)
+        local la, lb = #a, #b
+        if math.abs(la - lb) > max then return max + 1 end
+        local prev = {}
+        for j = 0, lb do prev[j] = j end
+        for i = 1, la do
+            local cur = {[0] = i}
+            local best = i
+            for j = 1, lb do
+                local cost = (a:byte(i) == b:byte(j)) and 0 or 1
+                local v = math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+                cur[j] = v
+                if v < best then best = v end
+            end
+            if best > max then return max + 1 end
+            prev = cur
+        end
+        return prev[lb]
+    end
+
+    -- Lettres dans l'ordre ("shtp" -> "Show Tooltips"), retourne aussi l'écart
+    local function Subseq(q, s)
+        local qi, first = 1, nil
+        local qb = q:byte(1)
+        for i = 1, #s do
+            if s:byte(i) == qb then
+                first = first or i
+                qi += 1
+                if qi > #q then return true, (i - first + 1) - #q end
+                qb = q:byte(qi)
+            end
+        end
+        return false, 0
+    end
+
+    local function AddToSearch(element, name, tabRec, blockFrame, blockName, kind, cfg, extra)
+        if not IndexingEnabled then return end
+        cfg = cfg or {}
+        kind = kind or "Label"
+        local kw = cfg.Keywords
+        if type(kw) == "table" then kw = table.concat(kw, " ") end
+        table.insert(allSearchableElements, {
+            element = element,
+            name = tostring(name),
+            kind = kind,
+            tab = tabRec,
+            tabName = tabRec and tabRec.Name or "",
+            block = blockFrame,
+            blockName = blockName or "",
+            flag = (kind ~= "Label" and kind ~= "Button") and (cfg.Flag or cfg.Name) or nil,
+            tip = cfg.Tooltip or cfg.Description or "",
+            keywords = kw or "",
+            meta = extra or {},
+            uses = 0,
+            lastUsed = 0,
+            order = #allSearchableElements + 1
+        })
+    end
+
+    local function Prep(e)
+        if e.prepped then return end
+        e.prepped = true
+        e.nName = Norm(e.name)
+        e.nTab = Norm(e.tabName)
+        e.nBlock = Norm(e.blockName)
+        e.nTip = Norm(e.tip)
+        e.nKeys = Norm(e.keywords)
+        e.nKind = Norm(e.kind .. " " .. (KIND_ALIASES[e.kind] or ""))
+        e.words = {}
+        for w in e.nName:gmatch("%w+") do table.insert(e.words, w) end
+    end
+
+    local function TokenScore(e, t, strict)
+        local best = 0
+        local n = e.nName
+        if n == t then
+            best = 100
+        elseif n:sub(1, #t) == t then
+            best = 82
+        else
+            for _, w in ipairs(e.words) do
+                if w:sub(1, #t) == t then best = 66 break end
+            end
+            if best == 0 and n:find(t, 1, true) then best = 48 end
+        end
+        if best == 0 and not strict and #t >= 2 then
+            local ok, gaps = Subseq(t, n)
+            local tol = (#t >= 4) and (#t * 2 + 2) or #t
+            if ok and gaps <= tol then best = math.max(8, 26 - gaps) end
+        end
+        if best == 0 and not strict and #t >= 4 then
+            local maxd = (#t >= 7) and 2 or 1
+            for _, w in ipairs(e.words) do
+                if #w >= 3 and Lev(t, w, maxd) <= maxd then best = 30 break end
+            end
+        end
+        if best < 36 then
+            if e.nKeys ~= "" and e.nKeys:find(t, 1, true) then best = math.max(best, 36) end
+            if e.nTab:find(t, 1, true) or e.nBlock:find(t, 1, true) then best = math.max(best, 26) end
+            if e.nKind:find(t, 1, true) then best = math.max(best, 20) end
+            if e.nTip ~= "" and e.nTip:find(t, 1, true) then best = math.max(best, 14) end
+        end
+        return best > 0 and best or nil
+    end
+
+    local function Expand(t)
+        local list = {}
+        local syn = Library.Synonyms[t]
+        if syn then
+            for _, s in ipairs(syn) do table.insert(list, Norm(s)) end
+        end
+        return list
+    end
+
+    local function DidYouMean(q)
+        local best, bd
+        local lim = math.max(2, math.floor(#q / 3))
+        for _, e in ipairs(allSearchableElements) do
+            if e.element and e.element.Parent and e.kind ~= "Label" then
+                Prep(e)
+                local d = Lev(q, e.nName, lim)
+                for _, w in ipairs(e.words) do
+                    d = math.min(d, Lev(q, w, lim))
+                end
+                if d <= lim and (not bd or d < bd) then best, bd = e.name, d end
+            end
+        end
+        return best
+    end
+
+    local Filter = 1
+
+    -- Retourne : liste {e, score}, tokens, titre, suggestion
+    local function Compute(raw)
+        local q = Norm(raw):gsub("^%s+", ""):gsub("%s+$", "")
+        local tokens, tabToks = {}, {}
+        for tok in q:gmatch("%S+") do
+            if tok:sub(1, 1) == "@" then
+                if #tok > 1 then table.insert(tabToks, tok:sub(2)) end
+            else
+                table.insert(tokens, tok)
+            end
+        end
+
+        local fset = FILTERS[Filter].Kinds
+        local out = {}
+
+        local function valid(e)
+            if not (e.element and e.element.Parent) then return false end
+            if e.tab and e.tab.Internal and Config.SearchSettings == false then return false end
+            if fset and not fset[e.kind] then return false end
+            return true
+        end
+
+        -- Barre vide : récents puis suggestions
+        if #tokens == 0 and #tabToks == 0 then
+            local recents = {}
+            for _, e in ipairs(allSearchableElements) do
+                if e.uses > 0 and valid(e) then table.insert(recents, e) end
+            end
+            table.sort(recents, function(a, b) return a.lastUsed > b.lastUsed end)
+            local seen = {}
+            for i = 1, math.min(#recents, 6) do
+                seen[recents[i]] = true
+                table.insert(out, {e = recents[i], score = 0})
+            end
+            local nbRecent = #out
+            for _, e in ipairs(allSearchableElements) do
+                if #out >= 8 then break end
+                if not seen[e] and valid(e) and e.kind ~= "Label" and (not (e.tab and e.tab.Internal)) then
+                    table.insert(out, {e = e, score = 0})
+                end
+            end
+            return out, tokens, nbRecent > 0 and "Récents" or "Suggestions", nil
+        end
+
+        for _, e in ipairs(allSearchableElements) do
+            if valid(e) then
+                Prep(e)
+                local ok = true
+                for _, tt in ipairs(tabToks) do
+                    if not e.nTab:find(tt, 1, true) then ok = false break end
+                end
+                if ok then
+                    local total = 0
+                    for _, t in ipairs(tokens) do
+                        local s = TokenScore(e, t)
+                        if not s then
+                            local best
+                            for _, alt in ipairs(Expand(t)) do
+                                local s2 = TokenScore(e, alt, true)
+                                if s2 then
+                                    s2 = s2 * 0.8
+                                    if not best or s2 > best then best = s2 end
+                                end
+                            end
+                            s = best
+                        end
+                        if not s then ok = false break end
+                        total = total + s
+                    end
+                    if ok then
+                        if #tokens == 0 then total = 1 end
+                        if e.kind == "Label" then total = total * 0.6 end
+                        if e.tab and e.tab.Internal then total = total - 2 end
+                        if ActiveTab and e.tab and ActiveTab.Btn == e.tab.Btn then total = total + 4 end
+                        total = total + math.min(e.uses, 5) * 2
+                        table.insert(out, {e = e, score = total})
+                    end
+                end
+            end
+        end
+
+        table.sort(out, function(a, b)
+            if a.score ~= b.score then return a.score > b.score end
+            return a.e.order < b.e.order
+        end)
+        while #out > MAX_RESULTS do table.remove(out) end
+
+        local dym
+        if #out == 0 and #tokens > 0 then dym = DidYouMean(table.concat(tokens, " ")) end
+        return out, tokens, nil, dym
+    end
+
+    -- Surligne les lettres trouvées dans le nom (RichText)
+    local function Highlight(name, tokens)
+        local n = Norm(name)
+        if #tokens == 0 or #n ~= #name then return Esc(name) end
+        local mark = {}
+        for _, t in ipairs(tokens) do
+            local s, f = n:find(t, 1, true)
+            if s then
+                for i = s, f do mark[i] = true end
+            elseif #t >= 2 then
+                local tmp, qi = {}, 1
+                for i = 1, #n do
+                    if qi <= #t and n:byte(i) == t:byte(qi) and n:byte(i) < 128 then
+                        tmp[#tmp + 1] = i
+                        qi += 1
+                    end
+                end
+                if qi > #t then
+                    for _, i in ipairs(tmp) do mark[i] = true end
+                end
+            end
+        end
+        local hex = SelectedTheme.ElementAccent:ToHex()
+        local out, i = {}, 1
+        while i <= #name do
+            local j = i
+            local m = mark[i] == true
+            while j + 1 <= #name and (mark[j + 1] == true) == m do j += 1 end
+            local piece = Esc(name:sub(i, j))
+            out[#out + 1] = m and ('<font color="#' .. hex .. '"><b>' .. piece .. '</b></font>') or piece
+            i = j + 1
+        end
+        return table.concat(out)
+    end
+
+    ----------------------------------------------------------------------
+    -- 🎨 INTERFACE : barre + panneau de résultats
+    ----------------------------------------------------------------------
     local SearchContainer = Create("Frame", {
+        Name = "SmartSearch",
         Parent = ScreenGui,
-        Size = UDim2.new(0, 500, 0, 45),
+        Size = UDim2.fromOffset(SEARCH_W, BAR_H),
         Position = UDim2.new(0.5, 0, 0, -150),
-        AnchorPoint = Vector2.new(0.5, 0.5),
+        AnchorPoint = Vector2.new(0.5, 0),
         BackgroundColor3 = SelectedTheme.Second,
         BackgroundTransparency = 0.15,
         BorderSizePixel = 0,
@@ -2393,7 +2781,7 @@ function Library:CreateWindow(Settings)
     AddCorner(SearchContainer, 15)
 
     TS:Create(SearchContainer, TweenInfo.new(1.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Position = UDim2.new(0.5, 0, 0, 30)
+        Position = UDim2.new(0.5, 0, 0, BAR_Y)
     }):Play()
 
     local SearchStroke = Create("UIStroke", {
@@ -2404,13 +2792,19 @@ function Library:CreateWindow(Settings)
         ThemeTag = "Accent"
     })
 
+    -- clic n'importe où sur la barre = focus
+    local BarClick = Create("TextButton", {
+        Parent = SearchContainer, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+        Text = "", AutoButtonColor = false, ZIndex = 20001
+    })
+
     local SearchIcon = Create("TextLabel", {
         Parent = SearchContainer,
         Size = UDim2.new(0, 30, 0, 30),
-        Position = UDim2.new(0, 10, 0.5, -15),
+        Position = UDim2.new(0, 12, 0.5, -15),
+        AnchorPoint = Vector2.new(0, 0),
         BackgroundTransparency = 1,
         Text = "🔍",
-        Font = Library.GlobalFont,
         TextColor3 = SelectedTheme.Accent,
         TextSize = 20,
         ZIndex = 20002,
@@ -2419,109 +2813,919 @@ function Library:CreateWindow(Settings)
 
     local SearchBox = Create("TextBox", {
         Parent = SearchContainer,
-        Size = UDim2.new(1, -60, 1, 0),
-        Position = UDim2.new(0, 45, 0, 0),
+        Size = UDim2.new(1, -118, 1, 0),
+        Position = UDim2.new(0, 48, 0, 0),
         BackgroundTransparency = 1,
         Text = "",
-        PlaceholderText = Config.SearchPlaceholder or "Rechercher...  (Ctrl + F)",
+        PlaceholderText = Config.SearchPlaceholder or "Rechercher une option...",
         PlaceholderColor3 = SelectedTheme.TextDark,
-        Font = Library.GlobalFont,
         TextColor3 = SelectedTheme.Text,
         TextSize = 16,
         TextXAlignment = Enum.TextXAlignment.Left,
         ClearTextOnFocus = false,
-        ZIndex = 20002,
+        ZIndex = 20003,
         ThemeTag = "Text"
     })
 
+    local Badge = Create("TextLabel", {
+        Parent = SearchContainer,
+        AnchorPoint = Vector2.new(1, 0.5),
+        Size = UDim2.fromOffset(52, 22),
+        Position = UDim2.new(1, -14, 0.5, 0),
+        BackgroundColor3 = SelectedTheme.Main,
+        BackgroundTransparency = 0.5,
+        Text = IsMobile and "" or "Ctrl F",
+        Font = Library.GlobalFontBold,
+        TextColor3 = SelectedTheme.TextDark,
+        TextSize = 11,
+        ZIndex = 20003,
+        Visible = not IsMobile,
+        ThemeTag = "TextDark"
+    })
+    Round(Badge, 6)
+
+    local ClearBtn = Create("TextButton", {
+        Parent = SearchContainer,
+        AnchorPoint = Vector2.new(1, 0.5),
+        Size = UDim2.fromOffset(26, 26),
+        Position = UDim2.new(1, -12, 0.5, 0),
+        BackgroundColor3 = SelectedTheme.Main,
+        BackgroundTransparency = 0.5,
+        Text = "✕",
+        Font = Library.GlobalFontBold,
+        TextColor3 = SelectedTheme.TextDark,
+        TextSize = 12,
+        AutoButtonColor = false,
+        Visible = false,
+        ZIndex = 20004,
+        ThemeTag = "TextDark"
+    })
+    Round(ClearBtn, 8)
+
+    -- petite lueur qui balaie le bas de la barre à chaque frappe
+    local ScanWrap = Create("Frame", {
+        Parent = SearchContainer, Size = UDim2.new(1, -40, 0, 2), Position = UDim2.new(0, 20, 1, -3),
+        BackgroundTransparency = 1, ClipsDescendants = true, ZIndex = 20003
+    })
+    local ScanDot = Create("Frame", {
+        Parent = ScanWrap, Size = UDim2.new(0.3, 0, 1, 0), Position = UDim2.new(-0.3, 0, 0, 0),
+        BackgroundColor3 = SelectedTheme.Accent, BorderSizePixel = 0, ZIndex = 20004
+    })
+    Create("UIGradient", {
+        Parent = ScanDot,
+        Transparency = NumberSequence.new{
+            NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.5, 0), NumberSequenceKeypoint.new(1, 1)
+        }
+    })
+
+    -- Panneau de résultats (s'ouvre sous la barre)
+    local Panel = Create("Frame", {
+        Name = "Results",
+        Parent = SearchContainer,
+        Position = UDim2.new(0, 0, 1, 8),
+        Size = UDim2.new(1, 0, 0, 0),
+        BackgroundColor3 = SelectedTheme.Second,
+        BackgroundTransparency = 0.06,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        Visible = false,
+        ZIndex = 20001,
+        ThemeTag = "Second"
+    })
+    AddCorner(Panel, 6)
+    AddStroke(Panel, SelectedTheme).Transparency = 0.55
+
+    -- Filtres + compteur
+    local ChipsBar = Create("Frame", {
+        Parent = Panel, Size = UDim2.new(1, 0, 0, CHIPS_H), BackgroundTransparency = 1, ZIndex = 20002
+    })
+    local ChipScroll = Create("ScrollingFrame", {
+        Parent = ChipsBar,
+        Size = UDim2.new(1, -96, 1, 0),
+        Position = UDim2.new(0, 0, 0, 0),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 0,
+        CanvasSize = UDim2.new(),
+        AutomaticCanvasSize = Enum.AutomaticSize.X,
+        ScrollingDirection = Enum.ScrollingDirection.X,
+        ZIndex = 20002
+    })
+    Create("UIListLayout", {
+        Parent = ChipScroll, FillDirection = Enum.FillDirection.Horizontal,
+        VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder
+    })
+    Create("UIPadding", {Parent = ChipScroll, PaddingLeft = UDim.new(0, 12)})
+
+    local CountLabel = Create("TextLabel", {
+        Parent = ChipsBar,
+        AnchorPoint = Vector2.new(1, 0.5),
+        Size = UDim2.fromOffset(86, 20),
+        Position = UDim2.new(1, -12, 0.5, 0),
+        BackgroundTransparency = 1,
+        Text = "",
+        TextSize = 11,
+        TextColor3 = SelectedTheme.TextDark,
+        TextXAlignment = Enum.TextXAlignment.Right,
+        ZIndex = 20002,
+        ThemeTag = "TextDark"
+    })
+    Create("Frame", {
+        Parent = ChipsBar, Size = UDim2.new(1, -24, 0, 1), Position = UDim2.new(0, 12, 1, -1),
+        BackgroundColor3 = SelectedTheme.TextDark, BackgroundTransparency = 0.8, BorderSizePixel = 0,
+        ZIndex = 20002, ThemeTag = "TextDark"
+    })
+
+    local ChipBtns = {}
+    local function RefreshChips()
+        for idx, b in ipairs(ChipBtns) do
+            local on = idx == Filter
+            Tween(b, 0.2, {
+                BackgroundColor3 = on and SelectedTheme.ElementAccent or SelectedTheme.Main,
+                BackgroundTransparency = on and 0.1 or 0.55,
+                TextColor3 = on and Contrast(SelectedTheme.ElementAccent) or SelectedTheme.TextDark
+            })
+        end
+    end
+
+    -- Liste
+    local List = Create("ScrollingFrame", {
+        Parent = Panel,
+        Position = UDim2.new(0, 0, 0, CHIPS_H),
+        Size = UDim2.new(1, 0, 0, 96),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = SelectedTheme.TextDark,
+        CanvasSize = UDim2.new(),
+        ZIndex = 20002
+    })
+
+    local Selector = Create("Frame", {
+        Parent = List,
+        Size = UDim2.new(1, -12, 0, ROW_H),
+        Position = UDim2.new(0, 6, 0, 0),
+        BackgroundColor3 = SelectedTheme.ElementAccent,
+        BackgroundTransparency = 0.84,
+        BorderSizePixel = 0,
+        Visible = false,
+        ZIndex = 20002
+    })
+    Round(Selector, 10)
+    local SelectorBar = Create("Frame", {
+        Parent = Selector, Size = UDim2.new(0, 3, 0.55, 0), Position = UDim2.new(0, 3, 0.225, 0),
+        BackgroundColor3 = SelectedTheme.ElementAccent, BorderSizePixel = 0, ZIndex = 20003
+    })
+    Round(SelectorBar, 100)
+
+    -- État vide
+    local Empty = Create("Frame", {
+        Parent = Panel, Size = UDim2.new(1, 0, 0, 96), Position = UDim2.new(0, 0, 0, CHIPS_H),
+        BackgroundTransparency = 1, Visible = false, ZIndex = 20003
+    })
+    local EmptyTitle = Create("TextLabel", {
+        Parent = Empty, Size = UDim2.new(1, -24, 0, 22), Position = UDim2.new(0, 12, 0, 22),
+        BackgroundTransparency = 1, Text = "", Font = Library.GlobalFontBold, TextSize = 14,
+        TextColor3 = SelectedTheme.Text, ZIndex = 20004, ThemeTag = "Text"
+    })
+    local EmptySub = Create("TextButton", {
+        Parent = Empty, Size = UDim2.new(1, -24, 0, 20), Position = UDim2.new(0, 12, 0, 50),
+        BackgroundTransparency = 1, Text = "", TextSize = 12, TextColor3 = SelectedTheme.ElementAccent,
+        AutoButtonColor = false, ZIndex = 20004, ThemeTag = "ElementAccent"
+    })
+
+    -- Pied de page : raccourcis
+    local Footer = Create("Frame", {
+        Parent = Panel, Size = UDim2.new(1, 0, 0, FOOT_H), Position = UDim2.new(0, 0, 0, CHIPS_H + 96),
+        BackgroundTransparency = 1, ZIndex = 20002
+    })
+    Create("Frame", {
+        Parent = Footer, Size = UDim2.new(1, -24, 0, 1), Position = UDim2.new(0, 12, 0, 0),
+        BackgroundColor3 = SelectedTheme.TextDark, BackgroundTransparency = 0.8, BorderSizePixel = 0,
+        ZIndex = 20002, ThemeTag = "TextDark"
+    })
+    Create("TextLabel", {
+        Parent = Footer, Size = UDim2.new(1, -24, 1, 0), Position = UDim2.new(0, 12, 0, 0),
+        BackgroundTransparency = 1,
+        Text = IsMobile and "Touchez un résultat pour y aller" or "↑↓ naviguer    ↵ utiliser    ⇧↵ aller à    Tab filtre    Esc fermer",
+        TextSize = 11, TextColor3 = SelectedTheme.TextDark, TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 20003, ThemeTag = "TextDark"
+    })
+
+    ----------------------------------------------------------------------
+    -- ⚙️ ÉTAT
+    ----------------------------------------------------------------------
+    local Results, RowObjects, RowRefresh = {}, {}, {}
+    local Selected = 0
+    local PanelOpen = false
+    local SliderDrag = nil
+    local Render, OpenResults, CloseResults, Go
+    local EmptyConn
+
+    local function MarkUsed(e)
+        e.uses += 1
+        e.lastUsed = os.clock()
+    end
+
+    local function ScrollTo(i)
+        local y = (i - 1) * (ROW_H + ROW_GAP)
+        local top = List.CanvasPosition.Y
+        local h = List.AbsoluteWindowSize.Y
+        if y < top then
+            Tween(List, 0.15, {CanvasPosition = Vector2.new(0, math.max(0, y - 4))})
+        elseif y + ROW_H > top + h - 4 then
+            Tween(List, 0.15, {CanvasPosition = Vector2.new(0, y + ROW_H - h + 8)})
+        end
+    end
+
+    local function Select(i, fromKeyboard)
+        if #Results == 0 then
+            Selected = 0
+            Selector.Visible = false
+            return
+        end
+        i = math.clamp(i, 1, #Results)
+        local first = (Selected == 0) or not Selector.Visible
+        Selected = i
+        Selector.Visible = true
+        local pos = UDim2.new(0, 6, 0, (i - 1) * (ROW_H + ROW_GAP))
+        if first then
+            Selector.Position = pos
+        else
+            Tween(Selector, 0.18, {Position = pos}, Enum.EasingStyle.Quint)
+        end
+        if fromKeyboard then ScrollTo(i) end
+    end
+
+    ----------------------------------------------------------------------
+    -- 🎛️ CONTRÔLES EN DIRECT DANS LES RÉSULTATS
+    -- Chaque fabrique retourne refresh(animate) : relit Library.Flags
+    ----------------------------------------------------------------------
+    local function ValueText(v)
+        if type(v) == "table" then
+            if v.R then return "" end
+            local t = {}
+            for _, x in ipairs(v) do t[#t + 1] = tostring(x) end
+            return #t > 0 and table.concat(t, ", ") or "—"
+        end
+        if v == nil or v == "" then return "—" end
+        return tostring(v)
+    end
+
+    local function MakePill(ctrl, e, getText, onClick)
+        local pill = N("TextButton", {
+            Parent = ctrl, Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
+            BackgroundTransparency = 0.8, Text = "", AutoButtonColor = false, ZIndex = 20006
+        })
+        Round(pill, 7)
+        N("UIStroke", {Parent = pill, Color = SelectedTheme.TextDark, Transparency = 0.8, Thickness = 1})
+        local lbl = N("TextLabel", {
+            Parent = pill, Size = UDim2.new(1, -12, 1, 0), Position = UDim2.new(0, 6, 0, 0), BackgroundTransparency = 1,
+            Text = "", TextSize = 12, Font = Library.GlobalFontBold, TextColor3 = SelectedTheme.Text,
+            TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 20007
+        })
+        local last
+        local function refresh()
+            local t = getText()
+            if t ~= last then
+                last = t
+                lbl.Text = t
+            end
+        end
+        pill.MouseButton1Click:Connect(function()
+            PlaySound("Click")
+            onClick()
+            refresh()
+        end)
+        refresh()
+        return refresh
+    end
+
+    local CONTROLS = {}
+
+    CONTROLS.Toggle = function(ctrl, e)
+        local sw = N("TextButton", {
+            Parent = ctrl, Size = UDim2.fromOffset(40, 22), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5),
+            Text = "", AutoButtonColor = false, BorderSizePixel = 0, BackgroundColor3 = SelectedTheme.TextDark,
+            BackgroundTransparency = 0.55, ZIndex = 20006
+        })
+        Round(sw, 100)
+        local knob = N("Frame", {
+            Parent = sw, Size = UDim2.fromOffset(16, 16), AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0),
+            BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 20007
+        })
+        Round(knob, 100)
+        local last
+        local function refresh(animate)
+            local on = Library.Flags[e.flag] == true
+            if on == last then return end
+            last = on
+            local p1 = {
+                BackgroundColor3 = on and SelectedTheme.ElementAccent or SelectedTheme.TextDark,
+                BackgroundTransparency = on and 0.05 or 0.55
+            }
+            local p2 = {Position = UDim2.new(0, on and 21 or 3, 0.5, 0)}
+            if animate then
+                Tween(sw, 0.25, p1)
+                Tween(knob, 0.3, p2, Enum.EasingStyle.Back)
+            else
+                for k, v in pairs(p1) do sw[k] = v end
+                knob.Position = p2.Position
+            end
+        end
+        sw.MouseButton1Click:Connect(function()
+            local item = Library.Items[e.flag]
+            if item then
+                PlaySound("Toggle")
+                MarkUsed(e)
+                item.Set(not (Library.Flags[e.flag] == true))
+                refresh(true)
+            end
+        end)
+        refresh(false)
+        return refresh
+    end
+
+    CONTROLS.Slider = function(ctrl, e)
+        local m = e.meta
+        local Min, Max, Dec = m.Min or 0, m.Max or 100, m.Decimals or 0
+        local range = math.max(Max - Min, 1e-9)
+        local hit = N("TextButton", {
+            Parent = ctrl, Size = UDim2.new(0, 74, 0, 22), Position = UDim2.new(0, 0, 0.5, -11),
+            BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 20006
+        })
+        local bar = N("Frame", {
+            Parent = hit, Size = UDim2.new(1, 0, 0, 4), Position = UDim2.new(0, 0, 0.5, -2),
+            BackgroundColor3 = SelectedTheme.TextDark, BackgroundTransparency = 0.6, BorderSizePixel = 0, ZIndex = 20007
+        })
+        Round(bar, 100)
+        local fill = N("Frame", {
+            Parent = bar, Size = UDim2.fromScale(0, 1), BackgroundColor3 = SelectedTheme.ElementAccent,
+            BorderSizePixel = 0, ZIndex = 20008
+        })
+        Round(fill, 100)
+        local thumb = N("Frame", {
+            Parent = fill, Size = UDim2.fromOffset(10, 10), AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromScale(1, 0.5), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 20009
+        })
+        Round(thumb, 100)
+        local val = N("TextLabel", {
+            Parent = ctrl, Size = UDim2.new(0, 52, 1, 0), Position = UDim2.new(0, 80, 0, 0), BackgroundTransparency = 1,
+            Text = "", TextSize = 12, Font = Library.GlobalFontBold, TextColor3 = SelectedTheme.Text,
+            TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 20006
+        })
+        local last
+        local function refresh(animate)
+            local v = Library.Flags[e.flag]
+            if type(v) ~= "number" or v == last then return end
+            last = v
+            val.Text = string.format("%." .. Dec .. "f", v) .. (m.Suffix or "")
+            local size = UDim2.fromScale(math.clamp((v - Min) / range, 0, 1), 1)
+            if animate then
+                Tween(fill, 0.1, {Size = size}, Enum.EasingStyle.Sine)
+            else
+                fill.Size = size
+            end
+        end
+        local function apply(input)
+            local p = math.clamp((input.Position.X - hit.AbsolutePosition.X) / math.max(hit.AbsoluteSize.X, 1), 0, 1)
+            local item = Library.Items[e.flag]
+            if item then
+                item.Set(Min + (Max - Min) * p)
+                refresh(true)
+            end
+        end
+        hit.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                SliderDrag = {apply = apply}
+                MarkUsed(e)
+                apply(i)
+                Tween(thumb, 0.15, {Size = UDim2.fromOffset(14, 14)})
+            end
+        end)
+        hit.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                Tween(thumb, 0.15, {Size = UDim2.fromOffset(10, 10)})
+            end
+        end)
+        refresh(false)
+        return refresh
+    end
+
+    CONTROLS.Button = function(ctrl, e)
+        local fg = Contrast(SelectedTheme.ElementAccent)
+        local btn = N("TextButton", {
+            Parent = ctrl, Size = UDim2.fromScale(1, 1), BackgroundColor3 = SelectedTheme.ElementAccent,
+            BackgroundTransparency = 0.12, Text = "▶  Lancer", Font = Library.GlobalFontBold, TextSize = 11,
+            TextColor3 = fg, AutoButtonColor = false, ZIndex = 20006
+        })
+        Round(btn, 7)
+        btn.MouseButton1Click:Connect(function()
+            if not e.meta.Run then return end
+            PlaySound("Click")
+            MarkUsed(e)
+            e.meta.Run()
+            btn.Text = "✓  Fait"
+            task.delay(0.9, function()
+                if btn.Parent then btn.Text = "▶  Lancer" end
+            end)
+        end)
+        return nil
+    end
+
+    CONTROLS.Dropdown = function(ctrl, e)
+        return MakePill(ctrl, e,
+            function() return ValueText(Library.Flags[e.flag]) end,
+            function()
+                local item = Library.Items[e.flag]
+                local opts = e.meta.GetOptions and e.meta.GetOptions()
+                if item and opts and #opts > 0 and not e.meta.Multi then
+                    -- clic = option suivante
+                    local cur, idx = Library.Flags[e.flag], 0
+                    for i, o in ipairs(opts) do if o == cur then idx = i break end end
+                    MarkUsed(e)
+                    item.Set(opts[(idx % #opts) + 1])
+                else
+                    Go(e)
+                end
+            end)
+    end
+
+    CONTROLS.Keybind = function(ctrl, e)
+        return MakePill(ctrl, e,
+            function()
+                local v = Library.Flags[e.flag]
+                return v and (KeyMap[v] or tostring(v)) or "—"
+            end,
+            function() Go(e) end)
+    end
+
+    CONTROLS.Input = function(ctrl, e)
+        return MakePill(ctrl, e,
+            function() return ValueText(Library.Flags[e.flag]) end,
+            function() Go(e) end)
+    end
+
+    CONTROLS.Color = function(ctrl, e)
+        local sw = N("TextButton", {
+            Parent = ctrl, Size = UDim2.fromOffset(32, 20), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5),
+            Text = "", AutoButtonColor = false, BackgroundColor3 = Color3.new(1, 1, 1), ZIndex = 20006
+        })
+        Round(sw, 6)
+        N("UIStroke", {Parent = sw, Color = SelectedTheme.TextDark, Transparency = 0.5, Thickness = 1})
+        local function refresh()
+            local c = Library.Flags[e.flag]
+            if type(c) == "table" and c.R then sw.BackgroundColor3 = Color3.new(c.R, c.G, c.B) end
+        end
+        sw.MouseButton1Click:Connect(function() PlaySound("Click") Go(e) end)
+        refresh()
+        return refresh
+    end
+
+    ----------------------------------------------------------------------
+    -- 📄 LIGNES DE RÉSULTAT
+    ----------------------------------------------------------------------
+    local function BuildRow(e, i, tokens, animate)
+        local y = (i - 1) * (ROW_H + ROW_GAP)
+        local kc = KindColor(e.kind)
+        local anim = animate and i <= 12
+
+        local row = N("CanvasGroup", {
+            Parent = List, Size = UDim2.new(1, -12, 0, ROW_H), Position = UDim2.new(0, anim and 22 or 6, 0, y),
+            BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 20003, GroupTransparency = anim and 1 or 0
+        })
+        local hit = N("TextButton", {
+            Parent = row, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 20003
+        })
+        local icon = N("Frame", {
+            Parent = row, Size = UDim2.fromOffset(30, 30), Position = UDim2.new(0, 10, 0.5, -15),
+            BackgroundColor3 = kc, BackgroundTransparency = 0.78, BorderSizePixel = 0, ZIndex = 20004
+        })
+        Round(icon, 8)
+        N("TextLabel", {
+            Parent = icon, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = KIND_GLYPH[e.kind] or "•",
+            TextColor3 = kc, TextSize = 14, Font = Library.GlobalFontBold, ZIndex = 20005
+        })
+
+        local cw = CTRL_W[e.kind] or 0
+        local rightPad = cw > 0 and (cw + 26) or 14
+
+        N("TextLabel", {
+            Parent = row, Size = UDim2.new(1, -(50 + rightPad), 0, 18), Position = UDim2.new(0, 50, 0, 7),
+            BackgroundTransparency = 1, RichText = true, Text = Highlight(e.name, tokens), TextSize = 14,
+            TextColor3 = SelectedTheme.Text, TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 20004
+        })
+        local crumb = e.tabName .. ((e.blockName ~= "") and ("  ›  " .. e.blockName) or "")
+        N("TextLabel", {
+            Parent = row, Size = UDim2.new(1, -(50 + rightPad), 0, 14), Position = UDim2.new(0, 50, 0, 26),
+            BackgroundTransparency = 1, Text = crumb, TextSize = 11, TextColor3 = SelectedTheme.TextDark,
+            TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 20004
+        })
+
+        local refresh
+        if cw > 0 and CONTROLS[e.kind] then
+            local ctrl = N("Frame", {
+                Parent = row, Size = UDim2.fromOffset(cw, 26), AnchorPoint = Vector2.new(1, 0.5),
+                Position = UDim2.new(1, -12, 0.5, 0), BackgroundTransparency = 1, ZIndex = 20005
+            })
+            refresh = CONTROLS[e.kind](ctrl, e)
+        end
+
+        hit.MouseMoved:Connect(function()
+            if Selected ~= i then Select(i) end
+        end)
+        hit.MouseButton1Click:Connect(function()
+            PlaySound("Click")
+            Go(e)
+        end)
+
+        if anim then
+            TS:Create(row, TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, 0, false, (i - 1) * 0.025), {
+                GroupTransparency = 0, Position = UDim2.new(0, 6, 0, y)
+            }):Play()
+        end
+        return row, refresh
+    end
+
+    ----------------------------------------------------------------------
+    -- 🚀 ACTIONS : aller à l'élément / action rapide
+    ----------------------------------------------------------------------
+    local function Flash(obj)
+        if not obj or not obj.Parent then return end
+        local f = N("Frame", {
+            Parent = obj, Size = UDim2.fromScale(1, 1), BackgroundColor3 = SelectedTheme.ElementAccent,
+            BackgroundTransparency = 1, BorderSizePixel = 0, Active = false, ZIndex = (obj.ZIndex or 7) + 4
+        })
+        Round(f, 8)
+        for _ = 1, 2 do
+            if not f.Parent then return end
+            TS:Create(f, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {BackgroundTransparency = 0.55}):Play()
+            task.wait(0.28)
+            TS:Create(f, TweenInfo.new(0.35, Enum.EasingStyle.Quad), {BackgroundTransparency = 1}):Play()
+            task.wait(0.38)
+        end
+        f:Destroy()
+    end
+
+    Go = function(e)
+        MarkUsed(e)
+        CloseResults()
+        SearchBox:ReleaseFocus()
+        SearchBox.Text = ""
+        task.spawn(function()
+            local tab = e.tab
+            if tab and not (ActiveTab and ActiveTab.Btn == tab.Btn) then
+                tab.Activate()
+                task.wait(0.15)
+            end
+            local setter = e.block and Library.BlockSetters[e.block]
+            if setter and setter(false) then task.wait(0.45) end
+            local el = e.element
+            local page = tab and tab.Page
+            if el and el.Parent and page and page.Parent then
+                local rel = el.AbsolutePosition.Y - page.AbsolutePosition.Y + page.CanvasPosition.Y
+                local maxScroll = math.max(0, page.AbsoluteCanvasSize.Y - page.AbsoluteWindowSize.Y)
+                local target = math.clamp(rel - (page.AbsoluteWindowSize.Y / 2 - el.AbsoluteSize.Y / 2), 0, maxScroll)
+                Tween(page, 0.4, {CanvasPosition = Vector2.new(0, target)}, Enum.EasingStyle.Quart)
+                task.wait(0.3)
+                Flash(el)
+            end
+        end)
+    end
+
+    local function RefreshRows(animate)
+        for _, f in ipairs(RowRefresh) do pcall(f, animate) end
+    end
+
+    -- Entrée : action principale selon le type (Shift+Entrée = aller à l'élément)
+    local function Primary(e, forceGo)
+        if forceGo then
+            Go(e)
+        elseif e.kind == "Toggle" then
+            local item = Library.Items[e.flag]
+            if item then
+                PlaySound("Toggle")
+                MarkUsed(e)
+                item.Set(not (Library.Flags[e.flag] == true))
+                RefreshRows(true)
+            end
+            task.delay(0.03, function()
+                if PanelOpen then SearchBox:CaptureFocus() end
+            end)
+        elseif e.kind == "Button" and e.meta.Run then
+            PlaySound("Click")
+            MarkUsed(e)
+            e.meta.Run()
+            CloseResults()
+        else
+            Go(e)
+        end
+    end
+
+    ----------------------------------------------------------------------
+    -- 🎬 OUVERTURE / FERMETURE / RENDU
+    ----------------------------------------------------------------------
+    Render = function(animate)
+        local out, tokens, header, dym = Compute(SearchBox.Text)
+
+        for _, r in ipairs(RowObjects) do r:Destroy() end
+        RowObjects, RowRefresh, Results = {}, {}, {}
+        for _, r in ipairs(out) do Results[#Results + 1] = r.e end
+
+        local n = #Results
+        local listH
+        List.CanvasPosition = Vector2.new(0, 0)
+        Selected = 0
+
+        if n > 0 then
+            Empty.Visible = false
+            for i, e in ipairs(Results) do
+                local row, refresh = BuildRow(e, i, tokens, animate)
+                RowObjects[#RowObjects + 1] = row
+                if refresh then RowRefresh[#RowRefresh + 1] = refresh end
+            end
+            listH = math.clamp(n * (ROW_H + ROW_GAP) + 8, ROW_H + 12, MAX_LIST_H)
+            List.CanvasSize = UDim2.fromOffset(0, n * (ROW_H + ROW_GAP) + 8)
+            Select(1)
+            CountLabel.Text = header or (n .. (n > 1 and " résultats" or " résultat"))
+        else
+            Selector.Visible = false
+            List.CanvasSize = UDim2.new()
+            listH = 96
+            Empty.Visible = true
+            if EmptyConn then EmptyConn:Disconnect() EmptyConn = nil end
+            if #tokens > 0 or SearchBox.Text ~= "" then
+                EmptyTitle.Text = "Aucun résultat pour « " .. SearchBox.Text .. " »"
+                if dym then
+                    EmptySub.Text = "Vous vouliez dire :  " .. dym .. " ?"
+                    EmptyConn = EmptySub.MouseButton1Click:Connect(function()
+                        SearchBox.Text = dym
+                        SearchBox:CaptureFocus()
+                    end)
+                else
+                    EmptySub.Text = "Essaie un autre mot, ou change de filtre"
+                end
+            else
+                EmptyTitle.Text = "Rien à afficher pour ce filtre"
+                EmptySub.Text = ""
+            end
+            CountLabel.Text = "0 résultat"
+        end
+
+        if animate then
+            Tween(Panel, 0.32, {Size = UDim2.new(1, 0, 0, CHIPS_H + listH + FOOT_H)}, Enum.EasingStyle.Quart)
+            Tween(List, 0.32, {Size = UDim2.new(1, 0, 0, listH)}, Enum.EasingStyle.Quart)
+            Tween(Footer, 0.32, {Position = UDim2.new(0, 0, 0, CHIPS_H + listH)}, Enum.EasingStyle.Quart)
+        else
+            Panel.Size = UDim2.new(1, 0, 0, CHIPS_H + listH + FOOT_H)
+            List.Size = UDim2.new(1, 0, 0, listH)
+            Footer.Position = UDim2.new(0, 0, 0, CHIPS_H + listH)
+        end
+    end
+
+    OpenResults = function()
+        if PanelOpen then return end
+        PanelOpen = true
+        Panel.Visible = true
+        Panel.Size = UDim2.new(1, 0, 0, 0)
+        Tween(SearchContainer, 0.4, {Size = UDim2.fromOffset(math.min(SEARCH_W + 40, VP.X - 12), BAR_H)}, Enum.EasingStyle.Back)
+        RefreshChips()
+        Render(true)
+    end
+
+    CloseResults = function()
+        if not PanelOpen then return end
+        PanelOpen = false
+        Tween(Panel, 0.22, {Size = UDim2.new(1, 0, 0, 0)}, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+        Tween(SearchContainer, 0.3, {Size = UDim2.fromOffset(SEARCH_W, BAR_H)}, Enum.EasingStyle.Quart)
+        task.delay(0.24, function()
+            if not PanelOpen then Panel.Visible = false end
+        end)
+    end
+
+    local function CycleFilter(dir)
+        Filter = ((Filter - 1 + dir) % #FILTERS) + 1
+        RefreshChips()
+        PlaySound("Click")
+        Render(true)
+    end
+
+    for idx, f in ipairs(FILTERS) do
+        local b = Create("TextButton", {
+            Parent = ChipScroll,
+            Size = UDim2.new(0, 0, 0, 22),
+            AutomaticSize = Enum.AutomaticSize.X,
+            BackgroundColor3 = SelectedTheme.Main,
+            BackgroundTransparency = 0.55,
+            Text = f.Name,
+            Font = Library.GlobalFontBold,
+            TextSize = 12,
+            TextColor3 = SelectedTheme.TextDark,
+            AutoButtonColor = false,
+            LayoutOrder = idx,
+            ZIndex = 20003
+        })
+        Create("UIPadding", {Parent = b, PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10)})
+        Round(b, 11)
+        b.MouseButton1Click:Connect(function()
+            if Filter ~= idx then
+                Filter = idx
+                RefreshChips()
+                PlaySound("Click")
+                Render(true)
+            end
+        end)
+        ChipBtns[idx] = b
+    end
+
+    ----------------------------------------------------------------------
+    -- 🖱️ ÉVÉNEMENTS
+    ----------------------------------------------------------------------
+    local function InRect(obj, m)
+        local p, s = obj.AbsolutePosition, obj.AbsoluteSize
+        return m.X >= p.X and m.Y >= p.Y and m.X <= p.X + s.X and m.Y <= p.Y + s.Y
+    end
+
+    local function OverSearch()
+        local m = UIS:GetMouseLocation() - GuiService:GetGuiInset()
+        if InRect(SearchContainer, m) then return true end
+        return PanelOpen and Panel.Visible and InRect(Panel, m)
+    end
+
+    local function UpdateBarVisuals()
+        local has = SearchBox.Text ~= ""
+        ClearBtn.Visible = has
+        Badge.Visible = (not IsMobile) and (not has) and (not SearchBox:IsFocused())
+    end
+
+    local function ScanFx()
+        ScanDot.BackgroundColor3 = SelectedTheme.Accent
+        ScanDot.Position = UDim2.new(-0.3, 0, 0, 0)
+        Tween(ScanDot, 0.45, {Position = UDim2.new(1, 0, 0, 0)}, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+    end
+
+    BarClick.MouseButton1Click:Connect(function()
+        SearchBox:CaptureFocus()
+    end)
+
+    ClearBtn.MouseButton1Click:Connect(function()
+        PlaySound("Click")
+        SearchBox.Text = ""
+        SearchBox:CaptureFocus()
+    end)
+    ClearBtn.MouseEnter:Connect(function() Tween(ClearBtn, 0.15, {BackgroundTransparency = 0.2}) end)
+    ClearBtn.MouseLeave:Connect(function() Tween(ClearBtn, 0.15, {BackgroundTransparency = 0.5}) end)
+
     SearchContainer.MouseEnter:Connect(function()
-        if not IsOpen then return end
+        if not IsOpen or PanelOpen then return end
         TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.2}):Play()
         TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0}):Play()
     end)
 
     SearchContainer.MouseLeave:Connect(function()
-        if not IsOpen then return end
-        if not SearchBox:IsFocused() then
-            TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.6}):Play()
-            TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.15}):Play()
-        end
+        if not IsOpen or PanelOpen then return end
+        TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.6}):Play()
+        TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.15}):Play()
     end)
 
     SearchBox.Focused:Connect(function()
         TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0}):Play()
         TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0}):Play()
         TS:Create(SearchIcon, TweenInfo.new(0.2), {TextColor3 = Themes.Default.Accent}):Play()
+        SearchIcon.Rotation = -25
+        Tween(SearchIcon, 0.45, {Rotation = 0}, Enum.EasingStyle.Back)
+        UpdateBarVisuals()
+        OpenResults()
     end)
 
     SearchBox.FocusLost:Connect(function(enterPressed, input)
-        -- Échap = efface la recherche
-        if input and input.KeyCode == Enum.KeyCode.Escape then
-            SearchBox.Text = ""
-        end
+        UpdateBarVisuals()
         TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.6}):Play()
         TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.15}):Play()
         TS:Create(SearchIcon, TweenInfo.new(0.2), {TextColor3 = Themes.Default.TextDark}):Play()
+
+        if input and input.KeyCode == Enum.KeyCode.Escape then
+            SearchBox.Text = ""
+            CloseResults()
+            return
+        end
+
+        if enterPressed then
+            local e = Results[Selected]
+            if e then
+                local shift = UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift)
+                Primary(e, shift)
+            end
+            return
+        end
+
+        -- On laisse le temps à un clic sur un résultat de passer avant de fermer
+        task.delay(0.12, function()
+            if PanelOpen and not SearchBox:IsFocused() and not OverSearch() then
+                CloseResults()
+            end
+        end)
     end)
 
-    -- 🔍 LOGIQUE DE RECHERCHE (propre à cette fenêtre, gère blocs et onglets)
-    local allSearchableElements = {}
-    local searchBlocks = {}   -- BlockFrames indexés
-    local searchTabs = {}     -- {Btn, Activate} des onglets indexés (dans l'ordre de création)
-    local IndexingEnabled = false -- désactivé pendant la création de l'onglet Settings interne
-
-    local function AddToSearch(element, keywords, tabRec, blockFrame, blockName)
-        if not IndexingEnabled then return end
-        table.insert(allSearchableElements, {
-            element = element,
-            keywords = (tostring(keywords) .. " " .. tostring(blockName or "")):lower(),
-            tab = tabRec,
-            block = blockFrame
-        })
+    -- Frappe : balayage lumineux + rendu (léger debounce)
+    do
+        local token = 0
+        SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+            UpdateBarVisuals()
+            ScanFx()
+            if not PanelOpen then return end
+            token += 1
+            local my = token
+            task.delay(0.03, function()
+                if my == token and PanelOpen then Render(true) end
+            end)
+        end)
     end
 
-    local function PerformSearch(query)
-        query = (query:lower():gsub("^%s+", ""):gsub("%s+$", ""))
-        local searching = query ~= ""
-        local tabHits, blockHits = {}, {}
+    -- Clavier : ↑ ↓ Tab pendant la saisie
+    Bind(UIS.InputBegan, function(input)
+        if not PanelOpen or not SearchBox:IsFocused() then return end
+        local k = input.KeyCode
+        if k == Enum.KeyCode.Down or k == Enum.KeyCode.Up then
+            local cp = SearchBox.CursorPosition
+            task.defer(function() SearchBox.CursorPosition = cp end)
+            if #Results > 0 then
+                local nextI = Selected + (k == Enum.KeyCode.Down and 1 or -1)
+                if nextI > #Results then nextI = 1 elseif nextI < 1 then nextI = #Results end
+                PlaySound("Hover")
+                Select(nextI, true)
+            end
+        elseif k == Enum.KeyCode.Tab then
+            local shift = UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift)
+            CycleFilter(shift and -1 or 1)
+        end
+    end)
 
-        for _, item in ipairs(allSearchableElements) do
-            if item.element and item.element.Parent then
-                local match = (not searching) or (item.keywords:find(query, 1, true) ~= nil)
-                item.element.Visible = match
-                if match and searching then
-                    if item.tab then tabHits[item.tab] = (tabHits[item.tab] or 0) + 1 end
-                    if item.block then blockHits[item.block] = (blockHits[item.block] or 0) + 1 end
+    -- Clic en dehors = fermeture
+    Bind(UIS.InputBegan, function(input)
+        if not PanelOpen then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if not OverSearch() then
+                SearchBox:ReleaseFocus()
+                CloseResults()
+            end
+        end
+    end)
+
+    -- Drag des sliders intégrés aux résultats
+    Bind(UIS.InputChanged, function(input)
+        if SliderDrag and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            SliderDrag.apply(input)
+        end
+    end)
+    Bind(UIS.InputEnded, function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            SliderDrag = nil
+        end
+    end)
+
+    -- Les contrôles des résultats restent synchronisés avec l'UI (ex. un toggle changé via une keybind)
+    do
+        local acc = 0
+        Bind(RS.Heartbeat, function(dt)
+            if not PanelOpen then return end
+            if not IsOpen then
+                CloseResults()
+                return
+            end
+            acc += dt
+            if acc < 0.15 then return end
+            acc = 0
+            RefreshRows(true)
+        end)
+    end
+
+    -- Le placeholder propose de vrais noms d'options
+    task.spawn(function()
+        local rng = Random.new()
+        while SearchContainer.Parent do
+            task.wait(3.5)
+            if IsOpen and SearchBox.Text == "" and not SearchBox:IsFocused() then
+                local pool = {}
+                for _, e in ipairs(allSearchableElements) do
+                    if e.kind ~= "Label" and e.element and e.element.Parent then pool[#pool + 1] = e.name end
+                end
+                if #pool > 0 then
+                    SearchBox.PlaceholderText = 'Essaie :  "' .. pool[rng:NextInteger(1, #pool)] .. '"'
                 end
             end
         end
+    end)
 
-        for _, block in ipairs(searchBlocks) do
-            if block.Parent then
-                block.Visible = (not searching) or (blockHits[block] ~= nil)
-            end
-        end
-
-        local firstWithHits
-        local activeHasHits = false
-        for _, rec in ipairs(searchTabs) do
-            if rec.Btn.Parent then
-                local has = (not searching) or (tabHits[rec] ~= nil)
-                rec.Btn.Visible = has
-                if has and not firstWithHits then firstWithHits = rec end
-                if has and ActiveTab and ActiveTab.Btn == rec.Btn then activeHasHits = true end
-            end
-        end
-
-        -- Si l'onglet actif n'a aucun résultat, on bascule sur le premier qui en a
-        if searching and not activeHasHits and firstWithHits then
-            firstWithHits.Activate()
-        end
+    -- API
+    function Library:OpenSearch(text)
+        if not IsOpen then ToggleUI() end
+        SearchBox.Text = text or ""
+        SearchBox:CaptureFocus()
     end
 
-    SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
-        PerformSearch(SearchBox.Text)
-    end)
+    UpdateBarVisuals()
 
     local Close = Create("TextButton", {
         Parent = TopBar,
@@ -2681,7 +3885,7 @@ function Library:CreateWindow(Settings)
     })
 
     -- Ouverture / fermeture instantanée (aucune animation, aucun tween => pas de lag)
-    local function ToggleUI()
+    ToggleUI = function()
         IsOpen = not IsOpen
         Library.UIOpen = IsOpen
         PlaySound(IsOpen and "Open" or "Close")
@@ -3168,19 +4372,16 @@ function Library:CreateWindow(Settings)
             Activate()
         end
 
-        -- Enregistrement pour la recherche (onglets utilisateur uniquement)
-        local TabRec
-        if IndexingEnabled and not Internal then
-            TabRec = {Btn = TabBtn, Activate = Activate}
-            table.insert(searchTabs, TabRec)
-        end
+        -- Enregistrement pour la recherche (tous les onglets, Settings inclus)
+        local TabRec = {Btn = TabBtn, Activate = Activate, Page = Page, Name = TabName, Internal = Internal}
+        table.insert(searchTabs, TabRec)
 
         local function GetElements(TargetParent, BlockFrame, BlockName)
             local Elements = {}
             local ElementOrder = 0
 
-            local function Index(element, name)
-                AddToSearch(element, name, TabRec, BlockFrame, BlockName)
+            local function Index(element, name, kind, cfg, extra)
+                AddToSearch(element, name, TabRec, BlockFrame, BlockName, kind, cfg, extra)
             end
 
             -- Tooltip optionnel : Tooltip = "..." (ou Description = "...")
@@ -3265,7 +4466,7 @@ function Library:CreateWindow(Settings)
                 })
 
                 Tip(Lab, Cfg)
-                Index(Lab, Text)
+                Index(Lab, Text, "Label", Cfg)
 
                 return {
                     SetText = function(newText)
@@ -3318,7 +4519,7 @@ function Library:CreateWindow(Settings)
                 end)
 
                 Tip(Btn, Cfg)
-                Index(Btn, Cfg.Name or "Button")
+                Index(Btn, Cfg.Name or "Button", "Button", Cfg, {Run = function() if Cfg.Callback then Cfg.Callback() end end})
             end
 
             function Elements:CreateToggle(Cfg)
@@ -3430,7 +4631,7 @@ function Library:CreateWindow(Settings)
                 }
 
                 Tip(Btn, Cfg)
-                Index(Btn, Cfg.Name or "Toggle")
+                Index(Btn, Cfg.Name or "Toggle", "Toggle", Cfg)
             end
 
             -- 🎚️ SLIDER AVEC DÉCIMALES
@@ -3632,7 +4833,7 @@ function Library:CreateWindow(Settings)
                 Library.Items[Flag] = Object
 
                 Tip(Frame, Cfg)
-                Index(Frame, Cfg.Name or "Slider")
+                Index(Frame, Cfg.Name or "Slider", "Slider", Cfg, {Min = Min, Max = Max, Decimals = Decimals, Suffix = Suffix})
 
                 return Object
             end
@@ -3745,7 +4946,7 @@ function Library:CreateWindow(Settings)
                 Library.Items[Flag] = {Set = Update}
 
                 Tip(Frame, Cfg)
-                Index(Frame, Cfg.Name or "Input")
+                Index(Frame, Cfg.Name or "Input", "Input", Cfg)
             end
 
             -- 📂 DROPDOWN SIMPLE / MULTI + RECHERCHE
@@ -4118,7 +5319,7 @@ function Library:CreateWindow(Settings)
                 Library.Items[Flag] = Object
 
                 AttachTooltip(Header, Cfg.Tooltip or Cfg.Description)
-                Index(Drop, Cfg.Name or "Dropdown")
+                Index(Drop, Cfg.Name or "Dropdown", "Dropdown", Cfg, {Multi = Multi, GetOptions = function() return Options end})
 
                 return Object
             end
@@ -4410,7 +5611,7 @@ function Library:CreateWindow(Settings)
                 }
 
                 AttachTooltip(TriggerBtn, Cfg.Tooltip or Cfg.Description)
-                Index(Wrapper, Cfg.Name or "Color Picker")
+                Index(Wrapper, Cfg.Name or "Color Picker", "Color", Cfg)
             end
 
             function Elements:CreateKeybind(Cfg)
@@ -4533,7 +5734,7 @@ function Library:CreateWindow(Settings)
                 }
 
                 Tip(Frame, Cfg)
-                Index(Frame, Cfg.Name or "Keybind")
+                Index(Frame, Cfg.Name or "Keybind", "Keybind", Cfg)
             end
 
             -- ⌨️ LISTE DE TOUS LES KEYBINDS (mise à jour en direct, conflits en rouge, clic = rebind)
@@ -4740,9 +5941,8 @@ function Library:CreateWindow(Settings)
                 Create("UIPadding", { Parent = BlockContent, PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 10), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) })
 
                 -- 🎬 COLLAPSE/EXPAND : la hauteur d'ouverture est recalculée depuis le contenu (animation fluide dans les 2 sens)
-                CollapseButton.MouseButton1Click:Connect(function()
-                    PlaySound("Click")
-                    isCollapsed = not isCollapsed
+                local function SetCollapsed(state)
+                    isCollapsed = state
 
                     local startH = BlockFrame.AbsoluteSize.Y
                     BlockFrame.AutomaticSize = Enum.AutomaticSize.None
@@ -4760,7 +5960,19 @@ function Library:CreateWindow(Settings)
                             end
                         end)
                     end
+                end
+
+                CollapseButton.MouseButton1Click:Connect(function()
+                    PlaySound("Click")
+                    SetCollapsed(not isCollapsed)
                 end)
+
+                -- permet à la recherche de rouvrir un bloc replié avant d'y aller
+                Library.BlockSetters[BlockFrame] = function(collapsed)
+                    if isCollapsed == collapsed then return false end
+                    SetCollapsed(collapsed)
+                    return true
+                end
 
                 return GetElements(BlockContent, BlockFrame, BlockName)
             end
@@ -5260,7 +6472,7 @@ function Library:CreateWindow(Settings)
         end
     })
 
-    -- À partir d'ici, tout ce que l'utilisateur crée est indexé dans la recherche (Settings exclu)
+    -- À partir d'ici, tout ce que l'utilisateur crée est indexé dans la recherche (Settings inclus)
     IndexingEnabled = true
 
     return Funcs
