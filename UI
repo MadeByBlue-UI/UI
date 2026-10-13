@@ -1,5 +1,6 @@
 -- 🎵 ENHANCED UI LIBRARY : intro animée + animations + layout 3 panneaux séparés (Brand / Tabs / Fonctions)
 -- (MultiDropdown/Search, Sliders décimaux, Notifs typées, Callbacks protégés)
+-- v2 : Tooltips, liste des Keybinds (HUD + Settings), Export/Import config & thème, Ctrl+F, presets de thème, couleurs corrigées
 
 local Library = {}
 local TS = game:GetService("TweenService")
@@ -10,6 +11,7 @@ local TxtS = game:GetService("TextService")
 local CG = game:GetService("CoreGui")
 local Plrs = game:GetService("Players")
 local SoundService = game:GetService("SoundService")
+local GuiService = game:GetService("GuiService")
 local LP = Plrs.LocalPlayer
 local Mouse = LP:GetMouse()
 local Stats = game:GetService("Stats")
@@ -17,6 +19,24 @@ local Stats = game:GetService("Stats")
 Library.Connections = {}
 Library.UIOpen = true
 Library.CurrentGui = nil
+Library.TooltipsEnabled = true
+Library.RebindLock = 0
+
+-- Registre des keybinds (rempli par CreateKeybind) + entrées fixes
+Library.KeybindRegistry = {}
+Library.StaticKeybinds = {
+    {Name = "Quick Search", Key = "Ctrl + F"}
+}
+local KeybindListeners = {}
+
+local function KeybindsChanged()
+    for i = #KeybindListeners, 1, -1 do
+        local ok, keep = pcall(KeybindListeners[i])
+        if ok and keep == false then
+            table.remove(KeybindListeners, i)
+        end
+    end
+end
 
 -- Enregistre une connexion pour pouvoir la nettoyer dans Library:Destroy()
 local function Bind(signal, fn)
@@ -51,6 +71,27 @@ local function SafeCall(fn, ...)
         warn("[UI Callback Error] " .. tostring(err))
         Library:Notify({Title = "Callback Error", Content = tostring(err), Type = "Error", Duration = 5})
     end
+end
+
+local function Clone(t)
+    local c = {}
+    for k, v in pairs(t) do c[k] = v end
+    return c
+end
+
+-- 📋 Presse-papier (export / import)
+local function CopyText(text)
+    local fn = setclipboard or toclipboard or (syn and syn.write_clipboard) or (Clipboard and Clipboard.set)
+    if not fn then return false end
+    return (pcall(fn, text))
+end
+
+local function PasteText()
+    local fn = getclipboard or fromclipboard
+    if not fn then return nil end
+    local ok, res = pcall(fn)
+    if ok and type(res) == "string" then return res end
+    return nil
 end
 
 -- 🔊 SYSTÈME DE SONS (pool réutilisable + cooldown anti-spam)
@@ -110,6 +151,7 @@ Library.Items = {}
 Library.TextObjects = {}
 Library.GradientObjects = {}
 Library.CornerObjects = {}
+Library.ThemeRefreshers = {}
 Library.ThemeObjects = {
     Main = {},
     Second = {},
@@ -313,6 +355,13 @@ for _, t in pairs(Themes) do
     end
 end
 
+-- Copie intacte des thèmes d'origine : Themes.Default est modifié en direct (thème actif),
+-- les presets doivent donc venir d'ici
+local BaseThemes = {}
+for name, t in pairs(Themes) do
+    BaseThemes[name] = Clone(t)
+end
+
 local function GetAssetId(id)
     if not id or id == "" then
         return ""
@@ -331,6 +380,48 @@ end
 -- Simplifié : plus de game:GetObjects (inutile et lourd pour un simple rbxassetid://)
 local function SetImageAsync(instance, property, idStr)
     instance[property] = GetAssetId(idStr)
+end
+
+-- 🎨 Sérialisation des thèmes (fichiers + export/import)
+local THEME_COLOR_KEYS = {"Main", "Second", "Accent", "ElementAccent", "Text", "TextDark", "Error", "GradientStart", "GradientEnd"}
+
+local function SerializeTheme(t, extra)
+    local out = {_type = "theme"}
+    for _, k in ipairs(THEME_COLOR_KEYS) do
+        local c = t[k] or t.Accent
+        out[k] = {R = c.R, G = c.G, B = c.B}
+    end
+    out.Background = t.Background or ""
+    for k, v in pairs(extra or {}) do
+        out[k] = v
+    end
+    return out
+end
+
+local function RestoreTheme(parsed)
+    local restored = {}
+    for k, v in pairs(parsed) do
+        if type(v) == "table" and v.R then
+            restored[k] = Color3.new(v.R, v.G, v.B)
+        else
+            restored[k] = v
+        end
+    end
+    local base = BaseThemes.Default
+    for _, k in ipairs({"Main", "Second", "Accent", "Text", "TextDark", "Error"}) do
+        if typeof(restored[k]) ~= "Color3" then restored[k] = base[k] end
+    end
+    if typeof(restored.ElementAccent) ~= "Color3" then restored.ElementAccent = restored.Accent end
+    if typeof(restored.GradientStart) ~= "Color3" then restored.GradientStart = restored.Accent end
+    if typeof(restored.GradientEnd) ~= "Color3" then restored.GradientEnd = restored.Accent end
+    restored.Gradient = GetGradientSeq(restored)
+    if type(restored.Font) ~= "string" then restored.Font = "Gotham" end
+    if type(restored.Transparency) ~= "number" then restored.Transparency = 0.25 end
+    if type(restored.ImageTransparency) ~= "number" then restored.ImageTransparency = 0 end
+    if type(restored.OrbsTransparency) ~= "number" then restored.OrbsTransparency = 0.9 end
+    if type(restored.Background) ~= "string" then restored.Background = "" end
+    if type(restored.CornerRadius) ~= "number" then restored.CornerRadius = Library.GlobalCornerValue end
+    return restored
 end
 
 local function GetTheme(cfg)
@@ -376,11 +467,12 @@ local function GetTheme(cfg)
             mapped.CornerRadius = cfg["CornerRadius"]
         end
 
-        if not mapped.Main then mapped.Main = Themes.Default.Main end
-        if not mapped.Second then mapped.Second = Themes.Default.Second end
-        if not mapped.Accent then mapped.Accent = Themes.Default.Accent end
+        local base = BaseThemes.Default
+        if not mapped.Main then mapped.Main = base.Main end
+        if not mapped.Second then mapped.Second = base.Second end
+        if not mapped.Accent then mapped.Accent = base.Accent end
         if not mapped.ElementAccent then mapped.ElementAccent = mapped.Accent end
-        if not mapped.Text then mapped.Text = Themes.Default.Text end
+        if not mapped.Text then mapped.Text = base.Text end
         if not mapped.TextDark then mapped.TextDark = Color3.fromRGB(170, 170, 170) end
         if not mapped.Error then mapped.Error = Color3.fromRGB(255, 60, 60) end
         if not mapped.GradientStart then mapped.GradientStart = mapped.Accent end
@@ -390,38 +482,16 @@ local function GetTheme(cfg)
         return mapped
     end
 
-    if isfile(Library.ThemeFolder .. "/" .. tostring(cfg) .. ".json") then
+    local okFile, exists = pcall(function()
+        return isfile(Library.ThemeFolder .. "/" .. tostring(cfg) .. ".json")
+    end)
+    if okFile and exists then
         local content = readfile(Library.ThemeFolder .. "/" .. tostring(cfg) .. ".json")
         local parsed = HS:JSONDecode(content)
-        local restored = {}
-        for k, v in pairs(parsed) do
-            if type(v) == "table" and v.R then
-                restored[k] = Color3.new(v.R, v.G, v.B)
-            else
-                restored[k] = v
-            end
-        end
-        if restored.GradientStart and restored.GradientEnd then
-            restored.Gradient = ColorSequence.new{
-                ColorSequenceKeypoint.new(0, restored.GradientStart),
-                ColorSequenceKeypoint.new(1, restored.GradientEnd)
-            }
-        else
-            restored.GradientStart = restored.Accent
-            restored.GradientEnd = restored.Accent
-            restored.Gradient = ColorSequence.new{
-                ColorSequenceKeypoint.new(0, restored.Accent),
-                ColorSequenceKeypoint.new(1, restored.Accent)
-            }
-        end
-        if not restored.ElementAccent then restored.ElementAccent = restored.Accent end
-        if not restored.Font then restored.Font = "Gotham" end
-        if not restored.TextDark then restored.TextDark = Color3.fromRGB(170, 170, 170) end
-        if not restored.Error then restored.Error = Color3.fromRGB(255, 60, 60) end
-        if restored.CornerRadius == nil then restored.CornerRadius = Library.GlobalCornerValue end
-        return restored
+        return RestoreTheme(parsed)
     end
-    return Themes[cfg] or Themes.Default
+    -- Toujours une copie : SelectedTheme est modifié en direct par les color pickers
+    return Clone(BaseThemes[cfg] or BaseThemes.Default)
 end
 
 local function Create(class, properties)
@@ -444,11 +514,12 @@ local function Create(class, properties)
 end
 
 local function UpdateFonts(FontName)
-    local NewFont = Enum.Font[FontName] or Enum.Font.Gotham
+    local okFont, found = pcall(function() return Enum.Font[FontName] end)
+    local NewFont = (okFont and found) or Enum.Font.Gotham
     Library.GlobalFont = NewFont
-    local BoldName = FontName .. "Bold"
-    if pcall(function() return Enum.Font[BoldName] end) then
-        Library.GlobalFontBold = Enum.Font[BoldName]
+    local okBold, foundBold = pcall(function() return Enum.Font[FontName .. "Bold"] end)
+    if okBold and foundBold then
+        Library.GlobalFontBold = foundBold
     else
         Library.GlobalFontBold = NewFont
     end
@@ -465,131 +536,106 @@ local function UpdateFonts(FontName)
     end
 end
 
+-- Parcourt une liste d'objets thémés : chaque objet est protégé par pcall,
+-- une erreur sur un seul objet n'empêche plus les autres d'être mis à jour
+local function Each(list, fn, getInst)
+    for i = #list, 1, -1 do
+        local obj = list[i]
+        local inst = obj
+        if getInst then inst = obj and getInst(obj) end
+        if inst and inst.Parent then
+            pcall(fn, obj)
+        else
+            table.remove(list, i)
+        end
+    end
+end
+
 local function UpdateThemeObjects()
-    for i = #Library.ThemeObjects.Main, 1, -1 do
-        local obj = Library.ThemeObjects.Main[i]
-        if obj and obj.Parent then
-            obj.BackgroundColor3 = Themes.Default.Main
+    local T = Themes.Default
+    local O = Library.ThemeObjects
+
+    Each(O.Main, function(obj) obj.BackgroundColor3 = T.Main end)
+    Each(O.Second, function(obj) obj.BackgroundColor3 = T.Second end)
+
+    Each(O.Accent, function(obj)
+        if obj:IsA("ImageLabel") or obj:IsA("ImageButton") then
+            obj.ImageColor3 = T.Accent
+        elseif obj:IsA("UIStroke") then
+            obj.Color = T.Accent
+        elseif obj:IsA("TextLabel") or obj:IsA("TextBox") or obj:IsA("TextButton") then
+            obj.TextColor3 = T.Accent
         else
-            table.remove(Library.ThemeObjects.Main, i)
+            obj.BackgroundColor3 = T.Accent
         end
-    end
-    for i = #Library.ThemeObjects.Second, 1, -1 do
-        local obj = Library.ThemeObjects.Second[i]
-        if obj and obj.Parent then
-            obj.BackgroundColor3 = Themes.Default.Second
+    end)
+
+    Each(O.ElementAccent, function(obj)
+        if obj:IsA("ImageLabel") then
+            obj.ImageColor3 = T.ElementAccent
+        elseif obj:IsA("UIStroke") then
+            obj.Color = T.ElementAccent
         else
-            table.remove(Library.ThemeObjects.Second, i)
+            obj.BackgroundColor3 = T.ElementAccent
         end
-    end
-    for i = #Library.ThemeObjects.Accent, 1, -1 do
-        local obj = Library.ThemeObjects.Accent[i]
-        if obj and obj.Parent then
-            if obj:IsA("ImageLabel") or obj:IsA("ImageButton") then
-                obj.ImageColor3 = Themes.Default.Accent
-            elseif obj:IsA("UIStroke") then
-                obj.Color = Themes.Default.Accent
-            elseif obj:IsA("TextLabel") or obj:IsA("TextBox") or obj:IsA("TextButton") then
-                obj.TextColor3 = Themes.Default.Accent -- fix : les labels "Accent" (loupe, flèche) n'étaient pas mis à jour
-            else
-                obj.BackgroundColor3 = Themes.Default.Accent
-            end
-        else
-            table.remove(Library.ThemeObjects.Accent, i)
+    end)
+
+    Each(O.Text, function(obj)
+        if obj:IsA("TextLabel") or obj:IsA("TextBox") or obj:IsA("TextButton") then
+            obj.TextColor3 = T.Text
+        elseif obj:IsA("Frame") then
+            obj.BackgroundColor3 = T.Text
         end
-    end
-    for i = #Library.ThemeObjects.ElementAccent, 1, -1 do
-        local obj = Library.ThemeObjects.ElementAccent[i]
-        if obj and obj.Parent then
-            if obj:IsA("ImageLabel") then
-                obj.ImageColor3 = Themes.Default.ElementAccent
-            elseif obj:IsA("UIStroke") then
-                obj.Color = Themes.Default.ElementAccent
-            else
-                obj.BackgroundColor3 = Themes.Default.ElementAccent
-            end
+    end)
+
+    Each(O.TextDark, function(obj)
+        if obj:IsA("ImageLabel") then
+            obj.ImageColor3 = T.TextDark
+        elseif obj:IsA("Frame") then
+            obj.BackgroundColor3 = T.TextDark
+        elseif obj:IsA("UIStroke") then
+            obj.Color = T.TextDark
         else
-            table.remove(Library.ThemeObjects.ElementAccent, i)
+            obj.TextColor3 = T.TextDark
         end
-    end
-    for i = #Library.ThemeObjects.Text, 1, -1 do
-        local obj = Library.ThemeObjects.Text[i]
-        if obj and obj.Parent then
-            if obj:IsA("TextLabel") or obj:IsA("TextBox") or obj:IsA("TextButton") then
-                obj.TextColor3 = Themes.Default.Text
-            elseif obj:IsA("Frame") then
-                obj.BackgroundColor3 = Themes.Default.Text
-            end
+    end)
+
+    Each(O.Toggles, function(t)
+        if t.State() then
+            t.Stroke.Color = T.ElementAccent
+            t.Stroke.Transparency = 0
+            t.Square.BackgroundColor3 = T.ElementAccent
         else
-            table.remove(Library.ThemeObjects.Text, i)
+            t.Stroke.Color = T.TextDark
+            t.Stroke.Transparency = 0.8
+            t.Square.BackgroundColor3 = T.TextDark
         end
-    end
-    for i = #Library.ThemeObjects.TextDark, 1, -1 do
-        local obj = Library.ThemeObjects.TextDark[i]
-        if obj and obj.Parent then
-            if obj:IsA("ImageLabel") then
-                obj.ImageColor3 = Themes.Default.TextDark
-            elseif obj:IsA("Frame") then
-                obj.BackgroundColor3 = Themes.Default.TextDark
-            elseif obj:IsA("UIStroke") then
-                obj.Color = Themes.Default.TextDark
-            else
-                obj.TextColor3 = Themes.Default.TextDark
-            end
-        else
-            table.remove(Library.ThemeObjects.TextDark, i)
+    end, function(t) return t.Box end)
+
+    Each(O.TabLabels, function(tab)
+        local active = tab.Btn.BackgroundTransparency < 0.8
+        tab.Label.TextColor3 = active and T.Text or T.TextDark
+        if tab.Icon then
+            tab.Icon.ImageColor3 = active and T.Accent or T.TextDark
         end
-    end
-    for i = #Library.ThemeObjects.Toggles, 1, -1 do
-        local t = Library.ThemeObjects.Toggles[i]
-        if t.Box and t.Box.Parent and t.Stroke and t.Stroke.Parent and t.Square and t.Square.Parent then
-            if t.State() then
-                t.Stroke.Color = Themes.Default.ElementAccent
-                t.Stroke.Transparency = 0
-                t.Square.BackgroundColor3 = Themes.Default.ElementAccent
-            else
-                t.Stroke.Color = Themes.Default.TextDark
-                t.Stroke.Transparency = 0.8
-                t.Square.BackgroundColor3 = Themes.Default.TextDark
-            end
-        else
-            table.remove(Library.ThemeObjects.Toggles, i)
+        if tab.Line then
+            tab.Line.BackgroundColor3 = T.Accent
         end
-    end
-    for i = #Library.ThemeObjects.TabLabels, 1, -1 do
-        local tab = Library.ThemeObjects.TabLabels[i]
-        if tab.Label and tab.Label.Parent then
-            if tab.Btn.BackgroundTransparency < 0.8 then
-                tab.Label.TextColor3 = Themes.Default.Text
-                if tab.Icon then
-                    tab.Icon.ImageColor3 = Themes.Default.Accent
-                end
-                if tab.Line then
-                    tab.Line.BackgroundColor3 = Themes.Default.Accent
-                end
-            else
-                tab.Label.TextColor3 = Themes.Default.TextDark
-                if tab.Icon then
-                    tab.Icon.ImageColor3 = Themes.Default.TextDark
-                end
-                if tab.Line then
-                    tab.Line.BackgroundColor3 = Themes.Default.Accent
-                end
-            end
+    end, function(tab) return tab.Label end)
+
+    Each(O.Keybinds, function(btn)
+        if btn.Text == "..." then
+            btn.TextColor3 = T.Accent
         else
-            table.remove(Library.ThemeObjects.TabLabels, i)
+            btn.TextColor3 = T.TextDark
         end
-    end
-    for i = #Library.ThemeObjects.Keybinds, 1, -1 do
-        local btn = Library.ThemeObjects.Keybinds[i]
-        if btn and btn.Parent then
-            if btn.Text == "..." then
-                btn.TextColor3 = Themes.Default.Accent
-            else
-                btn.TextColor3 = Themes.Default.TextDark
-            end
-        else
-            table.remove(Library.ThemeObjects.Keybinds, i)
+    end)
+
+    -- Éléments qui se redessinent eux-mêmes (dropdowns, etc.)
+    for i = #Library.ThemeRefreshers, 1, -1 do
+        local ok, keep = pcall(Library.ThemeRefreshers[i])
+        if ok and keep == false then
+            table.remove(Library.ThemeRefreshers, i)
         end
     end
 end
@@ -702,7 +748,7 @@ local function AddSoftOrbs(parent, theme)
         local containerSize = Container.AbsoluteSize
         if containerSize.X <= 0 or containerSize.Y <= 0 then return end
 
-        local mousePos = UIS:GetMouseLocation()
+        local mousePos = UIS:GetMouseLocation() - GuiService:GetGuiInset()
         local containerPos = Container.AbsolutePosition
         local mx = (mousePos.X - containerPos.X) / containerSize.X
         local my = (mousePos.Y - containerPos.Y) / containerSize.Y
@@ -858,8 +904,38 @@ local function AttachHorizontalScroll(box, scrollingFrame, defaultAlignment)
     end)
 end
 
--- Stub : évite une erreur si Notify est appelé avant la création de la fenêtre
+-- Stubs : évitent une erreur si appelés avant la création de la fenêtre
 function Library:Notify() end
+function Library:AddTooltip() end
+
+-- ⌨️ Liste triée de tous les keybinds connus (fixes + enregistrés)
+function Library:GetKeybindEntries()
+    local list = {}
+    for _, e in ipairs(Library.StaticKeybinds) do
+        table.insert(list, {Name = e.Name, Key = e.Key, Static = true})
+    end
+    for flag, e in pairs(Library.KeybindRegistry) do
+        table.insert(list, {Name = e.Name, Key = KeyMap[e.Key] or e.Key, Raw = e.Key, Flag = flag})
+    end
+    table.sort(list, function(a, b)
+        if (a.Static or false) ~= (b.Static or false) then
+            return a.Static == true
+        end
+        return tostring(a.Name):lower() < tostring(b.Name):lower()
+    end)
+    return list
+end
+
+local function KeybindConflicts(entries)
+    local count, conflicts = {}, {}
+    for _, e in ipairs(entries) do
+        if e.Raw then count[e.Raw] = (count[e.Raw] or 0) + 1 end
+    end
+    for k, n in pairs(count) do
+        if n > 1 then conflicts[k] = true end
+    end
+    return conflicts
+end
 
 -- Nettoyage complet : connexions, sons, GUI, tables internes
 function Library:Destroy()
@@ -887,11 +963,15 @@ function Library:Destroy()
     Library.TextObjects = {}
     Library.GradientObjects = {}
     Library.CornerObjects = {}
+    Library.ThemeRefreshers = {}
+    Library.KeybindRegistry = {}
+    KeybindListeners = {}
     for k in pairs(Library.ThemeObjects) do
         Library.ThemeObjects[k] = {}
     end
     Library.UIOpen = true
     function Library:Notify() end
+    function Library:AddTooltip() end
 end
 
 -- 🚀 INTRO : anneau qui tourne + logo + titre en machine à écrire + barre de progression
@@ -1222,19 +1302,7 @@ function Library:KeySystem(Settings)
     BtnHover(GetKeyBtn, false)
 
     GetKeyBtn.MouseButton1Click:Connect(function()
-        local success = pcall(function()
-            if setclipboard then
-                setclipboard(LinkToCopy)
-            elseif toclipboard then
-                toclipboard(LinkToCopy)
-            elseif syn and syn.write_clipboard then
-                syn.write_clipboard(LinkToCopy)
-            elseif Clipboard and Clipboard.set then
-                Clipboard.set(LinkToCopy)
-            else
-                error("no clipboard") -- fix : avant, "pas de presse-papier" comptait comme un succès
-            end
-        end)
+        local success = CopyText(LinkToCopy)
         if success then
             PlaySound("Success")
             Status.Text = "Link copied to clipboard!"
@@ -1297,6 +1365,7 @@ function Library:CreateWindow(Settings)
     local Config = Settings or {}
     local Title = Config.Title or "UI"
     local SelectedTheme = GetTheme(Config.Theme)
+    local InitialTheme = Clone(SelectedTheme) -- pour le bouton "Reset Theme"
 
     Library.GlobalCornerValue = Config.CornerRadius or SelectedTheme.CornerRadius or 35
 
@@ -1304,15 +1373,9 @@ function Library:CreateWindow(Settings)
     if not isfolder(Library.ConfigFolder) then makefolder(Library.ConfigFolder) end
     if not isfolder(Library.ThemeFolder) then makefolder(Library.ThemeFolder) end
 
-    Themes.Default.Main = SelectedTheme.Main
-    Themes.Default.Second = SelectedTheme.Second
-    Themes.Default.Accent = SelectedTheme.Accent
-    Themes.Default.ElementAccent = SelectedTheme.ElementAccent
-    Themes.Default.Text = SelectedTheme.Text
-    Themes.Default.TextDark = SelectedTheme.TextDark
-    Themes.Default.Error = SelectedTheme.Error
-    Themes.Default.GradientStart = SelectedTheme.GradientStart
-    Themes.Default.GradientEnd = SelectedTheme.GradientEnd
+    for _, k in ipairs(THEME_COLOR_KEYS) do
+        Themes.Default[k] = SelectedTheme[k]
+    end
     Themes.Default.Gradient = SelectedTheme.Gradient
 
     if SelectedTheme.Font then
@@ -1417,13 +1480,18 @@ function Library:CreateWindow(Settings)
         return list
     end
 
-    function Library:SaveConfig(Name)
-        local ConfigToSave = {}
+    local function CollectFlags()
+        local out = {}
         for flag, value in pairs(Library.Flags) do
             if string.sub(flag, 1, 9) ~= "Settings_" then
-                ConfigToSave[flag] = value
+                out[flag] = value
             end
         end
+        return out
+    end
+
+    function Library:SaveConfig(Name)
+        local ConfigToSave = CollectFlags()
         ConfigToSave["Settings_Identifier"] = Title
         local json = HS:JSONEncode(ConfigToSave)
         local path = Library.ConfigFolder .. "/" .. Name .. ".json"
@@ -1459,6 +1527,55 @@ function Library:CreateWindow(Settings)
             delfile(path)
             Library:Notify({Title = "Config Deleted", Content = "Deleted " .. Name, Duration = 3})
         end
+    end
+
+    -- 📤 EXPORT : chaîne JSON copiée dans le presse-papier (et retournée)
+    function Library:ExportConfig()
+        local str = HS:JSONEncode({_type = "config", title = Title, flags = CollectFlags()})
+        if CopyText(str) then
+            Library:Notify({Title = "Config Exported", Content = "Copied to clipboard (" .. #str .. " chars)", Type = "Success"})
+        else
+            warn("[Export] Clipboard unavailable. Config string:\n" .. str)
+            Library:Notify({Title = "Export", Content = "Clipboard unavailable, string printed in console (F9)", Type = "Warning", Duration = 5})
+        end
+        return str
+    end
+
+    -- 📥 IMPORT : applique une chaîne exportée (ou un JSON de flags brut). SaveAs = nom de fichier optionnel
+    function Library:ImportConfig(str, SaveAs)
+        local ok, data = pcall(function() return HS:JSONDecode(str) end)
+        if not ok or type(data) ~= "table" then
+            Library:Notify({Title = "Import Error", Content = "Invalid config data", Type = "Error"})
+            return false
+        end
+        local flags = type(data.flags) == "table" and data.flags or data
+        local applied = 0
+        local toSave = {}
+        for flag, value in pairs(flags) do
+            if type(flag) == "string" and string.sub(flag, 1, 9) ~= "Settings_" then
+                toSave[flag] = value
+                local item = Library.Items[flag]
+                if item then
+                    applied = applied + 1
+                    task.spawn(function()
+                        local okSet, err = pcall(item.Set, value)
+                        if not okSet then warn("[Import] " .. flag .. ": " .. tostring(err)) end
+                    end)
+                end
+            end
+        end
+        if SaveAs and SaveAs ~= "" then
+            toSave["Settings_Identifier"] = Title
+            pcall(function()
+                writefile(Library.ConfigFolder .. "/" .. SaveAs .. ".json", HS:JSONEncode(toSave))
+            end)
+        end
+        Library:Notify({
+            Title = "Config Imported",
+            Content = applied .. " option(s) applied" .. ((SaveAs and SaveAs ~= "") and (", saved as " .. SaveAs) or ""),
+            Type = "Success"
+        })
+        return true
     end
 
     local AutoloadPath = Library.ConfigFolder .. "/Autoload.txt"
@@ -1650,7 +1767,7 @@ function Library:CreateWindow(Settings)
             local lt = NTitle:lower()
             if lt:find("error") or lt:find("erreur") then
                 NType = "Error"
-            elseif lt:find("success") or lt:find("saved") or lt:find("loaded") then
+            elseif lt:find("success") or lt:find("saved") or lt:find("loaded") or lt:find("exported") or lt:find("imported") then
                 NType = "Success"
             else
                 NType = "Info"
@@ -1821,6 +1938,125 @@ function Library:CreateWindow(Settings)
                 Dismiss()
             end
         end)
+    end
+
+    ----------------------------------------------------------------------
+    -- 💬 TOOLTIPS : bulle qui suit la souris après un court délai de survol
+    -- Utilisation : Tooltip = "texte" dans la config de n'importe quel élément,
+    --               ou Library:AddTooltip(guiObject, "texte")
+    ----------------------------------------------------------------------
+    local TipFrame = Create("Frame", {
+        Name = "Tooltip",
+        Parent = ScreenGui,
+        Size = UDim2.fromOffset(0, 0),
+        AutomaticSize = Enum.AutomaticSize.XY,
+        BackgroundColor3 = SelectedTheme.Second,
+        BackgroundTransparency = 0.05,
+        BorderSizePixel = 0,
+        Visible = false,
+        ZIndex = 25000,
+        ThemeTag = "Second"
+    })
+    Create("UICorner", {Parent = TipFrame, CornerRadius = UDim.new(0, 6)})
+    do
+        local s = Create("UIStroke", {Parent = TipFrame, Color = SelectedTheme.TextDark, Transparency = 0.6, Thickness = 1})
+        table.insert(Library.ThemeObjects.TextDark, s)
+    end
+    Create("UIPadding", {
+        Parent = TipFrame,
+        PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 9),
+        PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6)
+    })
+    local TipLabel = Create("TextLabel", {
+        Parent = TipFrame,
+        Size = UDim2.fromOffset(0, 0),
+        AutomaticSize = Enum.AutomaticSize.XY,
+        BackgroundTransparency = 1,
+        Text = "",
+        TextWrapped = true,
+        TextSize = 12,
+        TextColor3 = SelectedTheme.Text,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        ZIndex = 25001,
+        ThemeTag = "Text"
+    })
+    Create("UISizeConstraint", {Parent = TipLabel, MaxSize = Vector2.new(240, 1000)})
+
+    local TipTarget, TipToken = nil, 0
+
+    local function HideTip()
+        TipTarget = nil
+        TipToken = TipToken + 1
+        TipFrame.Visible = false
+    end
+
+    local function PositionTip()
+        local m = UIS:GetMouseLocation() - GuiService:GetGuiInset()
+        local screen = ScreenGui.AbsoluteSize
+        local sz = TipFrame.AbsoluteSize
+        local x, y = m.X + 16, m.Y + 18
+        if x + sz.X > screen.X - 6 then x = m.X - sz.X - 10 end
+        if y + sz.Y > screen.Y - 6 then y = m.Y - sz.Y - 10 end
+        TipFrame.Position = UDim2.fromOffset(math.max(4, x), math.max(4, y))
+    end
+
+    local function IsShown(obj)
+        local o = obj
+        while o and o ~= ScreenGui do
+            if o:IsA("GuiObject") and not o.Visible then return false end
+            o = o.Parent
+        end
+        return o == ScreenGui
+    end
+
+    Bind(RS.RenderStepped, function()
+        if not TipFrame.Visible then return end
+        if not TipTarget or not Library.UIOpen or not IsShown(TipTarget) then
+            HideTip()
+            return
+        end
+        local m = UIS:GetMouseLocation() - GuiService:GetGuiInset()
+        local p, s = TipTarget.AbsolutePosition, TipTarget.AbsoluteSize
+        if m.X < p.X or m.Y < p.Y or m.X > p.X + s.X or m.Y > p.Y + s.Y then
+            HideTip()
+            return
+        end
+        PositionTip()
+    end)
+
+    local function AttachTooltip(obj, text)
+        if not obj or text == nil or text == "" then return end
+        obj.MouseEnter:Connect(function()
+            if not Library.TooltipsEnabled then return end
+            TipToken = TipToken + 1
+            local my = TipToken
+            task.delay(0.45, function()
+                if my ~= TipToken or not obj.Parent or not Library.UIOpen or not Library.TooltipsEnabled then return end
+                TipTarget = obj
+                TipLabel.Text = tostring(text)
+                TipFrame.Visible = true
+                PositionTip()
+            end)
+        end)
+        obj.MouseLeave:Connect(function()
+            TipToken = TipToken + 1
+            if TipTarget == obj then HideTip() end
+        end)
+        obj.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 and TipTarget == obj then
+                HideTip()
+            end
+        end)
+    end
+
+    function Library:AddTooltip(obj, text)
+        AttachTooltip(obj, text)
+    end
+
+    function Library:SetTooltipsEnabled(v)
+        Library.TooltipsEnabled = v and true or false
+        if not Library.TooltipsEnabled then HideTip() end
     end
 
     ----------------------------------------------------------------------
@@ -2142,7 +2378,7 @@ function Library:CreateWindow(Settings)
 
     local ActiveTab = nil
 
-    -- 🔍 BARRE DE RECHERCHE GLOBALE
+    -- 🔍 BARRE DE RECHERCHE GLOBALE (raccourci : Ctrl + F)
     local SearchContainer = Create("Frame", {
         Parent = ScreenGui,
         Size = UDim2.new(0, 500, 0, 45),
@@ -2187,7 +2423,7 @@ function Library:CreateWindow(Settings)
         Position = UDim2.new(0, 45, 0, 0),
         BackgroundTransparency = 1,
         Text = "",
-        PlaceholderText = Config.SearchPlaceholder or "Rechercher...",
+        PlaceholderText = Config.SearchPlaceholder or "Rechercher...  (Ctrl + F)",
         PlaceholderColor3 = SelectedTheme.TextDark,
         Font = Library.GlobalFont,
         TextColor3 = SelectedTheme.Text,
@@ -2215,13 +2451,17 @@ function Library:CreateWindow(Settings)
     SearchBox.Focused:Connect(function()
         TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0}):Play()
         TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0}):Play()
-        TS:Create(SearchIcon, TweenInfo.new(0.2), {TextColor3 = SelectedTheme.Accent}):Play()
+        TS:Create(SearchIcon, TweenInfo.new(0.2), {TextColor3 = Themes.Default.Accent}):Play()
     end)
 
-    SearchBox.FocusLost:Connect(function()
+    SearchBox.FocusLost:Connect(function(enterPressed, input)
+        -- Échap = efface la recherche
+        if input and input.KeyCode == Enum.KeyCode.Escape then
+            SearchBox.Text = ""
+        end
         TS:Create(SearchStroke, TweenInfo.new(0.2), {Transparency = 0.6}):Play()
         TS:Create(SearchContainer, TweenInfo.new(0.2), {BackgroundTransparency = 0.15}):Play()
-        TS:Create(SearchIcon, TweenInfo.new(0.2), {TextColor3 = SelectedTheme.TextDark}):Play()
+        TS:Create(SearchIcon, TweenInfo.new(0.2), {TextColor3 = Themes.Default.TextDark}):Play()
     end)
 
     -- 🔍 LOGIQUE DE RECHERCHE (propre à cette fenêtre, gère blocs et onglets)
@@ -2295,6 +2535,7 @@ function Library:CreateWindow(Settings)
         ThemeTag = "Second"
     })
     AddCorner(Close, 10)
+    AttachTooltip(Close, "Close and destroy the UI")
 
     local Cross1 = Create("Frame", {
         Parent = Close,
@@ -2373,6 +2614,7 @@ function Library:CreateWindow(Settings)
         ThemeTag = "Second"
     })
     AddCorner(OpenSettingsBtn, 12)
+    AttachTooltip(OpenSettingsBtn, "Appearance, keybinds, configs and themes")
 
     local SettingsIcon = Create("ImageLabel", {
         Parent = OpenSettingsBtn,
@@ -2446,6 +2688,7 @@ function Library:CreateWindow(Settings)
         SideColumn.Visible = IsOpen
         ContentHolder.Visible = IsOpen
         SearchContainer.Visible = IsOpen
+        if not IsOpen then HideTip() end
     end
 
     if UIS.TouchEnabled then
@@ -2470,8 +2713,36 @@ function Library:CreateWindow(Settings)
         MobileBtn.MouseButton1Click:Connect(ToggleUI)
     end
 
+    -- ⚡ Ctrl + F : ouvre l'UI si besoin, focus la barre de recherche et sélectionne son contenu
+    local function FocusSearch()
+        if not IsOpen then ToggleUI() end
+        local prev = SearchBox.Text
+        task.defer(function()
+            SearchBox:CaptureFocus()
+            task.wait()
+            -- Le "f" tapé avec Ctrl ne doit pas se retrouver dans la recherche
+            if SearchBox.Text ~= prev and SearchBox.Text:lower() == (prev .. "f"):lower() then
+                SearchBox.Text = prev
+            end
+            SearchBox.CursorPosition = #SearchBox.Text + 1
+            SearchBox.SelectionStart = 1
+        end)
+    end
+
+    function Library:FocusSearch()
+        FocusSearch()
+    end
+
     Bind(UIS.InputBegan, function(input, gpe)
         if gpe or UIS:GetFocusedTextBox() then
+            return
+        end
+        if os.clock() < (Library.RebindLock or 0) then
+            return
+        end
+
+        if input.KeyCode == Enum.KeyCode.F and (UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.RightControl)) then
+            FocusSearch()
             return
         end
 
@@ -2488,11 +2759,130 @@ function Library:CreateWindow(Settings)
         end
     end)
 
+    ----------------------------------------------------------------------
+    -- ⌨️ LIGNES DE KEYBINDS (partagées par le HUD et l'onglet Settings)
+    ----------------------------------------------------------------------
+    -- Retourne le bouton de touche (cliquable seulement en mode interactif)
+    local function MakeKeyRow(parent, e, conflict, order, interactive, compact)
+        local Row = Create("Frame", {
+            Parent = parent,
+            Size = UDim2.new(1, 0, 0, compact and 22 or 28),
+            BackgroundColor3 = SelectedTheme.Main,
+            BackgroundTransparency = compact and 1 or 0.7,
+            BorderSizePixel = 0,
+            LayoutOrder = order,
+            ZIndex = compact and 5101 or 8,
+            ThemeTag = (not compact) and "Main" or nil
+        })
+        Create("UICorner", {Parent = Row, CornerRadius = UDim.new(0, 6)})
+
+        Create("TextLabel", {
+            Parent = Row,
+            Size = UDim2.new(1, -92, 1, 0),
+            Position = UDim2.new(0, 8, 0, 0),
+            BackgroundTransparency = 1,
+            Text = tostring(e.Name),
+            Font = Library.GlobalFont,
+            TextColor3 = SelectedTheme.Text,
+            TextSize = compact and 12 or 13,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            ZIndex = compact and 5102 or 9,
+            ThemeTag = "Text"
+        })
+
+        local keyProps = {
+            Parent = Row,
+            Size = UDim2.new(0, 80, 0, compact and 18 or 22),
+            Position = UDim2.new(1, -86, 0.5, compact and -9 or -11),
+            BackgroundColor3 = Color3.new(0, 0, 0),
+            BackgroundTransparency = 0.8,
+            Text = tostring(e.Key),
+            Font = Library.GlobalFontBold,
+            TextColor3 = conflict and SelectedTheme.Error or SelectedTheme.TextDark,
+            TextSize = 11,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            ZIndex = compact and 5102 or 9
+        }
+        local KeyBtn
+        if interactive and e.Flag then
+            keyProps.AutoButtonColor = false
+            KeyBtn = Create("TextButton", keyProps)
+        else
+            KeyBtn = Create("TextLabel", keyProps)
+        end
+        Create("UICorner", {Parent = KeyBtn, CornerRadius = UDim.new(0, 5)})
+        if conflict then
+            AttachTooltip(KeyBtn, "Conflict : another action uses the same key")
+        elseif interactive and e.Flag then
+            AttachTooltip(KeyBtn, "Click then press a key to rebind (Esc = cancel)")
+        end
+        return KeyBtn
+    end
+
+    -- ⌨️ HUD des keybinds (déplaçable) : Library:SetKeybindHud(true)
+    local KbHud = Create("Frame", {
+        Name = "KeybindList",
+        Parent = ScreenGui,
+        Position = UDim2.new(0, 20, 0, 80),
+        Size = UDim2.fromOffset(210, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundColor3 = SelectedTheme.Main,
+        BackgroundTransparency = 0.2,
+        BorderSizePixel = 0,
+        Visible = false,
+        ZIndex = 5100,
+        ThemeTag = "Main"
+    })
+    Create("UICorner", {Parent = KbHud, CornerRadius = UDim.new(0, 10)})
+    AddStroke(KbHud, SelectedTheme).Transparency = 0.6
+    Create("UIListLayout", {Parent = KbHud, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 2)})
+    Create("UIPadding", {
+        Parent = KbHud,
+        PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 8),
+        PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8)
+    })
+    Create("TextLabel", {
+        Parent = KbHud,
+        Size = UDim2.new(1, 0, 0, 22),
+        BackgroundTransparency = 1,
+        Text = "⌨  Keybinds",
+        Font = Library.GlobalFontBold,
+        TextColor3 = SelectedTheme.Text,
+        TextSize = 14,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = 0,
+        ZIndex = 5101,
+        ThemeTag = "Text"
+    })
+    MakeDraggable(KbHud, KbHud)
+
+    local function RebuildHud()
+        for _, c in ipairs(KbHud:GetChildren()) do
+            if c:IsA("Frame") then c:Destroy() end
+        end
+        local entries = Library:GetKeybindEntries()
+        local conflicts = KeybindConflicts(entries)
+        for i, e in ipairs(entries) do
+            MakeKeyRow(KbHud, e, conflicts[e.Raw or ""], i, false, true)
+        end
+    end
+    table.insert(KeybindListeners, function()
+        if not KbHud.Parent then return false end
+        RebuildHud()
+    end)
+    RebuildHud()
+
+    function Library:SetKeybindHud(v)
+        KbHud.Visible = v and true or false
+        if KbHud.Visible then RebuildHud() end
+    end
+
     local TabCount = 0
     local Funcs = {}
 
     -- Internal = true : onglet interne (Settings), jamais auto-activé ni indexé dans la recherche
-    function Funcs:CreateTab(TabName, Two_Column, ImageID, Internal)
+    function Funcs:CreateTab(TabName, Two_Column, ImageID, Internal, TabTooltip)
         TabCount = TabCount + 1
         local MyIndex = TabCount
 
@@ -2510,6 +2900,7 @@ function Library:CreateWindow(Settings)
             ThemeTag = "Main"
         })
         AddCorner(TabBtn, 10)
+        AttachTooltip(TabBtn, TabTooltip)
 
         local TabLabel
         local ActiveLine
@@ -2792,6 +3183,11 @@ function Library:CreateWindow(Settings)
                 AddToSearch(element, name, TabRec, BlockFrame, BlockName)
             end
 
+            -- Tooltip optionnel : Tooltip = "..." (ou Description = "...")
+            local function Tip(obj, cfg)
+                AttachTooltip(obj, cfg.Tooltip or cfg.Description)
+            end
+
             -- Hover : fond + léger "pop" (UIScale), pression = léger rétrécissement
             local function DefaultHover(btn)
                 local hoverTween, leaveTween
@@ -2868,6 +3264,7 @@ function Library:CreateWindow(Settings)
                     PaddingBottom = UDim.new(0, 4)
                 })
 
+                Tip(Lab, Cfg)
                 Index(Lab, Text)
 
                 return {
@@ -2920,6 +3317,7 @@ function Library:CreateWindow(Settings)
                     end
                 end)
 
+                Tip(Btn, Cfg)
                 Index(Btn, Cfg.Name or "Button")
             end
 
@@ -3031,6 +3429,7 @@ function Library:CreateWindow(Settings)
                     end
                 }
 
+                Tip(Btn, Cfg)
                 Index(Btn, Cfg.Name or "Toggle")
             end
 
@@ -3232,6 +3631,7 @@ function Library:CreateWindow(Settings)
                 }
                 Library.Items[Flag] = Object
 
+                Tip(Frame, Cfg)
                 Index(Frame, Cfg.Name or "Slider")
 
                 return Object
@@ -3323,6 +3723,7 @@ function Library:CreateWindow(Settings)
                 end)
 
                 local function Update(val)
+                    val = val or ""
                     Box.Text = val
                     Library.Flags[Flag] = val -- fix : le flag n'était mis à jour qu'au défaut, jamais à la saisie
                     if Cfg.Callback then
@@ -3343,6 +3744,7 @@ function Library:CreateWindow(Settings)
 
                 Library.Items[Flag] = {Set = Update}
 
+                Tip(Frame, Cfg)
                 Index(Frame, Cfg.Name or "Input")
             end
 
@@ -3509,6 +3911,7 @@ function Library:CreateWindow(Settings)
                     local sel = IsSelected(item)
                     btn.Text = ((Multi and sel) and "✓  " or "") .. tostring(item)
                     btn.TextColor3 = sel and SelectedTheme.ElementAccent or SelectedTheme.TextDark
+                    btn.BackgroundColor3 = SelectedTheme.Main
                     btn.BackgroundTransparency = sel and 0.45 or 0.8
                 end
 
@@ -3601,6 +4004,7 @@ function Library:CreateWindow(Settings)
                     DTitle.Text = TitleText()
 
                     for index, item in ipairs(Options) do
+                        -- (pas dans ThemeObjects.TextDark : la couleur dépend de l'état sélectionné, gérée par ApplyVisual)
                         local Btn = Create("TextButton", {
                             Parent = Container,
                             Size = UDim2.new(1, 0, 0, 28),
@@ -3613,11 +4017,9 @@ function Library:CreateWindow(Settings)
                             ZIndex = 9,
                             LayoutOrder = index,
                             TextXAlignment = Enum.TextXAlignment.Center,
-                            AutoButtonColor = false,
-                            ThemeTag = "Main"
+                            AutoButtonColor = false
                         })
                         AddCorner(Btn, 6)
-                        table.insert(Library.ThemeObjects.TextDark, Btn)
                         ItemButtons[item] = Btn
                         ApplyVisual(item, Btn)
 
@@ -3662,6 +4064,12 @@ function Library:CreateWindow(Settings)
                 if Cfg.Default ~= nil and Cfg.Callback then
                     task.spawn(Cfg.Callback, CurrentValue())
                 end
+
+                -- Redessin automatique quand le thème change
+                table.insert(Library.ThemeRefreshers, function()
+                    if not Drop.Parent then return false end
+                    RefreshVisuals()
+                end)
 
                 ---------------------------------------------------------- interactions
                 Header.MouseEnter:Connect(function()
@@ -3709,6 +4117,7 @@ function Library:CreateWindow(Settings)
                 }
                 Library.Items[Flag] = Object
 
+                AttachTooltip(Header, Cfg.Tooltip or Cfg.Description)
                 Index(Drop, Cfg.Name or "Dropdown")
 
                 return Object
@@ -3720,6 +4129,8 @@ function Library:CreateWindow(Settings)
                 local Color = Cfg.Default or Color3.fromRGB(255, 255, 255)
                 Library.Flags[Flag] = {R = Color.R, G = Color.G, B = Color.B}
                 local IsExpanded = false
+
+                local function R255(x) return math.floor(x * 255 + 0.5) end
 
                 local Wrapper = Create("Frame", {
                     Parent = TargetParent,
@@ -3792,13 +4203,14 @@ function Library:CreateWindow(Settings)
                         Parent = parent,
                         Size = size,
                         Position = pos,
-                        Text = txt,
+                        Text = tostring(txt),
                         BackgroundColor3 = Color3.new(0, 0, 0),
                         BackgroundTransparency = 0.85,
                         TextColor3 = SelectedTheme.Text,
                         Font = Library.GlobalFont,
                         TextSize = 12,
                         ZIndex = 10,
+                        ClearTextOnFocus = false,
                         ThemeTag = "Text"
                     })
                     AddCorner(box, 4)
@@ -3807,9 +4219,9 @@ function Library:CreateWindow(Settings)
                     return box
                 end
 
-                local RInput = CreateCBox(BoxContainer, UDim2.new(0, 36, 0, 28), UDim2.new(0, 12, 0, 30), math.floor(Color.R * 255))
-                local GInput = CreateCBox(BoxContainer, UDim2.new(0, 36, 0, 28), UDim2.new(0, 54, 0, 30), math.floor(Color.G * 255))
-                local BInput = CreateCBox(BoxContainer, UDim2.new(0, 36, 0, 28), UDim2.new(0, 96, 0, 30), math.floor(Color.B * 255))
+                local RInput = CreateCBox(BoxContainer, UDim2.new(0, 36, 0, 28), UDim2.new(0, 12, 0, 30), R255(Color.R))
+                local GInput = CreateCBox(BoxContainer, UDim2.new(0, 36, 0, 28), UDim2.new(0, 54, 0, 30), R255(Color.G))
+                local BInput = CreateCBox(BoxContainer, UDim2.new(0, 36, 0, 28), UDim2.new(0, 96, 0, 30), R255(Color.B))
                 local HexInput = CreateCBox(BoxContainer, UDim2.new(0, 120, 0, 28), UDim2.new(0, 12, 0, 66), "#" .. Color:ToHex())
 
                 local PalContainer = Create("Frame", { Parent = Container, Size = UDim2.new(1, -150, 1, -20), Position = UDim2.new(0, 140, 0, 10), BackgroundTransparency = 1, ZIndex = 9 })
@@ -3879,16 +4291,20 @@ function Library:CreateWindow(Settings)
                     TS:Create(Wrapper, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Size = IsExpanded and UDim2.new(1, 0, 0, 194) or UDim2.new(1, 0, 0, 34)}):Play()
                 end)
 
-                local function Update(col)
+                -- keepHSV = true : on garde la teinte / saturation courantes
+                -- (sinon, un gris ou un noir ferait retomber la teinte à 0 et le sélecteur sautait)
+                local function Update(col, keepHSV)
                     Color = col
-                    h, s, v = Color:ToHSV()
+                    if not keepHSV then
+                        h, s, v = Color:ToHSV()
+                    end
                     Preview.BackgroundColor3 = Color
                     SVMap.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
                     SVCursor.Position = UDim2.fromScale(s, 1 - v)
                     HueCursor.Position = UDim2.fromScale(h, 0.5)
-                    RInput.Text = math.floor(Color.R * 255)
-                    GInput.Text = math.floor(Color.G * 255)
-                    BInput.Text = math.floor(Color.B * 255)
+                    RInput.Text = tostring(R255(Color.R))
+                    GInput.Text = tostring(R255(Color.G))
+                    BInput.Text = tostring(R255(Color.B))
                     HexInput.Text = "#" .. Color:ToHex()
                     Library.Flags[Flag] = {R = Color.R, G = Color.G, B = Color.B}
                     if Cfg.Callback then
@@ -3904,37 +4320,33 @@ function Library:CreateWindow(Settings)
                     h = newH or h
                     s = newS or s
                     v = newV or v
-                    Update(Color3.fromHSV(h, s, v))
+                    Update(Color3.fromHSV(h, s, v), true)
                 end
 
-                RInput.FocusLost:Connect(function()
-                    local r = tonumber(RInput.Text)
-                    if r then
-                        local c = Color3.fromRGB(math.clamp(r, 0, 255), Color.G * 255, Color.B * 255)
-                        VisualUpdate(c:ToHSV())
-                    end
-                end)
-
-                GInput.FocusLost:Connect(function()
-                    local g = tonumber(GInput.Text)
-                    if g then
-                        local c = Color3.fromRGB(Color.R * 255, math.clamp(g, 0, 255), Color.B * 255)
-                        VisualUpdate(c:ToHSV())
-                    end
-                end)
-
-                BInput.FocusLost:Connect(function()
-                    local b = tonumber(BInput.Text)
-                    if b then
-                        local c = Color3.fromRGB(Color.R * 255, Color.G * 255, math.clamp(b, 0, 255))
-                        VisualUpdate(c:ToHSV())
-                    end
-                end)
+                local function ChannelInput(box, channel)
+                    box.FocusLost:Connect(function()
+                        local n = tonumber(box.Text)
+                        if not n then
+                            box.Text = tostring(R255(Color[channel]))
+                            return
+                        end
+                        n = math.clamp(math.floor(n + 0.5), 0, 255)
+                        local r, g, b = R255(Color.R), R255(Color.G), R255(Color.B)
+                        if channel == "R" then r = n elseif channel == "G" then g = n else b = n end
+                        Update(Color3.fromRGB(r, g, b))
+                    end)
+                end
+                ChannelInput(RInput, "R")
+                ChannelInput(GInput, "G")
+                ChannelInput(BInput, "B")
 
                 HexInput.FocusLost:Connect(function()
-                    local success, c = pcall(function() return Color3.fromHex(HexInput.Text) end)
-                    if success then
-                        VisualUpdate(c:ToHSV())
+                    local txt = HexInput.Text:gsub("%s", "")
+                    local success, c = pcall(function() return Color3.fromHex(txt) end)
+                    if success and typeof(c) == "Color3" then
+                        Update(c)
+                    else
+                        HexInput.Text = "#" .. Color:ToHex()
                     end
                 end)
 
@@ -3945,10 +4357,13 @@ function Library:CreateWindow(Settings)
                 local function StartDragging()
                     if not dragConnection then
                         dragConnection = RS.RenderStepped:Connect(function()
+                            local m = UIS:GetMouseLocation() - GuiService:GetGuiInset()
                             if draggingSV then
-                                VisualUpdate(nil, math.clamp((Mouse.X - SVMap.AbsolutePosition.X) / SVMap.AbsoluteSize.X, 0, 1), 1 - math.clamp((Mouse.Y - SVMap.AbsolutePosition.Y) / SVMap.AbsoluteSize.Y, 0, 1))
+                                VisualUpdate(nil,
+                                    math.clamp((m.X - SVMap.AbsolutePosition.X) / SVMap.AbsoluteSize.X, 0, 1),
+                                    1 - math.clamp((m.Y - SVMap.AbsolutePosition.Y) / SVMap.AbsoluteSize.Y, 0, 1))
                             elseif draggingHue then
-                                VisualUpdate(math.clamp((Mouse.X - HueBar.AbsolutePosition.X) / HueBar.AbsoluteSize.X, 0, 1), nil, nil)
+                                VisualUpdate(math.clamp((m.X - HueBar.AbsolutePosition.X) / HueBar.AbsoluteSize.X, 0, 1), nil, nil)
                             end
                         end)
                         table.insert(Library.Connections, dragConnection)
@@ -3988,12 +4403,13 @@ function Library:CreateWindow(Settings)
                     Set = function(t)
                         if type(t) == "table" then
                             Update(Color3.new(t.R, t.G, t.B))
-                        else
+                        elseif typeof(t) == "Color3" then
                             Update(t)
                         end
                     end
                 }
 
+                AttachTooltip(TriggerBtn, Cfg.Tooltip or Cfg.Description)
                 Index(Wrapper, Cfg.Name or "Color Picker")
             end
 
@@ -4003,6 +4419,9 @@ function Library:CreateWindow(Settings)
                 local CurrentKey = Cfg.Default or Enum.KeyCode.RightControl
                 Library.Flags[Flag] = CurrentKey.Name
                 local Binding = false
+
+                Library.KeybindRegistry[Flag] = {Name = Cfg.Name or Flag, Key = CurrentKey.Name}
+                KeybindsChanged()
 
                 local Frame = Create("Frame", {
                     Parent = TargetParent,
@@ -4072,6 +4491,12 @@ function Library:CreateWindow(Settings)
                     BindBtn.TextColor3 = SelectedTheme.TextDark
                     Library.Flags[Flag] = key.Name
                     Binding = false
+                    -- bloque brièvement tous les raccourcis : la touche qu'on vient d'assigner ne doit pas se déclencher
+                    Library.RebindLock = os.clock() + 0.25
+                    if Library.KeybindRegistry[Flag] then
+                        Library.KeybindRegistry[Flag].Key = key.Name
+                    end
+                    KeybindsChanged()
                 end
 
                 BindBtn.MouseButton1Click:Connect(function()
@@ -4087,6 +4512,7 @@ function Library:CreateWindow(Settings)
                         return
                     end
                     if not Binding then
+                        if os.clock() < (Library.RebindLock or 0) then return end
                         if input.KeyCode == CurrentKey and not gpe and not UIS:GetFocusedTextBox() then
                             if Cfg.Callback then
                                 Cfg.Callback(input.KeyCode)
@@ -4099,13 +4525,75 @@ function Library:CreateWindow(Settings)
 
                 Library.Items[Flag] = {
                     Set = function(keyName)
-                        if Enum.KeyCode[keyName] then
-                            Update(Enum.KeyCode[keyName])
+                        local ok, key = pcall(function() return Enum.KeyCode[keyName] end)
+                        if ok and key then
+                            Update(key)
                         end
                     end
                 }
 
+                Tip(Frame, Cfg)
                 Index(Frame, Cfg.Name or "Keybind")
+            end
+
+            -- ⌨️ LISTE DE TOUS LES KEYBINDS (mise à jour en direct, conflits en rouge, clic = rebind)
+            function Elements:CreateKeybindList(Cfg)
+                Cfg = Cfg or {}
+                ElementOrder = ElementOrder + 1
+
+                local Holder = Create("Frame", {
+                    Parent = TargetParent,
+                    Size = UDim2.new(1, 0, 0, 0),
+                    AutomaticSize = Enum.AutomaticSize.Y,
+                    BackgroundTransparency = 1,
+                    LayoutOrder = ElementOrder,
+                    ZIndex = 7
+                })
+                Create("UIListLayout", {Parent = Holder, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4)})
+
+                local Listening = nil
+
+                local function Rebuild()
+                    Listening = nil
+                    for _, c in ipairs(Holder:GetChildren()) do
+                        if c:IsA("Frame") then c:Destroy() end
+                    end
+                    local entries = Library:GetKeybindEntries()
+                    local conflicts = KeybindConflicts(entries)
+                    for i, e in ipairs(entries) do
+                        local btn = MakeKeyRow(Holder, e, conflicts[e.Raw or ""], i, true, false)
+                        if e.Flag then
+                            btn.MouseButton1Click:Connect(function()
+                                PlaySound("Click")
+                                Listening = {Btn = btn, Flag = e.Flag}
+                                btn.Text = "..."
+                                btn.TextColor3 = SelectedTheme.Accent
+                            end)
+                        end
+                    end
+                end
+
+                table.insert(KeybindListeners, function()
+                    if not Holder.Parent then return false end
+                    Rebuild()
+                end)
+                Rebuild()
+
+                Bind(UIS.InputBegan, function(input)
+                    if not Listening then return end
+                    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+                    local l = Listening
+                    Listening = nil
+                    if input.KeyCode == Enum.KeyCode.Escape then
+                        Rebuild()
+                        return
+                    end
+                    local item = Library.Items[l.Flag]
+                    if item then item.Set(input.KeyCode.Name) end
+                    Rebuild()
+                end)
+
+                Tip(Holder, Cfg)
             end
 
             -- 🛡️ CALLBACKS PROTÉGÉS
@@ -4185,7 +4673,7 @@ function Library:CreateWindow(Settings)
                     table.insert(Library.ThemeObjects.TextDark, BlockIcon)
                 end
 
-                Create("TextLabel", {
+                local BlockTitle = Create("TextLabel", {
                     Parent = BlockFrame,
                     Size = UDim2.new(1, -BTitleOffsetX - 40, 0, 36),
                     Position = UDim2.new(0, BTitleOffsetX, 0, 0),
@@ -4198,6 +4686,7 @@ function Library:CreateWindow(Settings)
                     ZIndex = 6,
                     ThemeTag = "Text"
                 })
+                AttachTooltip(BlockTitle, BlockCfg.Tooltip or BlockCfg.Description)
 
                 -- 🎯 BOUTON COLLAPSE/EXPAND
                 local isCollapsed = false
@@ -4280,6 +4769,9 @@ function Library:CreateWindow(Settings)
         return TabElements, Activate
     end
 
+    ----------------------------------------------------------------------
+    -- ⚙️ ONGLET SETTINGS (interne)
+    ----------------------------------------------------------------------
     local SettingsTab, OpenSettingsFunc = Funcs:CreateTab("Settings", true, nil, true)
 
     for _, v in pairs(TabContainer:GetChildren()) do
@@ -4298,6 +4790,74 @@ function Library:CreateWindow(Settings)
         end
     end)
 
+    -- 🎨 Application complète d'un thème (presets, thèmes sauvegardés, imports, reset)
+    local ApplyingTheme = false
+
+    local function ApplyTheme(NewTheme, quiet)
+        ApplyingTheme = true
+
+        MainBgColor.BackgroundColor3 = NewTheme.Main
+        SetImageAsync(MainBgImage, "Image", NewTheme.Background or "")
+        MainBgColor.BackgroundTransparency = NewTheme.Transparency or 0.25
+        MainBgImage.ImageTransparency = NewTheme.ImageTransparency or 0
+        OrbsTrans = NewTheme.OrbsTransparency or 0.5
+
+        for _, child in pairs(OrbContainer:GetChildren()) do
+            if child:IsA("Frame") then
+                child.BackgroundTransparency = OrbsTrans
+            end
+        end
+
+        SelectedTheme = NewTheme
+        for _, k in ipairs(THEME_COLOR_KEYS) do
+            Themes.Default[k] = NewTheme[k]
+        end
+        Themes.Default.Gradient = NewTheme.Gradient or GetGradientSeq(NewTheme)
+
+        if NewTheme.Font then
+            UpdateFonts(NewTheme.Font)
+        end
+
+        UpdateThemeObjects()
+        UpdateGradients(Themes.Default.Gradient)
+
+        local function SetItem(flag, value)
+            local it = Library.Items[flag]
+            if it and value ~= nil then pcall(it.Set, value) end
+        end
+        SetItem("Settings_MainColor", NewTheme.Main)
+        SetItem("Settings_SecondColor", NewTheme.Second)
+        SetItem("Settings_AccentColor", NewTheme.Accent)
+        SetItem("Settings_ElementColor", NewTheme.ElementAccent)
+        SetItem("Settings_TextColor", NewTheme.Text)
+        SetItem("Settings_TextDarkColor", NewTheme.TextDark)
+        SetItem("Settings_GradStart", NewTheme.GradientStart or NewTheme.Accent)
+        SetItem("Settings_GradEnd", NewTheme.GradientEnd or NewTheme.Accent)
+        SetItem("Settings_BgTrans", math.floor((NewTheme.Transparency or 0.25) * 100 + 0.5))
+        SetItem("Settings_ImageTrans", math.floor((NewTheme.ImageTransparency or 0) * 100 + 0.5))
+        SetItem("Settings_OrbTrans", math.floor((NewTheme.OrbsTransparency or 0.5) * 100 + 0.5))
+        SetItem("Settings_BgImage", NewTheme.Background or "")
+        if NewTheme.Font then SetItem("Settings_Font", NewTheme.Font) end
+        SetItem("Settings_CornerRadius", math.clamp(NewTheme.CornerRadius or Library.GlobalCornerValue, 0, 50))
+
+        ApplyingTheme = false
+        UpdateThemeObjects()
+        if not quiet then
+            Library:Notify({Title = "Theme Loaded", Content = "Theme applied", Type = "Success"})
+        end
+    end
+
+    local function ThemeSnapshot()
+        return SerializeTheme(SelectedTheme, {
+            Transparency = MainBgColor.BackgroundTransparency,
+            ImageTransparency = MainBgImage.ImageTransparency,
+            OrbsTransparency = OrbsTrans,
+            Font = Library.GlobalFont.Name,
+            CornerRadius = Library.GlobalCornerValue
+        })
+    end
+
+    -- Colonne gauche : Appearance / Interface / Keybinds / Config Manager
     local AppBlock = SettingsTab:CreateBlock({Name = "Appearance", Side = "Left"})
 
     AppBlock:CreateDropdown({
@@ -4305,6 +4865,7 @@ function Library:CreateWindow(Settings)
         Flag = "Settings_Font",
         Items = AvailableFonts,
         Default = Library.GlobalFont.Name,
+        Tooltip = "Font used by the whole interface",
         Callback = function(val)
             UpdateFonts(val)
         end
@@ -4316,6 +4877,7 @@ function Library:CreateWindow(Settings)
         Min = 0,
         Max = 100,
         Default = math.floor(ImageTrans * 100),
+        Tooltip = "Transparency of the background image",
         Callback = function(val)
             MainBgImage.ImageTransparency = val / 100
         end
@@ -4327,6 +4889,7 @@ function Library:CreateWindow(Settings)
         Min = 0,
         Max = 100,
         Default = math.floor(WindowTrans * 100),
+        Tooltip = "Transparency of the window background color",
         Callback = function(val)
             MainBgColor.BackgroundTransparency = val / 100
         end
@@ -4338,6 +4901,7 @@ function Library:CreateWindow(Settings)
         Min = 0,
         Max = 100,
         Default = math.floor(OrbsTrans * 100),
+        Tooltip = "Transparency of the floating particles",
         Callback = function(val)
             local t = val / 100
             OrbsTrans = t
@@ -4353,6 +4917,7 @@ function Library:CreateWindow(Settings)
         Name = "Background ID",
         Flag = "Settings_BgImage",
         Placeholder = "ID...",
+        Tooltip = "Roblox image asset id used as window background",
         Callback = function(val)
             val = GetAssetId(val)
             SetImageAsync(MainBgImage, "Image", val)
@@ -4367,8 +4932,50 @@ function Library:CreateWindow(Settings)
         Min = 0,
         Max = 50,
         Default = math.clamp(Library.GlobalCornerValue, 0, 50),
+        Tooltip = "Roundness of all corners",
         Callback = function(val)
             UpdateCorners(val)
+        end
+    })
+
+    local UIBlock = SettingsTab:CreateBlock({Name = "Interface", Side = "Left"})
+
+    UIBlock:CreateToggle({
+        Name = "💬 Show Tooltips",
+        Flag = "Settings_Tooltips",
+        Default = true,
+        Tooltip = "Show a hint bubble when hovering an option",
+        Callback = function(val)
+            Library:SetTooltipsEnabled(val)
+        end
+    })
+
+    UIBlock:CreateToggle({
+        Name = "🔊 Enable UI Sounds",
+        Flag = "Settings_SoundsEnabled",
+        Default = true,
+        Tooltip = "Click, hover and notification sounds",
+        Callback = function(val)
+            Library.SoundsEnabled = val
+        end
+    })
+
+    UIBlock:CreateToggle({
+        Name = "⌨ Keybind List (HUD)",
+        Flag = "Settings_KeybindHud",
+        Default = false,
+        Tooltip = "Floating draggable list of all your keybinds",
+        Callback = function(val)
+            Library:SetKeybindHud(val)
+        end
+    })
+
+    UIBlock:CreateButton({
+        Name = "Reset UI Position / Size",
+        Tooltip = "Restore the default position and size of the panels",
+        Callback = function()
+            ResetLayout()
+            Library:Notify({Title = "Layout Reset", Content = "Position and size restored", Type = "Success"})
         end
     })
 
@@ -4378,29 +4985,19 @@ function Library:CreateWindow(Settings)
         Name = "Toggle UI",
         Flag = "Settings_ToggleKey",
         Default = Library.ToggleKey,
+        Tooltip = "Show / hide the whole interface",
         Callback = function() end
     })
 
-    KeyBlock:CreateToggle({
-        Name = "🔊 Enable UI Sounds",
-        Flag = "Settings_SoundsEnabled",
-        Default = true,
-        Callback = function(val)
-            Library.SoundsEnabled = val
-        end
-    })
-
-    KeyBlock:CreateButton({
-        Name = "Reset UI Position / Size",
-        Callback = function()
-            ResetLayout()
-            Library:Notify({Title = "Layout Reset", Content = "Position and size restored", Type = "Success"})
-        end
-    })
+    KeyBlock:CreateLabel({Text = "All keybinds. Click a key then press a new one (Esc = cancel). Red = conflict."})
+    KeyBlock:CreateKeybindList({})
 
     local ConfigBlock = SettingsTab:CreateBlock({Name = "Config Manager", Side = "Left"})
 
     local ConfigNameInput = "MyConfig"
+    local ImportConfigBuffer = ""
+    local LoadDropCfg
+
     ConfigBlock:CreateInput({
         Name = "Config Name",
         Flag = "Settings_CfgName",
@@ -4412,15 +5009,18 @@ function Library:CreateWindow(Settings)
 
     ConfigBlock:CreateButton({
         Name = "Save Config",
+        Tooltip = "Save every option to a file with this name",
         Callback = function()
             Library:SaveConfig(ConfigNameInput)
+            if LoadDropCfg then LoadDropCfg:Refresh(Library:GetConfigs()) end
         end
     })
 
-    local LoadDropCfg = ConfigBlock:CreateDropdown({
+    LoadDropCfg = ConfigBlock:CreateDropdown({
         Name = "Load Config",
         Flag = "Settings_CfgLoad",
         Items = Library:GetConfigs(),
+        Tooltip = "Pick a saved config to load it",
         UpdateList = function()
             return Library:GetConfigs()
         end,
@@ -4438,6 +5038,7 @@ function Library:CreateWindow(Settings)
             local sel = LoadDropCfg:Get()
             if sel and isfile(Library.ConfigFolder .. "/" .. sel .. ".json") then
                 Library:DeleteConfig(sel)
+                LoadDropCfg:Refresh(Library:GetConfigs())
             end
         end
     })
@@ -4446,9 +5047,10 @@ function Library:CreateWindow(Settings)
         Name = "Auto Load Selected Config",
         Flag = "Settings_AutoLoadToggle",
         Default = true,
+        Tooltip = "Load the selected config automatically at startup",
         Callback = function(val)
             if val then
-                local sel = LoadDropCfg:Get()
+                local sel = LoadDropCfg and LoadDropCfg:Get()
                 if sel then
                     writefile(AutoloadPath, sel)
                 end
@@ -4460,77 +5062,106 @@ function Library:CreateWindow(Settings)
         end
     })
 
+    ConfigBlock:CreateSection("Share")
+
+    ConfigBlock:CreateButton({
+        Name = "📤 Export Config (Copy)",
+        Tooltip = "Copy all your options as text to share them",
+        Callback = function()
+            Library:ExportConfig()
+        end
+    })
+
+    ConfigBlock:CreateInput({
+        Name = "Import Data",
+        Flag = "Settings_ImportConfigData",
+        Placeholder = "Paste config...",
+        Tooltip = "Paste an exported config here (or leave empty to use the clipboard)",
+        Callback = function(v)
+            ImportConfigBuffer = v or ""
+        end
+    })
+
+    ConfigBlock:CreateButton({
+        Name = "📥 Import Config",
+        Tooltip = "Apply the pasted config, saved under the config name above",
+        Callback = function()
+            local str = (ImportConfigBuffer ~= "" and ImportConfigBuffer) or PasteText()
+            if not str or str == "" then
+                Library:Notify({Title = "Import Error", Content = "Paste a config first (or copy one to the clipboard)", Type = "Error"})
+                return
+            end
+            if Library:ImportConfig(str, ConfigNameInput) and LoadDropCfg then
+                LoadDropCfg:Refresh(Library:GetConfigs())
+            end
+        end
+    })
+
+    -- Colonne droite : couleurs / thèmes
     local ColorBlock = SettingsTab:CreateBlock({Name = "Theme Colors", Side = "Right"})
 
-    ColorBlock:CreateColorPicker({
-        Name = "MainColor",
-        Flag = "Settings_MainColor",
-        Default = SelectedTheme.Main,
-        Callback = function(c)
-            SelectedTheme.Main = c
-            Themes.Default.Main = c
-            UpdateThemeObjects()
-        end
-    })
+    -- Un seul helper pour tous les color pickers du thème
+    local function ThemeColor(name, flag, key, tip)
+        ColorBlock:CreateColorPicker({
+            Name = name,
+            Flag = flag,
+            Default = SelectedTheme[key] or SelectedTheme.Accent,
+            Tooltip = tip,
+            Callback = function(c)
+                SelectedTheme[key] = c
+                Themes.Default[key] = c
+                if key == "GradientStart" or key == "GradientEnd" then
+                    SelectedTheme.Gradient = GetGradientSeq(SelectedTheme)
+                    Themes.Default.Gradient = SelectedTheme.Gradient
+                    if not ApplyingTheme then UpdateGradients(SelectedTheme.Gradient) end
+                elseif not ApplyingTheme then
+                    UpdateThemeObjects()
+                end
+            end
+        })
+    end
 
-    ColorBlock:CreateColorPicker({
-        Name = "Second Color",
-        Flag = "Settings_SecondColor",
-        Default = SelectedTheme.Second,
-        Callback = function(c)
-            SelectedTheme.Second = c
-            Themes.Default.Second = c
-            UpdateThemeObjects()
-        end
-    })
-
-    ColorBlock:CreateColorPicker({
-        Name = "Element Color",
-        Flag = "Settings_ElementColor",
-        Default = SelectedTheme.ElementAccent,
-        Callback = function(c)
-            SelectedTheme.ElementAccent = c
-            Themes.Default.ElementAccent = c
-            UpdateThemeObjects()
-        end
-    })
-
-    ColorBlock:CreateColorPicker({
-        Name = "Text Color",
-        Flag = "Settings_TextColor",
-        Default = SelectedTheme.Text,
-        Callback = function(c)
-            SelectedTheme.Text = c
-            Themes.Default.Text = c
-            UpdateThemeObjects()
-        end
-    })
-
-    ColorBlock:CreateColorPicker({
-        Name = "Gradient Start",
-        Flag = "Settings_GradStart",
-        Default = SelectedTheme.GradientStart or SelectedTheme.Accent,
-        Callback = function(c)
-            SelectedTheme.GradientStart = c
-            SelectedTheme.Gradient = GetGradientSeq(SelectedTheme)
-            UpdateGradients(SelectedTheme.Gradient)
-        end
-    })
-
-    ColorBlock:CreateColorPicker({
-        Name = "Gradient End",
-        Flag = "Settings_GradEnd",
-        Default = SelectedTheme.GradientEnd or SelectedTheme.Accent,
-        Callback = function(c)
-            SelectedTheme.GradientEnd = c
-            SelectedTheme.Gradient = GetGradientSeq(SelectedTheme)
-            UpdateGradients(SelectedTheme.Gradient)
-        end
-    })
+    ThemeColor("Main Color", "Settings_MainColor", "Main", "Window background color")
+    ThemeColor("Second Color", "Settings_SecondColor", "Second", "Color of cards and elements")
+    ThemeColor("Accent Color", "Settings_AccentColor", "Accent", "Tab indicator, search bar, arrows")
+    ThemeColor("Element Color", "Settings_ElementColor", "ElementAccent", "Sliders, toggles, focus highlights")
+    ThemeColor("Text Color", "Settings_TextColor", "Text", "Main text color")
+    ThemeColor("Dim Text Color", "Settings_TextDarkColor", "TextDark", "Secondary / inactive text color")
+    ThemeColor("Gradient Start", "Settings_GradStart", "GradientStart", "First color of the animated borders")
+    ThemeColor("Gradient End", "Settings_GradEnd", "GradientEnd", "Second color of the animated borders")
 
     local ThemeBlock = SettingsTab:CreateBlock({Name = "Theme Manager", Side = "Right"})
 
+    local PresetNames = {}
+    for name in pairs(BaseThemes) do table.insert(PresetNames, name) end
+    table.sort(PresetNames)
+
+    ThemeBlock:CreateDropdown({
+        Name = "Theme Preset",
+        Flag = "Settings_ThemePreset",
+        Items = PresetNames,
+        Tooltip = "Built-in themes (Blood, Ocean, Vaporwave...)",
+        Callback = function(val)
+            if BaseThemes[val] then
+                ApplyTheme(Clone(BaseThemes[val]))
+            end
+        end
+    })
+
+    ThemeBlock:CreateButton({
+        Name = "Reset Theme",
+        Tooltip = "Go back to the theme the UI started with",
+        Callback = function()
+            ApplyTheme(Clone(InitialTheme))
+        end
+    })
+
+    ThemeBlock:CreateSection("My themes")
+
     local ThemeNameInput = "MyTheme"
+    local ImportThemeBuffer = ""
+    local LoadDrop
+
     ThemeBlock:CreateInput({
         Name = "Theme Name",
         Flag = "Settings_ThemeName",
@@ -4542,79 +5173,24 @@ function Library:CreateWindow(Settings)
 
     ThemeBlock:CreateButton({
         Name = "Save Theme",
+        Tooltip = "Save the current colors, fonts and transparencies",
         Callback = function()
-            local ThemeConfig = {
-                Main = {R = SelectedTheme.Main.R, G = SelectedTheme.Main.G, B = SelectedTheme.Main.B},
-                Second = {R = SelectedTheme.Second.R, G = SelectedTheme.Second.G, B = SelectedTheme.Second.B},
-                Accent = {R = SelectedTheme.Accent.R, G = SelectedTheme.Accent.G, B = SelectedTheme.Accent.B},
-                ElementAccent = {R = SelectedTheme.ElementAccent.R, G = SelectedTheme.ElementAccent.G, B = SelectedTheme.ElementAccent.B},
-                Text = {R = SelectedTheme.Text.R, G = SelectedTheme.Text.G, B = SelectedTheme.Text.B},
-                TextDark = {R = SelectedTheme.TextDark.R, G = SelectedTheme.TextDark.G, B = SelectedTheme.TextDark.B},
-                Error = {R = SelectedTheme.Error.R, G = SelectedTheme.Error.G, B = SelectedTheme.Error.B},
-                GradientStart = {R = SelectedTheme.GradientStart.R, G = SelectedTheme.GradientStart.G, B = SelectedTheme.GradientStart.B},
-                GradientEnd = {R = SelectedTheme.GradientEnd.R, G = SelectedTheme.GradientEnd.G, B = SelectedTheme.GradientEnd.B},
-                Background = SelectedTheme.Background,
-                Transparency = MainBgColor.BackgroundTransparency,
-                ImageTransparency = MainBgImage.ImageTransparency,
-                OrbsTransparency = OrbsTrans,
-                Font = Library.GlobalFont.Name,
-                CornerRadius = Library.GlobalCornerValue
-            }
-            writefile(Library.ThemeFolder .. "/" .. ThemeNameInput .. ".json", HS:JSONEncode(ThemeConfig))
-            Library:Notify({Title = "Theme Saved", Content = "Saved as " .. ThemeNameInput})
+            writefile(Library.ThemeFolder .. "/" .. ThemeNameInput .. ".json", HS:JSONEncode(ThemeSnapshot()))
+            Library:Notify({Title = "Theme Saved", Content = "Saved as " .. ThemeNameInput, Type = "Success"})
+            if LoadDrop then LoadDrop:Refresh(Library:GetThemes()) end
         end
     })
 
-    local LoadDrop = ThemeBlock:CreateDropdown({
+    LoadDrop = ThemeBlock:CreateDropdown({
         Name = "Load Theme",
         Flag = "Settings_ThemeLoad",
         Items = Library:GetThemes(),
+        Tooltip = "Pick one of your saved themes",
         UpdateList = function()
             return Library:GetThemes()
         end,
         Callback = function(val)
-            local NewTheme = GetTheme(val)
-            MainBgColor.BackgroundColor3 = NewTheme.Main
-            SetImageAsync(MainBgImage, "Image", NewTheme.Background or "")
-            MainBgColor.BackgroundTransparency = NewTheme.Transparency or 0.25
-            MainBgImage.ImageTransparency = NewTheme.ImageTransparency or 0
-            OrbsTrans = NewTheme.OrbsTransparency or 0.5
-
-            for _, child in pairs(OrbContainer:GetChildren()) do
-                if child:IsA("Frame") then
-                    child.BackgroundTransparency = OrbsTrans
-                end
-            end
-
-            SelectedTheme = NewTheme
-            Themes.Default.Main = NewTheme.Main
-            Themes.Default.Second = NewTheme.Second
-            Themes.Default.Accent = NewTheme.Accent
-            Themes.Default.ElementAccent = NewTheme.ElementAccent
-            Themes.Default.Text = NewTheme.Text
-            Themes.Default.TextDark = NewTheme.TextDark
-
-            if NewTheme.Font then
-                UpdateFonts(NewTheme.Font)
-            end
-
-            UpdateThemeObjects()
-            UpdateGradients(SelectedTheme.Gradient)
-
-            if Library.Items["Settings_MainColor"] then Library.Items["Settings_MainColor"].Set(NewTheme.Main) end
-            if Library.Items["Settings_SecondColor"] then Library.Items["Settings_SecondColor"].Set(NewTheme.Second) end
-            if Library.Items["Settings_ElementColor"] then Library.Items["Settings_ElementColor"].Set(NewTheme.ElementAccent) end
-            if Library.Items["Settings_TextColor"] then Library.Items["Settings_TextColor"].Set(NewTheme.Text) end
-            if Library.Items["Settings_GradStart"] then Library.Items["Settings_GradStart"].Set(NewTheme.GradientStart or NewTheme.Accent) end
-            if Library.Items["Settings_GradEnd"] then Library.Items["Settings_GradEnd"].Set(NewTheme.GradientEnd or NewTheme.Accent) end
-            if Library.Items["Settings_BgTrans"] then Library.Items["Settings_BgTrans"].Set(math.floor((NewTheme.Transparency or 0.25) * 100)) end
-            if Library.Items["Settings_ImageTrans"] then Library.Items["Settings_ImageTrans"].Set(math.floor((NewTheme.ImageTransparency or 0) * 100)) end
-            if Library.Items["Settings_OrbTrans"] then Library.Items["Settings_OrbTrans"].Set(math.floor((NewTheme.OrbsTransparency or 0.5) * 100)) end
-            if Library.Items["Settings_BgImage"] then Library.Items["Settings_BgImage"].Set(NewTheme.Background or "") end
-            if Library.Items["Settings_Font"] and NewTheme.Font then Library.Items["Settings_Font"].Set(NewTheme.Font) end
-            if Library.Items["Settings_CornerRadius"] then Library.Items["Settings_CornerRadius"].Set(math.clamp(NewTheme.CornerRadius or Library.GlobalCornerValue, 0, 50)) end
-
-            Library:Notify({Title = "Theme Loaded", Content = "Loaded " .. val})
+            ApplyTheme(GetTheme(val))
         end
     })
 
@@ -4625,9 +5201,62 @@ function Library:CreateWindow(Settings)
             if selected and isfile(Library.ThemeFolder .. "/" .. selected .. ".json") then
                 delfile(Library.ThemeFolder .. "/" .. selected .. ".json")
                 Library:Notify({Title = "Theme Deleted", Content = "Deleted " .. selected})
+                LoadDrop:Refresh(Library:GetThemes())
             else
                 Library:Notify({Title = "Error", Content = "Select a valid theme first", Type = "Error"})
             end
+        end
+    })
+
+    ThemeBlock:CreateSection("Share")
+
+    ThemeBlock:CreateButton({
+        Name = "📤 Export Theme (Copy)",
+        Tooltip = "Copy the current theme as text to share it",
+        Callback = function()
+            local str = HS:JSONEncode(ThemeSnapshot())
+            if CopyText(str) then
+                Library:Notify({Title = "Theme Exported", Content = "Copied to clipboard", Type = "Success"})
+            else
+                warn("[Export] Clipboard unavailable. Theme string:\n" .. str)
+                Library:Notify({Title = "Export", Content = "Clipboard unavailable, string printed in console (F9)", Type = "Warning", Duration = 5})
+            end
+        end
+    })
+
+    ThemeBlock:CreateInput({
+        Name = "Import Data",
+        Flag = "Settings_ImportThemeData",
+        Placeholder = "Paste theme...",
+        Tooltip = "Paste an exported theme here (or leave empty to use the clipboard)",
+        Callback = function(v)
+            ImportThemeBuffer = v or ""
+        end
+    })
+
+    ThemeBlock:CreateButton({
+        Name = "📥 Import Theme",
+        Tooltip = "Apply the pasted theme and save it under the theme name above",
+        Callback = function()
+            local str = (ImportThemeBuffer ~= "" and ImportThemeBuffer) or PasteText()
+            if not str or str == "" then
+                Library:Notify({Title = "Import Error", Content = "Paste a theme first (or copy one to the clipboard)", Type = "Error"})
+                return
+            end
+            local ok, parsed = pcall(function() return HS:JSONDecode(str) end)
+            if not ok or type(parsed) ~= "table" or type(parsed.Main) ~= "table" then
+                Library:Notify({Title = "Import Error", Content = "Invalid theme data", Type = "Error"})
+                return
+            end
+            local theme = RestoreTheme(parsed)
+            ApplyTheme(theme, true)
+            if ThemeNameInput ~= "" then
+                pcall(function()
+                    writefile(Library.ThemeFolder .. "/" .. ThemeNameInput .. ".json", HS:JSONEncode(ThemeSnapshot()))
+                end)
+                LoadDrop:Refresh(Library:GetThemes())
+            end
+            Library:Notify({Title = "Theme Imported", Content = "Theme applied and saved as " .. ThemeNameInput, Type = "Success"})
         end
     })
 
