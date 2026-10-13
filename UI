@@ -5797,6 +5797,275 @@ function Library:CreateWindow(Settings)
                 Tip(Holder, Cfg)
             end
 
+            -- 📝 PARAGRAPHE : carte avec titre + texte long (retours à la ligne automatiques)
+            -- Options : Title, Content, RichText = true, Tooltip, Keywords
+            --   Elements:CreateParagraph({Title = "Infos", Content = "Un long texte..."})
+            -- Retourne {SetTitle, SetContent}. Le contenu est indexé dans la recherche.
+            function Elements:CreateParagraph(Cfg)
+                Cfg = Cfg or {}
+                ElementOrder = ElementOrder + 1
+                local Title = tostring(Cfg.Title or Cfg.Name or "")
+                local Content = tostring(Cfg.Content or Cfg.Text or "")
+
+                local Card = Create("Frame", {
+                    Parent = TargetParent,
+                    Size = UDim2.new(1, 0, 0, 0),
+                    AutomaticSize = Enum.AutomaticSize.Y,
+                    BackgroundColor3 = SelectedTheme.Second,
+                    BackgroundTransparency = 0.5,
+                    ZIndex = 7,
+                    LayoutOrder = ElementOrder,
+                    ThemeTag = "Second"
+                })
+                AddCorner(Card, 8)
+                AddStroke(Card, SelectedTheme).Transparency = 0.8
+
+                Create("UIPadding", {
+                    Parent = Card,
+                    PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12),
+                    PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 10)
+                })
+                Create("UIListLayout", {Parent = Card, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 4)})
+
+                local TitleLbl = Create("TextLabel", {
+                    Parent = Card,
+                    Size = UDim2.new(1, 0, 0, 0),
+                    AutomaticSize = Enum.AutomaticSize.Y,
+                    BackgroundTransparency = 1,
+                    Text = Title,
+                    Font = Library.GlobalFontBold,
+                    TextSize = 14,
+                    TextColor3 = SelectedTheme.Text,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    TextYAlignment = Enum.TextYAlignment.Top,
+                    TextWrapped = true,
+                    Visible = Title ~= "",
+                    LayoutOrder = 1,
+                    ZIndex = 8,
+                    ThemeTag = "Text"
+                })
+
+                local Body = Create("TextLabel", {
+                    Parent = Card,
+                    Size = UDim2.new(1, 0, 0, 0),
+                    AutomaticSize = Enum.AutomaticSize.Y,
+                    BackgroundTransparency = 1,
+                    Text = Content,
+                    RichText = Cfg.RichText == true,
+                    Font = Library.GlobalFont,
+                    TextSize = 13,
+                    TextColor3 = SelectedTheme.TextDark,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    TextYAlignment = Enum.TextYAlignment.Top,
+                    TextWrapped = true,
+                    LayoutOrder = 2,
+                    ZIndex = 8,
+                    ThemeTag = "TextDark"
+                })
+
+                -- le texte du paragraphe est cherchable (mots-clés = contenu)
+                local kw = Cfg.Keywords
+                if type(kw) == "table" then kw = table.concat(kw, " ") end
+                local searchCfg = Clone(Cfg)
+                searchCfg.Keywords = tostring(kw or "") .. " " .. Content
+
+                Tip(Card, Cfg)
+                Index(Card, Title ~= "" and Title or string.sub(Content, 1, 32), "Label", searchCfg)
+
+                return {
+                    SetTitle = function(t)
+                        TitleLbl.Text = tostring(t or "")
+                        TitleLbl.Visible = TitleLbl.Text ~= ""
+                    end,
+                    SetContent = function(t)
+                        Body.Text = tostring(t or "")
+                    end
+                }
+            end
+
+            -- ➖ SÉPARATEUR : ligne fine, avec un texte centré optionnel
+            --   Elements:CreateDivider()  /  Elements:CreateDivider("Titre")  /  Elements:CreateDivider({Text = "Titre"})
+            function Elements:CreateDivider(Cfg)
+                if type(Cfg) ~= "table" then Cfg = {Text = Cfg} end
+                ElementOrder = ElementOrder + 1
+                local Text = Cfg.Text and tostring(Cfg.Text) or ""
+
+                local Holder = Create("Frame", {
+                    Parent = TargetParent,
+                    Size = UDim2.new(1, 0, 0, Text ~= "" and 18 or 10),
+                    BackgroundTransparency = 1,
+                    LayoutOrder = ElementOrder,
+                    ZIndex = 7
+                })
+
+                if Text == "" then
+                    Create("Frame", {
+                        Parent = Holder,
+                        AnchorPoint = Vector2.new(0, 0.5),
+                        Size = UDim2.new(1, 0, 0, 1),
+                        Position = UDim2.new(0, 0, 0.5, 0),
+                        BackgroundColor3 = SelectedTheme.TextDark,
+                        BackgroundTransparency = 0.75,
+                        BorderSizePixel = 0,
+                        ZIndex = 8,
+                        ThemeTag = "TextDark"
+                    })
+                else
+                    local w = TxtS:GetTextSize(Text, 12, Library.GlobalFontBold, Vector2.new(1000, 100)).X
+                    local half = UDim2.new(0.5, -(w / 2 + 10), 0, 1)
+
+                    Create("Frame", {
+                        Parent = Holder, AnchorPoint = Vector2.new(0, 0.5), Size = half, Position = UDim2.new(0, 0, 0.5, 0),
+                        BackgroundColor3 = SelectedTheme.TextDark, BackgroundTransparency = 0.75, BorderSizePixel = 0,
+                        ZIndex = 8, ThemeTag = "TextDark"
+                    })
+                    Create("Frame", {
+                        Parent = Holder, AnchorPoint = Vector2.new(1, 0.5), Size = half, Position = UDim2.new(1, 0, 0.5, 0),
+                        BackgroundColor3 = SelectedTheme.TextDark, BackgroundTransparency = 0.75, BorderSizePixel = 0,
+                        ZIndex = 8, ThemeTag = "TextDark"
+                    })
+                    Create("TextLabel", {
+                        Parent = Holder,
+                        AnchorPoint = Vector2.new(0.5, 0.5),
+                        Size = UDim2.new(0, w + 4, 1, 0),
+                        Position = UDim2.new(0.5, 0, 0.5, 0),
+                        BackgroundTransparency = 1,
+                        Text = Text,
+                        Font = Library.GlobalFontBold,
+                        TextSize = 12,
+                        TextColor3 = SelectedTheme.TextDark,
+                        ZIndex = 8,
+                        ThemeTag = "TextDark"
+                    })
+                end
+            end
+
+            -- 📊 BARRE DE PROGRESSION (affichage seul, animée)
+            -- Options : Name, Min, Max, Default, Decimals, Suffix, Percent = true (affiche des %),
+            --           Color (couleur fixe), Indeterminate = true (animation de chargement), Tooltip, Keywords
+            --   local bar = Elements:CreateProgressBar({Name = "Téléchargement", Max = 100, Suffix = "%"})
+            --   bar.Set(42)   bar.Get()   bar.SetIndeterminate(true)
+            function Elements:CreateProgressBar(Cfg)
+                Cfg = Cfg or {}
+                ElementOrder = ElementOrder + 1
+                local Min = Cfg.Min or 0
+                local Max = Cfg.Max or 100
+                local range = math.max(Max - Min, 1e-9)
+                local Decimals = math.clamp(Cfg.Decimals or 0, 0, 6)
+                local Suffix = Cfg.Suffix or ""
+                local Val = math.clamp(Cfg.Default or Min, Min, Max)
+                local Indeterminate = false
+
+                local Frame = Create("Frame", {
+                    Parent = TargetParent,
+                    Size = UDim2.new(1, 0, 0, 42),
+                    BackgroundColor3 = SelectedTheme.Second,
+                    BackgroundTransparency = 0.5,
+                    ZIndex = 7,
+                    LayoutOrder = ElementOrder,
+                    ThemeTag = "Second"
+                })
+                AddCorner(Frame, 8)
+                AddStroke(Frame, SelectedTheme).Transparency = 0.8
+
+                Create("TextLabel", {
+                    Parent = Frame,
+                    Size = UDim2.new(1, -85, 0, 24),
+                    Position = UDim2.new(0, 12, 0, 2),
+                    BackgroundTransparency = 1,
+                    Text = Cfg.Name or "Progress",
+                    Font = Library.GlobalFont,
+                    TextColor3 = SelectedTheme.Text,
+                    TextSize = 14,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    TextTruncate = Enum.TextTruncate.AtEnd,
+                    ZIndex = 8,
+                    ThemeTag = "Text"
+                })
+
+                local ValLbl = Create("TextLabel", {
+                    Parent = Frame,
+                    Size = UDim2.new(0, 70, 0, 24),
+                    Position = UDim2.new(1, -82, 0, 2),
+                    BackgroundTransparency = 1,
+                    Text = "",
+                    Font = Library.GlobalFontBold,
+                    TextColor3 = SelectedTheme.Text,
+                    TextSize = 12,
+                    TextXAlignment = Enum.TextXAlignment.Right,
+                    ZIndex = 8,
+                    ThemeTag = "Text"
+                })
+
+                local Track = Create("Frame", {
+                    Parent = Frame,
+                    Size = UDim2.new(1, -24, 0, 6),
+                    Position = UDim2.new(0, 12, 0, 28),
+                    BackgroundColor3 = Color3.fromRGB(40, 40, 45),
+                    BorderSizePixel = 0,
+                    ClipsDescendants = true,
+                    ZIndex = 8
+                })
+                AddCorner(Track, 10)
+
+                local Fill = Create("Frame", {
+                    Parent = Track,
+                    Size = UDim2.new(0, 0, 1, 0),
+                    BackgroundColor3 = Cfg.Color or SelectedTheme.ElementAccent,
+                    BorderSizePixel = 0,
+                    ZIndex = 9,
+                    ThemeTag = (not Cfg.Color) and "ElementAccent" or nil
+                })
+                AddCorner(Fill, 10)
+
+                local Sweep
+                local function Render(instant)
+                    local p = math.clamp((Val - Min) / range, 0, 1)
+                    ValLbl.Text = Cfg.Percent and (math.floor(p * 100 + 0.5) .. "%") or (string.format("%." .. Decimals .. "f", Val) .. Suffix)
+                    if Indeterminate then return end
+                    local size = UDim2.new(p, 0, 1, 0)
+                    if instant then
+                        Fill.Size = size
+                    else
+                        Tween(Fill, 0.45, {Size = size}, Enum.EasingStyle.Quart)
+                    end
+                end
+
+                local function SetIndeterminate(on)
+                    on = on and true or false
+                    if on == Indeterminate then return end
+                    Indeterminate = on
+                    if Sweep then Sweep:Cancel() Sweep = nil end
+                    if on then
+                        ValLbl.Text = "..."
+                        Fill.Size = UDim2.new(0.3, 0, 1, 0)
+                        Fill.Position = UDim2.new(-0.3, 0, 0, 0)
+                        Sweep = TS:Create(Fill, TweenInfo.new(1.1, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, -1), {Position = UDim2.new(1, 0, 0, 0)})
+                        Sweep:Play()
+                    else
+                        Fill.Position = UDim2.new(0, 0, 0, 0)
+                        Render(true)
+                    end
+                end
+
+                Render(true)
+                if Cfg.Indeterminate then SetIndeterminate(true) end
+
+                Tip(Frame, Cfg)
+                Index(Frame, Cfg.Name or "Progress", "Label", Cfg)
+
+                return {
+                    Set = function(v)
+                        if type(v) ~= "number" then return end
+                        Val = math.clamp(v, Min, Max)
+                        if Indeterminate then SetIndeterminate(false) end
+                        Render(false)
+                    end,
+                    Get = function() return Val end,
+                    SetIndeterminate = SetIndeterminate
+                }
+            end
+
             -- 🛡️ CALLBACKS PROTÉGÉS
             -- Enveloppe automatiquement le Callback de TOUS les éléments Create* :
             -- une erreur dans le code de l'utilisateur affiche une notif d'erreur au lieu de casser l'UI.
@@ -6307,6 +6576,14 @@ function Library:CreateWindow(Settings)
                 LoadDropCfg:Refresh(Library:GetConfigs())
             end
         end
+    })
+
+    local HelpBlock = SettingsTab:CreateBlock({Name = "Aide", Side = "Left"})
+
+    HelpBlock:CreateParagraph({
+        Title = "Recherche rapide",
+        Content = "Ctrl + F ouvre la recherche : tape un mot (accents et petites fautes tolérés). @onglet cible un onglet, Tab change de filtre, Entrée utilise l'option, Maj + Entrée y va directement.",
+        Keywords = {"aide", "help", "raccourci", "recherche", "search"}
     })
 
     -- Colonne droite : couleurs / thèmes
