@@ -2777,10 +2777,23 @@ function Library:CreateWindow(Settings)
         local Lighting = game:GetService("Lighting")
         local GLASS_TEXT = Color3.fromRGB(238, 241, 247)
         local GLASS_DIM = Color3.fromRGB(150, 156, 168)
-        local TEXT_SIZE = 17
-        local BlurSize = Config.SearchBlurSize or 12
+        local TEXT_SIZE = 14
+        local BlurSize = Config.SearchBlurSize or 24
         local BarShown = false
         local HideToken = 0
+
+        -- Voile sombre qui couvre tout l'écran quand la recherche est active
+        local DarkVeil = Create("Frame", {
+            Name = "SearchVeil",
+            Parent = ScreenGui,
+            Size = UDim2.fromScale(1, 1),
+            Position = UDim2.fromScale(0, 0),
+            BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Visible = false,
+            ZIndex = 25000
+        })
 
         -- flou réel de l'écran derrière la barre
         local BarBlur
@@ -2807,7 +2820,7 @@ function Library:CreateWindow(Settings)
             BackgroundTransparency = 1,
             BorderSizePixel = 0,
             Visible = false,
-            ZIndex = 20001
+            ZIndex = 25001
         })
 
         -- tout le visuel de la barre est dans un CanvasGroup : un seul fondu pour tout
@@ -2817,7 +2830,7 @@ function Library:CreateWindow(Settings)
             BackgroundTransparency = 1,
             GroupTransparency = 1,
             BorderSizePixel = 0,
-            ZIndex = 20001
+            ZIndex = 25001
         })
         Create("UICorner", {Parent = BarVisual, CornerRadius = UDim.new(1, 0)})
 
@@ -2829,7 +2842,7 @@ function Library:CreateWindow(Settings)
             BackgroundColor3 = Color3.fromRGB(6, 7, 10),
             BackgroundTransparency = 0,
             BorderSizePixel = 0,
-            ZIndex = 20001
+            ZIndex = 25001
         })
         Create("UICorner", {Parent = Glass, CornerRadius = UDim.new(1, 0)})
         Create("UIGradient", {
@@ -2849,7 +2862,7 @@ function Library:CreateWindow(Settings)
             Size = UDim2.fromScale(1, 1),
             BackgroundColor3 = Color3.new(1, 1, 1),
             BorderSizePixel = 0,
-            ZIndex = 20002
+            ZIndex = 25002
         })
         Create("UICorner", {Parent = Sheen, CornerRadius = UDim.new(1, 0)})
         Create("UIGradient", {
@@ -2888,7 +2901,7 @@ function Library:CreateWindow(Settings)
             Position = UDim2.new(0.5, 0, 0, 2),
             BackgroundColor3 = Color3.new(1, 1, 1),
             BorderSizePixel = 0,
-            ZIndex = 20003
+            ZIndex = 25003
         })
         Create("UIGradient", {
             Parent = Shine,
@@ -2902,7 +2915,7 @@ function Library:CreateWindow(Settings)
         -- clic n'importe où sur la barre = focus
         BarClick = Create("TextButton", {
             Parent = BarVisual, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-            Text = "", AutoButtonColor = false, ZIndex = 20002
+            Text = "", AutoButtonColor = false, ZIndex = 25002
         })
 
         -- loupe dessinée en vectoriel (à droite, comme sur le screenshot)
@@ -2912,18 +2925,18 @@ function Library:CreateWindow(Settings)
             Size = UDim2.fromOffset(20, 20),
             Position = UDim2.new(1, -24, 0.5, 0),
             BackgroundTransparency = 1,
-            ZIndex = 20004
+            ZIndex = 25004
         })
         local Ring = Create("Frame", {
             Parent = SearchIcon, Size = UDim2.fromOffset(13, 13), Position = UDim2.fromOffset(1, 1),
-            BackgroundTransparency = 1, ZIndex = 20004
+            BackgroundTransparency = 1, ZIndex = 25004
         })
         Create("UICorner", {Parent = Ring, CornerRadius = UDim.new(1, 0)})
         local IconStroke = Create("UIStroke", {Parent = Ring, Color = GLASS_DIM, Thickness = 1.6})
         local Handle = Create("Frame", {
             Parent = SearchIcon, AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(7, 1.6),
             Position = UDim2.fromOffset(16, 16), Rotation = 45, BackgroundColor3 = GLASS_DIM,
-            BorderSizePixel = 0, ZIndex = 20004
+            BorderSizePixel = 0, ZIndex = 25004
         })
         Create("UICorner", {Parent = Handle, CornerRadius = UDim.new(1, 0)})
 
@@ -2939,7 +2952,7 @@ function Library:CreateWindow(Settings)
             TextColor3 = GLASS_DIM,
             TextSize = 11,
             Visible = false,
-            ZIndex = 20004
+            ZIndex = 25004
         })
         Round(Badge, 6)
 
@@ -2956,18 +2969,18 @@ function Library:CreateWindow(Settings)
             TextSize = 11,
             AutoButtonColor = false,
             Visible = false,
-            ZIndex = 20005
+            ZIndex = 25005
         })
         Round(ClearBtn, 8)
 
         -- petite lueur qui balaie le bas de la barre à chaque frappe
         local ScanWrap = Create("Frame", {
             Parent = BarVisual, Size = UDim2.new(1, -60, 0, 2), Position = UDim2.new(0, 30, 1, -5),
-            BackgroundTransparency = 1, ClipsDescendants = true, ZIndex = 20003
+            BackgroundTransparency = 1, ClipsDescendants = true, ZIndex = 25003
         })
         ScanDot = Create("Frame", {
             Parent = ScanWrap, Size = UDim2.new(0.3, 0, 1, 0), Position = UDim2.new(-0.3, 0, 0, 0),
-            BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 20004
+            BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 25004
         })
         Create("UIGradient", {
             Parent = ScanDot,
@@ -2982,20 +2995,20 @@ function Library:CreateWindow(Settings)
         ------------------------------------------------------------------
         local TextArea = Create("Frame", {
             Parent = BarVisual, Size = UDim2.new(1, -112, 1, 0), Position = UDim2.fromOffset(26, 0),
-            BackgroundTransparency = 1, ClipsDescendants = true, ZIndex = 20003
+            BackgroundTransparency = 1, ClipsDescendants = true, ZIndex = 25003
         })
         local Inner = Create("Frame", {
-            Parent = TextArea, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 20003
+            Parent = TextArea, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 25003
         })
         local Placeholder = Create("TextLabel", {
             Parent = TextArea, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
             Text = Config.SearchPlaceholder or "Search...", TextSize = TEXT_SIZE, TextColor3 = GLASS_DIM,
-            TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 20003
+            TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 25003
         })
         local Caret = Create("Frame", {
-            Parent = Inner, AnchorPoint = Vector2.new(0, 0.5), Size = UDim2.fromOffset(2, 20),
+            Parent = Inner, AnchorPoint = Vector2.new(0, 0.5), Size = UDim2.fromOffset(1.5, 16),
             Position = UDim2.new(0, 1, 0.5, 0), BackgroundColor3 = GLASS_TEXT, BackgroundTransparency = 1,
-            BorderSizePixel = 0, ZIndex = 20005
+            BorderSizePixel = 0, ZIndex = 25005
         })
         Create("UICorner", {Parent = Caret, CornerRadius = UDim.new(1, 0)})
 
@@ -3023,7 +3036,7 @@ function Library:CreateWindow(Settings)
                 Parent = Inner, AnchorPoint = Vector2.new(0, 0.5), Size = UDim2.fromOffset(40, 26),
                 Position = UDim2.new(0, x, 0.5, 7), BackgroundTransparency = 1, Text = ch,
                 TextSize = TEXT_SIZE, TextColor3 = GLASS_TEXT, TextTransparency = 1,
-                TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 20004
+                TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 25004
             })
             Tween(lbl, 0.28, {TextTransparency = 0, Position = UDim2.new(0, x, 0.5, 0)}, Enum.EasingStyle.Quint)
             return lbl
@@ -3132,14 +3145,17 @@ function Library:CreateWindow(Settings)
             end
         end
 
-        -- ouverture / fermeture de la barre (uniquement via Ctrl + F, Library:OpenSearch ou Library:FocusSearch)
+        -- ouverture / fermeture de la barre (uniquement via Ctrl + Y, Library:OpenSearch ou Library:FocusSearch)
         ShowBar = function()
             HideToken += 1
             if BarShown then return end
             BarShown = true
+            DarkVeil.Visible = true
+            DarkVeil.BackgroundTransparency = 1
             SearchContainer.Visible = true
             SearchContainer.Position = UDim2.new(0.5, 0, 0, BAR_Y - 18)
             BarVisual.GroupTransparency = 1
+            Tween(DarkVeil, 0.4, {BackgroundTransparency = 0.5}, Enum.EasingStyle.Quad)
             Tween(SearchContainer, 0.45, {Position = UDim2.new(0.5, 0, 0, BAR_Y)}, Enum.EasingStyle.Quint)
             Tween(BarVisual, 0.35, {GroupTransparency = 0}, Enum.EasingStyle.Quad)
             if BarBlur then Tween(BarBlur, 0.5, {Size = BlurSize}, Enum.EasingStyle.Quad) end
@@ -3150,11 +3166,15 @@ function Library:CreateWindow(Settings)
             BarShown = false
             HideToken += 1
             local my = HideToken
+            Tween(DarkVeil, 0.3, {BackgroundTransparency = 1}, Enum.EasingStyle.Quad)
             Tween(SearchContainer, 0.3, {Position = UDim2.new(0.5, 0, 0, BAR_Y - 12)}, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
             Tween(BarVisual, 0.25, {GroupTransparency = 1}, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
             if BarBlur then Tween(BarBlur, 0.35, {Size = 0}, Enum.EasingStyle.Quad) end
             task.delay(0.35, function()
-                if HideToken == my and not BarShown then SearchContainer.Visible = false end
+                if HideToken == my and not BarShown then 
+                    SearchContainer.Visible = false
+                    DarkVeil.Visible = false
+                end
             end)
         end
     end
@@ -3170,7 +3190,7 @@ function Library:CreateWindow(Settings)
         BorderSizePixel = 0,
         ClipsDescendants = true,
         Visible = false,
-        ZIndex = 20001,
+        ZIndex = 25001,
         ThemeTag = "Second"
     })
     AddCorner(Panel, 6)
@@ -3178,7 +3198,7 @@ function Library:CreateWindow(Settings)
 
     -- Filtres + compteur
     local ChipsBar = Create("Frame", {
-        Parent = Panel, Size = UDim2.new(1, 0, 0, CHIPS_H), BackgroundTransparency = 1, ZIndex = 20002
+        Parent = Panel, Size = UDim2.new(1, 0, 0, CHIPS_H), BackgroundTransparency = 1, ZIndex = 25002
     })
     local ChipScroll = Create("ScrollingFrame", {
         Parent = ChipsBar,
@@ -3190,7 +3210,7 @@ function Library:CreateWindow(Settings)
         CanvasSize = UDim2.new(),
         AutomaticCanvasSize = Enum.AutomaticSize.X,
         ScrollingDirection = Enum.ScrollingDirection.X,
-        ZIndex = 20002
+        ZIndex = 25002
     })
     Create("UIListLayout", {
         Parent = ChipScroll, FillDirection = Enum.FillDirection.Horizontal,
@@ -3208,7 +3228,7 @@ function Library:CreateWindow(Settings)
         TextSize = 11,
         TextColor3 = SelectedTheme.TextDark,
         TextXAlignment = Enum.TextXAlignment.Right,
-        ZIndex = 20002,
+        ZIndex = 25002,
         ThemeTag = "TextDark"
     })
     Create("Frame", {
@@ -3239,7 +3259,7 @@ function Library:CreateWindow(Settings)
         ScrollBarThickness = 3,
         ScrollBarImageColor3 = SelectedTheme.TextDark,
         CanvasSize = UDim2.new(),
-        ZIndex = 20002
+        ZIndex = 25002
     })
 
     local Selector = Create("Frame", {
@@ -3250,29 +3270,29 @@ function Library:CreateWindow(Settings)
         BackgroundTransparency = 0.84,
         BorderSizePixel = 0,
         Visible = false,
-        ZIndex = 20002
+        ZIndex = 25002
     })
     Round(Selector, 10)
     local SelectorBar = Create("Frame", {
         Parent = Selector, Size = UDim2.new(0, 3, 0.55, 0), Position = UDim2.new(0, 3, 0.225, 0),
-        BackgroundColor3 = SelectedTheme.ElementAccent, BorderSizePixel = 0, ZIndex = 20003
+        BackgroundColor3 = SelectedTheme.ElementAccent, BorderSizePixel = 0, ZIndex = 25003
     })
     Round(SelectorBar, 100)
 
     -- État vide
     local Empty = Create("Frame", {
         Parent = Panel, Size = UDim2.new(1, 0, 0, 96), Position = UDim2.new(0, 0, 0, CHIPS_H),
-        BackgroundTransparency = 1, Visible = false, ZIndex = 20003
+        BackgroundTransparency = 1, Visible = false, ZIndex = 25003
     })
     local EmptyTitle = Create("TextLabel", {
         Parent = Empty, Size = UDim2.new(1, -24, 0, 22), Position = UDim2.new(0, 12, 0, 22),
         BackgroundTransparency = 1, Text = "", Font = Library.GlobalFontBold, TextSize = 14,
-        TextColor3 = SelectedTheme.Text, ZIndex = 20004, ThemeTag = "Text"
+        TextColor3 = SelectedTheme.Text, ZIndex = 25004, ThemeTag = "Text"
     })
     local EmptySub = Create("TextButton", {
         Parent = Empty, Size = UDim2.new(1, -24, 0, 20), Position = UDim2.new(0, 12, 0, 50),
         BackgroundTransparency = 1, Text = "", TextSize = 12, TextColor3 = SelectedTheme.ElementAccent,
-        AutoButtonColor = false, ZIndex = 20004, ThemeTag = "ElementAccent"
+        AutoButtonColor = false, ZIndex = 25004, ThemeTag = "ElementAccent"
     })
 
     -- Pied de page : raccourcis
@@ -3290,7 +3310,7 @@ function Library:CreateWindow(Settings)
         BackgroundTransparency = 1,
         Text = IsMobile and "Touchez un résultat pour y aller" or "↑↓ naviguer    ↵ utiliser    ⇧↵ aller à    Tab filtre    Esc fermer",
         TextSize = 11, TextColor3 = SelectedTheme.TextDark, TextXAlignment = Enum.TextXAlignment.Left,
-        TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 20003, ThemeTag = "TextDark"
+        TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 25003, ThemeTag = "TextDark"
     })
 
     ----------------------------------------------------------------------
@@ -3356,14 +3376,14 @@ function Library:CreateWindow(Settings)
     local function MakePill(ctrl, e, getText, onClick)
         local pill = N("TextButton", {
             Parent = ctrl, Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
-            BackgroundTransparency = 0.8, Text = "", AutoButtonColor = false, ZIndex = 20006
+            BackgroundTransparency = 0.8, Text = "", AutoButtonColor = false, ZIndex = 25006
         })
         Round(pill, 7)
         N("UIStroke", {Parent = pill, Color = SelectedTheme.TextDark, Transparency = 0.8, Thickness = 1})
         local lbl = N("TextLabel", {
             Parent = pill, Size = UDim2.new(1, -12, 1, 0), Position = UDim2.new(0, 6, 0, 0), BackgroundTransparency = 1,
             Text = "", TextSize = 12, Font = Library.GlobalFontBold, TextColor3 = SelectedTheme.Text,
-            TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 20007
+            TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 25007
         })
         local last
         local function refresh()
@@ -3388,12 +3408,12 @@ function Library:CreateWindow(Settings)
         local sw = N("TextButton", {
             Parent = ctrl, Size = UDim2.fromOffset(40, 22), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5),
             Text = "", AutoButtonColor = false, BorderSizePixel = 0, BackgroundColor3 = SelectedTheme.TextDark,
-            BackgroundTransparency = 0.55, ZIndex = 20006
+            BackgroundTransparency = 0.55, ZIndex = 25006
         })
         Round(sw, 100)
         local knob = N("Frame", {
             Parent = sw, Size = UDim2.fromOffset(16, 16), AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0),
-            BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 20007
+            BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 25007
         })
         Round(knob, 100)
         local last
@@ -3433,27 +3453,27 @@ function Library:CreateWindow(Settings)
         local range = math.max(Max - Min, 1e-9)
         local hit = N("TextButton", {
             Parent = ctrl, Size = UDim2.new(0, 74, 0, 22), Position = UDim2.new(0, 0, 0.5, -11),
-            BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 20006
+            BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 25006
         })
         local bar = N("Frame", {
             Parent = hit, Size = UDim2.new(1, 0, 0, 4), Position = UDim2.new(0, 0, 0.5, -2),
-            BackgroundColor3 = SelectedTheme.TextDark, BackgroundTransparency = 0.6, BorderSizePixel = 0, ZIndex = 20007
+            BackgroundColor3 = SelectedTheme.TextDark, BackgroundTransparency = 0.6, BorderSizePixel = 0, ZIndex = 25007
         })
         Round(bar, 100)
         local fill = N("Frame", {
             Parent = bar, Size = UDim2.fromScale(0, 1), BackgroundColor3 = SelectedTheme.ElementAccent,
-            BorderSizePixel = 0, ZIndex = 20008
+            BorderSizePixel = 0, ZIndex = 25008
         })
         Round(fill, 100)
         local thumb = N("Frame", {
             Parent = fill, Size = UDim2.fromOffset(10, 10), AnchorPoint = Vector2.new(0.5, 0.5),
-            Position = UDim2.fromScale(1, 0.5), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 20009
+            Position = UDim2.fromScale(1, 0.5), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 25009
         })
         Round(thumb, 100)
         local val = N("TextLabel", {
             Parent = ctrl, Size = UDim2.new(0, 52, 1, 0), Position = UDim2.new(0, 80, 0, 0), BackgroundTransparency = 1,
             Text = "", TextSize = 12, Font = Library.GlobalFontBold, TextColor3 = SelectedTheme.Text,
-            TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 20006
+            TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 25006
         })
         local last
         local function refresh(animate)
@@ -3498,7 +3518,7 @@ function Library:CreateWindow(Settings)
         local btn = N("TextButton", {
             Parent = ctrl, Size = UDim2.fromScale(1, 1), BackgroundColor3 = SelectedTheme.ElementAccent,
             BackgroundTransparency = 0.12, Text = "▶  Lancer", Font = Library.GlobalFontBold, TextSize = 11,
-            TextColor3 = fg, AutoButtonColor = false, ZIndex = 20006
+            TextColor3 = fg, AutoButtonColor = false, ZIndex = 25006
         })
         Round(btn, 7)
         btn.MouseButton1Click:Connect(function()
@@ -3550,7 +3570,7 @@ function Library:CreateWindow(Settings)
     CONTROLS.Color = function(ctrl, e)
         local sw = N("TextButton", {
             Parent = ctrl, Size = UDim2.fromOffset(32, 20), AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.fromScale(1, 0.5),
-            Text = "", AutoButtonColor = false, BackgroundColor3 = Color3.new(1, 1, 1), ZIndex = 20006
+            Text = "", AutoButtonColor = false, BackgroundColor3 = Color3.new(1, 1, 1), ZIndex = 25006
         })
         Round(sw, 6)
         N("UIStroke", {Parent = sw, Color = SelectedTheme.TextDark, Transparency = 0.5, Thickness = 1})
@@ -3573,19 +3593,19 @@ function Library:CreateWindow(Settings)
 
         local row = N("CanvasGroup", {
             Parent = List, Size = UDim2.new(1, -12, 0, ROW_H), Position = UDim2.new(0, anim and 22 or 6, 0, y),
-            BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 20003, GroupTransparency = anim and 1 or 0
+            BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 25003, GroupTransparency = anim and 1 or 0
         })
         local hit = N("TextButton", {
-            Parent = row, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 20003
+            Parent = row, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 25003
         })
         local icon = N("Frame", {
             Parent = row, Size = UDim2.fromOffset(30, 30), Position = UDim2.new(0, 10, 0.5, -15),
-            BackgroundColor3 = kc, BackgroundTransparency = 0.78, BorderSizePixel = 0, ZIndex = 20004
+            BackgroundColor3 = kc, BackgroundTransparency = 0.78, BorderSizePixel = 0, ZIndex = 25004
         })
         Round(icon, 8)
         N("TextLabel", {
             Parent = icon, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = KIND_GLYPH[e.kind] or "•",
-            TextColor3 = kc, TextSize = 14, Font = Library.GlobalFontBold, ZIndex = 20005
+            TextColor3 = kc, TextSize = 14, Font = Library.GlobalFontBold, ZIndex = 25005
         })
 
         local cw = CTRL_W[e.kind] or 0
@@ -3595,20 +3615,20 @@ function Library:CreateWindow(Settings)
             Parent = row, Size = UDim2.new(1, -(50 + rightPad), 0, 18), Position = UDim2.new(0, 50, 0, 7),
             BackgroundTransparency = 1, RichText = true, Text = Highlight(e.name, tokens), TextSize = 14,
             TextColor3 = SelectedTheme.Text, TextXAlignment = Enum.TextXAlignment.Left,
-            TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 20004
+            TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 25004
         })
         local crumb = e.tabName .. ((e.blockName ~= "") and ("  ›  " .. e.blockName) or "")
         N("TextLabel", {
             Parent = row, Size = UDim2.new(1, -(50 + rightPad), 0, 14), Position = UDim2.new(0, 50, 0, 26),
             BackgroundTransparency = 1, Text = crumb, TextSize = 11, TextColor3 = SelectedTheme.TextDark,
-            TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 20004
+            TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 25004
         })
 
         local refresh
         if cw > 0 and CONTROLS[e.kind] then
             local ctrl = N("Frame", {
                 Parent = row, Size = UDim2.fromOffset(cw, 26), AnchorPoint = Vector2.new(1, 0.5),
-                Position = UDim2.new(1, -12, 0.5, 0), BackgroundTransparency = 1, ZIndex = 20005
+                Position = UDim2.new(1, -12, 0.5, 0), BackgroundTransparency = 1, ZIndex = 25005
             })
             refresh = CONTROLS[e.kind](ctrl, e)
         end
@@ -3806,7 +3826,7 @@ function Library:CreateWindow(Settings)
             TextColor3 = SelectedTheme.TextDark,
             AutoButtonColor = false,
             LayoutOrder = idx,
-            ZIndex = 20003
+            ZIndex = 25003
         })
         Create("UIPadding", {Parent = b, PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10)})
         Round(b, 11)
