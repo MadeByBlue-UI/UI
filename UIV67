@@ -3033,8 +3033,8 @@ function Library:CreateWindow(Settings)
 
         local function MakeChar(ch, x)
             local lbl = N("TextLabel", {
-                Parent = Inner, AnchorPoint = Vector2.new(0, 0.5), Size = UDim2.fromOffset(40, 26),
-                Position = UDim2.new(0, x, 0.5, 7), BackgroundTransparency = 1, Text = ch,
+                Parent = Inner, AnchorPoint = Vector2.new(0, 0.5), Size = UDim2.fromOffset(32, 22),
+                Position = UDim2.new(0, x, 0.5, 6), BackgroundTransparency = 1, Text = ch,
                 TextSize = TEXT_SIZE, TextColor3 = GLASS_TEXT, TextTransparency = 1,
                 TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 25004
             })
@@ -3043,7 +3043,7 @@ function Library:CreateWindow(Settings)
         end
 
         local function FadeOut(lbl)
-            Tween(lbl, 0.2, {TextTransparency = 1, Position = UDim2.new(0, lbl.Position.X.Offset, 0.5, -7)}, Enum.EasingStyle.Quad)
+            Tween(lbl, 0.2, {TextTransparency = 1, Position = UDim2.new(0, lbl.Position.X.Offset, 0.5, -6)}, Enum.EasingStyle.Quad)
             task.delay(0.22, function() lbl:Destroy() end)
         end
 
