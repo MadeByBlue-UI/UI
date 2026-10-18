@@ -1841,7 +1841,7 @@ function Window:CreateTab(name, _, icon)
 	btn.MouseButton1Click:Connect(function() tab:Select() end)
 
 	table.insert(self.Tabs, tab)
-	if #self.Tabs == 1 then tab:Select() end
+	if not self.Current and not self._noSelect then tab:Select() end
 	return tab
 end
 
@@ -1931,7 +1931,7 @@ function Window:CreateFavoritesTab(name, icon)
 end
 
 -- Onglet « Paramètres » prêt à l'emploi
-function Window:CreateSettingsTab(name, icon)
+function Window:CreateSettingsTab(name, icon, docked)
 	local win = self
 	local tab = self:CreateTab(name or "Paramètres", nil, icon)
 
@@ -1997,7 +1997,22 @@ function Window:CreateSettingsTab(name, icon)
 		Tooltip = "Cette config est chargée toute seule au démarrage.",
 		Callback = function(v) Library:SetAutoLoad(v ~= NONE and v or "") end })
 	D:CreateParagraph({ Title = "Raccourcis",
-		Content = "Double-clic sur la barre de titre : réduire / restaurer.\nCtrl+R : recentrer la fenêtre.\nBouton = dans la barre de titre : tout replier / déplier." })
+		Content = "Double-clic sur la barre de titre : réduire / restaurer.\nCtrl+R : recentrer la fenêtre.\nBouton = dans la barre de titre : tout replier / déplier.\nLa position et la taille de la fenêtre sont retenues automatiquement." })
+
+	-- Docké en bas de la barre latérale, avec une petite icône
+	if docked and self.Footer then
+		tab.Button.Parent = self.Footer
+		tab.Button.LayoutOrder = 1
+		tab.Label.Position = UDim2.new(0, 34, 0, 0)
+		tab.Label.Size = UDim2.new(1, -48, 1, 0)
+		local ico = new("Frame", { Position = UDim2.new(0, 12, 0.5, -7), Size = UDim2.fromOffset(14, 14),
+			BackgroundTransparency = 1, BorderSizePixel = 0 }, tab.Button)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, ico)
+		new("UIStroke", { Color = T.Accent, Thickness = 2, Transparency = 0.2 }, ico)
+		local dot = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(4, 4), BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, ico)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+	end
 	return tab
 end
 
@@ -2041,6 +2056,25 @@ function Library:CreateWindow(cfg)
 	end
 	local minW = (cfg.MinSize and cfg.MinSize.X) or 380
 	local minH = (cfg.MinSize and cfg.MinSize.Y) or 320
+
+	-- Position + taille mémorisées automatiquement entre deux lancements (fichier <ConfigFolder>/_window.json)
+	local remember = cfg.RememberLayout ~= false
+	local layoutFile = Library.ConfigFolder .. "/_window.json"
+	if remember then
+		pcall(function()
+			if isfile and readfile and isfile(layoutFile) then
+				local d = HttpService:JSONDecode(readfile(layoutFile))
+				if type(d) == "table" and tonumber(d.w) and tonumber(d.h) then
+					W = math.clamp(math.floor(d.w), minW, math.max(minW, vp.X - 16))
+					H = math.clamp(math.floor(d.h), minH, math.max(minH, vp.Y - 16))
+					center = Vector2.new(
+						math.clamp((tonumber(d.cx) or 0.5) * vp.X, 90, vp.X - 90),
+						math.clamp((tonumber(d.cy) or 0.5) * vp.Y, H / 2, vp.Y - 40 + H / 2)
+					)
+				end
+			end
+		end)
+	end
 
 	local gui = new("ScreenGui", { Name = "SolarisUI", ResetOnSpawn = false, DisplayOrder = 999,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
@@ -2091,6 +2125,7 @@ function Library:CreateWindow(cfg)
 		main.Size = UDim2.fromOffset(nw, nh)
 		return true
 	end
+	local persistReady = false
 	local function saveWin()
 		local v = viewport()
 		local p = tgtPos or curPos
@@ -2099,6 +2134,12 @@ function Library:CreateWindow(cfg)
 			w = main.Size.X.Offset,
 			h = (collapsed and preSize) and preSize.Y or main.Size.Y.Offset,
 		}
+		if remember and persistReady and writefile then
+			pcall(function()
+				if makefolder and isfolder and not isfolder(Library.ConfigFolder) then makefolder(Library.ConfigFolder) end
+				writefile(layoutFile, HttpService:JSONEncode(Library.Flags["__window"]))
+			end)
+		end
 	end
 	local function saveWinLater() task.delay(0.5, saveWin) end
 
@@ -2241,11 +2282,14 @@ function Library:CreateWindow(cfg)
 	search.FocusLost:Connect(function() tween(sst, { Transparency = 0.92 }, 0.3) end)
 
 	local sidebar = new("ScrollingFrame", {
-		Position = UDim2.new(0, 10, 0, 88), Size = UDim2.new(0, 116, 1, -100), BackgroundTransparency = 1,
+		Position = UDim2.new(0, 10, 0, 88), Size = UDim2.new(0, 116, 1, -140), BackgroundTransparency = 1,
 		BorderSizePixel = 0, ScrollBarThickness = 0, CanvasSize = UDim2.new(),
 		AutomaticCanvasSize = AY,
 	}, main)
 	new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = BYORDER }, sidebar)
+
+	local footer = new("Frame", { Name = "Footer", Position = UDim2.new(0, 10, 1, -48), Size = UDim2.new(0, 116, 0, 34),
+		BackgroundTransparency = 1 }, main)
 
 	-- séparateur vertical dégradé
 	local vline = new("Frame", { Position = UDim2.new(0, 134, 0, 54), Size = UDim2.new(0, 1, 1, -70),
@@ -2260,7 +2304,7 @@ function Library:CreateWindow(cfg)
 
 	local contentW = W - 156
 	local win = setmetatable({
-		Gui = gui, Main = main, Sidebar = sidebar, Content = content, Tabs = {}, Veil = veil, Search = search,
+		Gui = gui, Main = main, Sidebar = sidebar, Content = content, Tabs = {}, Veil = veil, Search = search, Footer = footer,
 		TwoCols = contentW >= 520, Open = true, Opacity = 1 - transp, StatsVisible = statsOn,
 	}, Window)
 
@@ -2355,7 +2399,7 @@ function Library:CreateWindow(cfg)
 	-- ------------------------------------------------------------------
 	-- Réduire (barre de titre seule) / recentrer / mise en page sauvegardée
 	-- ------------------------------------------------------------------
-	local parts = { search, sidebar, vline, content }
+	local parts = { search, sidebar, vline, content, footer }
 	setMinimized = function(v)
 		v = v and true or false
 		if v == collapsed then return end
@@ -2641,6 +2685,14 @@ function Library:CreateWindow(cfg)
 		end,
 	}
 	registerFavItem()
+
+	if cfg.Settings ~= false then
+		win._noSelect = true
+		local ok, err = pcall(function() win:CreateSettingsTab(cfg.SettingsName or "Réglages", cfg.SettingsIcon, true) end)
+		win._noSelect = nil
+		if not ok then warn("[Ui-Lib] Onglet Réglages : " .. tostring(err)) end
+	end
+	persistReady = true
 
 	Library.Window = win
 	Library._autoDone = false
