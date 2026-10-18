@@ -85,6 +85,15 @@
 		• STYLES : Library:SetStyle("Standard" | "Verre" | "Givré" | "Mat" | "Néon")  /  CreateWindow({ Style = "Verre" })
 		  et dans Réglages > Style. Pour en ajouter un : copie une entrée de la table STYLES plus bas.
 		• Formes : "Arrondie" | "Douce" | "Classique" (l'ancienne "Vague" est convertie en "Arrondie").
+
+	─────────────  V5 : NOTIFICATIONS  (détail de l'API juste avant Library:Notify)  ─────────────
+		• Library:Notify renvoie maintenant un handle : n:Update / SetProgress / SetTitle / SetContent / SetType /
+		  Dismiss / Pause / Resume / IsAlive.  Type = "Loading" ou Progress = 0..1 pour une notif qui évolue.
+		• Animations : entrée en glissant avec rebond, reflet qui balaie la carte, icône qui pop + onde,
+		  Erreur = secousse, Alerte = oscillation, Succès = rotation ; la pile se décale en douceur.
+		• Pause du minuteur au survol, swipe latéral pour fermer, doublons regroupés (badge x2, x3...),
+		  boutons d'action (Actions = {...}), OnClick / OnDismiss, mode « Ne pas déranger », historique
+		  (Window:CreateNotifLogTab), 6 positions (haut / bas x gauche / centre / droite), couleurs par type.
 ]]
 
 local Players      = game:GetService("Players")
@@ -648,26 +657,71 @@ function Library:SetStyle(name)
 end
 
 -- ============================================================================
--- NOTIFICATIONS
+-- NOTIFICATIONS  (V5 : pile animée, pause au survol, boutons, progression, swipe, historique)
+--
+--   local n = Library:Notify({
+--       Title, Content,
+--       Type     = "Info" | "Success" | "Warning" | "Error" | "Loading",
+--       Duration = 4            (0 = reste affichée jusqu'à fermeture),
+--       Progress = 0..1         (barre de progression, la notif reste jusqu'à 100 % puis passe en « Success »),
+--       Loading  = true         (barre indéterminée + spinner),
+--       Actions  = { { Text = "Annuler", Callback = function(n) end, Keep = false } },
+--       OnClick  = function(n) end,      OnDismiss = function(raison) end,
+--       Stack = false (pas de regroupement des doublons),  Force = true (passe même en « Ne pas déranger »),
+--       Dismissable = false (pas de fermeture au clic / swipe),
+--   })
+--   n:Update({ Title, Content, Type, Progress, Duration })   n:SetProgress(0.5)   n:SetTitle("...")
+--   n:SetContent("...")   n:SetType("Success")   n:Dismiss()   n:Pause()   n:Resume()   n:IsAlive()
+--
+--   Library:NotifyInfo / NotifySuccess / NotifyWarning / NotifyError (titre, contenu, durée)
+--   Library:NotifyProgress({...})   Library:ClearNotifications()   Library:SetNotifMuted(true)
+--   Library:GetNotifHistory() / ClearNotifHistory()   Window:CreateNotifLogTab("Historique")
+--   Réglages : Library.NotifColored / NotifPauseOnHover / NotifStack / NotifMax / NotifWidth / NotifColors
 -- ============================================================================
 local notifGui, notifHolder, notifList
 local notifCount = 0
 local activeNotifs = {}
-local NOTIF_ICON = { Info = "i", Success = "+", Warning = "!", Error = "x" }
+local notifEntries = {}
+local NOTIF_ICON = { Info = "i", Success = "+", Warning = "!", Error = "x", Loading = "" }
+local NOTIF_POS = { TopLeft = true, TopRight = true, TopCenter = true,
+	BottomLeft = true, BottomRight = true, BottomCenter = true }
 
--- Position : "TopLeft" | "TopRight" | "BottomLeft" | "BottomRight"
+Library.NotifColors = {
+	Success = Color3.fromRGB(61, 220, 151),
+	Warning = Color3.fromRGB(255, 200, 87),
+	Error   = Color3.fromRGB(255, 77, 94),
+}
+Library.NotifColored      = true   -- couleur par type (vert / orange / rouge) ; false = tout en noir & blanc
+Library.NotifPauseOnHover = true   -- le minuteur se met en pause quand la souris est sur la notification
+Library.NotifStack        = true   -- les doublons s'empilent en « x2, x3... » au lieu de se répéter
+Library.NotifMax          = 5      -- nombre maximum affiché en même temps
+Library.NotifWidth        = 300
+Library.NotifMuted        = false  -- « Ne pas déranger » : seules les erreurs passent
+Library.NotifHistory      = Library.NotifHistory or {}
+
+-- Position : "TopLeft" | "TopCenter" | "TopRight" | "BottomLeft" | "BottomCenter" | "BottomRight"
 local function notifSide()
 	local p = tostring(Library.NotifPos or "BottomRight")
-	return p:sub(1, 3) == "Top", p:sub(-4) == "Left"
+	local top = p:sub(1, 3) == "Top"
+	local center = p:find("Center", 1, true) ~= nil
+	local left = (not center) and p:sub(-4) == "Left"
+	return top, left, center
 end
 
 local function applyNotifPos()
 	if not (notifHolder and notifList) then return end
-	local top, left = notifSide()
-	notifHolder.AnchorPoint = Vector2.new(left and 0 or 1, top and 0 or 1)
-	notifHolder.Position = UDim2.new(left and 0 or 1, left and 16 or -16, top and 0 or 1, top and 16 or -16)
+	local top, left, center = notifSide()
+	notifHolder.Size = UDim2.new(0, Library.NotifWidth or 300, 1, -32)
+	if center then
+		notifHolder.AnchorPoint = Vector2.new(0.5, top and 0 or 1)
+		notifHolder.Position = UDim2.new(0.5, 0, top and 0 or 1, top and 16 or -16)
+	else
+		notifHolder.AnchorPoint = Vector2.new(left and 0 or 1, top and 0 or 1)
+		notifHolder.Position = UDim2.new(left and 0 or 1, left and 16 or -16, top and 0 or 1, top and 16 or -16)
+	end
 	notifList.VerticalAlignment = top and Enum.VerticalAlignment.Top or Enum.VerticalAlignment.Bottom
-	notifList.HorizontalAlignment = left and Enum.HorizontalAlignment.Left or Enum.HorizontalAlignment.Right
+	notifList.HorizontalAlignment = center and Enum.HorizontalAlignment.Center
+		or (left and Enum.HorizontalAlignment.Left or Enum.HorizontalAlignment.Right)
 end
 
 local function ensureNotif()
@@ -676,14 +730,14 @@ local function ensureNotif()
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
 	mount(notifGui)
 	notifHolder = new("Frame", {
-		Size = UDim2.new(0, 290, 1, -32), BackgroundTransparency = 1,
+		Size = UDim2.new(0, Library.NotifWidth or 300, 1, -32), BackgroundTransparency = 1,
 	}, notifGui)
 	notifList = new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, notifHolder)
 	applyNotifPos()
 end
 
 function Library:SetNotifPosition(p)
-	if p == "TopLeft" or p == "TopRight" or p == "BottomLeft" or p == "BottomRight" then
+	if NOTIF_POS[p] then
 		Library.NotifPos = p
 		applyNotifPos()
 	end
@@ -693,80 +747,603 @@ function Library:SetNotifDuration(d)
 	Library.NotifDuration = math.clamp(tonumber(d) or 4, 1, 30)
 end
 
+function Library:SetNotifWidth(w)
+	Library.NotifWidth = math.clamp(tonumber(w) or 300, 220, 460)
+	applyNotifPos()
+end
+
+function Library:SetNotifMuted(v) Library.NotifMuted = v and true or false end
+function Library:GetNotifHistory() return Library.NotifHistory end
+function Library:ClearNotifHistory() table.clear(Library.NotifHistory) end
+
+function Library:ClearNotifications()
+	for _, e in ipairs(table.clone(notifEntries)) do
+		pcall(e.handle.Dismiss)
+	end
+end
+
+local function noopHandle()
+	return setmetatable({}, { __index = function() return function() return false end end })
+end
+
+local function notifKindColor(kind)
+	if not Library.NotifColored then return nil end
+	if kind == "Info" or kind == "Loading" then return nil end
+	return Library.NotifColors[kind]
+end
+
 function Library:Notify(o)
 	if type(o) ~= "table" then o = { Content = tostring(o) } end
+	local kind = NOTIF_ICON[o.Type] and o.Type or "Info"
+	if (o.Progress ~= nil or o.Loading) and not NOTIF_ICON[o.Type] then kind = "Loading" end
+
+	-- historique (même si « Ne pas déranger »)
+	local hist = Library.NotifHistory
+	hist[#hist + 1] = { Time = os.time(), Title = tostring(o.Title or "Notification"),
+		Content = tostring(o.Content or ""), Type = kind }
+	while #hist > 50 do table.remove(hist, 1) end
+	if Library.NotifMuted and not o.Force and kind ~= "Error" then return noopHandle() end
+
+	-- doublon : on empile (x2, x3...) au lieu d'ajouter une carte
+	local stackable = (o.Stack ~= false) and o.Progress == nil and not o.Loading
+		and kind ~= "Loading" and not o.Actions
+	local key = kind .. "|" .. tostring(o.Title or "") .. "|" .. tostring(o.Content or "")
+	if stackable and Library.NotifStack then
+		for _, e in ipairs(notifEntries) do
+			if not e.dead and e.stackable and e.key == key then
+				e.bump()
+				return e.handle
+			end
+		end
+	end
+
 	ensureNotif()
 	notifCount = notifCount + 1
-	local kind = NOTIF_ICON[o.Type] and o.Type or "Info"
-	local dur = tonumber(o.Duration) or Library.NotifDuration or 4
-	local top, left = notifSide()
-	local off = left and -330 or 330
+	local top, left, center = notifSide()
+	local width = Library.NotifWidth or 300
 
+	-- mode : timer | progress | loading | sticky
+	local dur = o.Duration
+	if dur == nil then dur = Library.NotifDuration or 4 end
+	dur = tonumber(dur) or 4
+	local finiteDur = dur > 0 and dur < math.huge
+	local mode
+	if o.Progress ~= nil then mode = "progress"
+	elseif o.Loading or kind == "Loading" then mode = "loading"
+	elseif not finiteDur then mode = "sticky"
+	else mode = "timer" end
+	if not finiteDur then dur = Library.NotifDuration or 4 end
+	local progress = math.clamp(tonumber(o.Progress) or 0, 0, 1)
+
+	local function farOffset(sign)
+		if center then return UDim2.new(0, 0, 0, top and -90 or 90) end
+		local s = sign or (left and -1 or 1)
+		return UDim2.new(0, s * (width + 40), 0, 0)
+	end
+	local inward = center and 0 or (left and 1 or -1)
+	local nudge = UDim2.new(0, inward * 6, 0, center and (top and 3 or -3) or 0)
+	local ZERO = UDim2.new(0, 0, 0, 0)
+
+	-- ---------------------------------------------------------------- carte
 	local slot = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AN, BackgroundTransparency = 1, BorderSizePixel = 0,
 		LayoutOrder = top and -notifCount or notifCount,
 	}, notifHolder)
 	local card = new(canvasSupported and "CanvasGroup" or "Frame", {
-		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Position = UDim2.new(0, off, 0, 0),
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Position = farOffset(),
 		BackgroundColor3 = T.Second, BackgroundTransparency = Sty.NotifTr, BorderSizePixel = 0,
+		ClipsDescendants = not canvasSupported,
 	}, slot)
 	if canvasSupported then card.GroupTransparency = 1 end
-	corner(card, 10)
+	local cardCorner = corner(card, 10)
+	local cardScale = new("UIScale", { Scale = 0.9 }, card)
 
-	local inner = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1 }, card)
-	new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 13),
-		PaddingLeft = UDim.new(0, 44), PaddingRight = UDim.new(0, 12) }, inner)
+	local inner = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
+		ZIndex = 6 }, card)
+	new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 14),
+		PaddingLeft = UDim.new(0, 46), PaddingRight = UDim.new(0, 12) }, inner)
 	new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = BYORDER }, inner)
-	label(inner, o.Title or "Notification", 13, { Font = F_BOLD, Size = UDim2.new(1, 0, 0, 17), LayoutOrder = 1 })
-	label(inner, o.Content or "", 12, { TextColor3 = T.ElementAccent, TextWrapped = true,
-		TextTruncate = Enum.TextTruncate.None, AutomaticSize = AY, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = 2 })
+	local titleL = label(inner, o.Title or "Notification", 13, { Font = F_BOLD, Size = UDim2.new(1, -30, 0, 17),
+		LayoutOrder = 1, TextTransparency = 1, ZIndex = 6 })
+	local contentL = label(inner, o.Content or "", 12, { TextColor3 = T.ElementAccent, TextWrapped = true,
+		TextTruncate = Enum.TextTruncate.None, AutomaticSize = AY, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = 2,
+		TextTransparency = 1, ZIndex = 6 })
+	contentL.Visible = contentL.Text ~= ""
 
-	-- pastille d'icône
-	local ico = new("Frame", { Position = UDim2.new(0, 11, 0, 10), Size = UDim2.new(0, 24, 0, 24),
-		BackgroundColor3 = T.Accent, BackgroundTransparency = (kind == "Info") and 0.9 or 0.05, BorderSizePixel = 0 }, card)
+	local actRow = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
+		LayoutOrder = 3, Visible = false, ZIndex = 6 }, inner)
+	new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6),
+		SortOrder = BYORDER }, actRow)
+	new("UIPadding", { PaddingTop = UDim.new(0, 7) }, actRow)
+
+	-- liseré de couleur à gauche
+	local strip = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(0, 3, 0, 0), BackgroundColor3 = T.Accent, BorderSizePixel = 0, Visible = false,
+		ZIndex = 6 }, card)
+
+	-- pastille d'icône (+ onde, + spinner)
+	local icoHold = new("Frame", { Position = UDim2.new(0, 11, 0, 10), Size = UDim2.new(0, 24, 0, 24),
+		BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 6 }, card)
+	local pulse = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(24, 24), BackgroundTransparency = 1, BorderSizePixel = 0 }, icoHold)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, pulse)
+	local pulseSt = new("UIStroke", { Color = T.Accent, Thickness = 2, Transparency = 1 }, pulse)
+	local ico = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9,
+		BorderSizePixel = 0 }, icoHold)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, ico)
-	label(ico, NOTIF_ICON[kind], 14, { Font = F_BOLD, TextXAlignment = CENTER,
-		TextColor3 = (kind == "Info") and T.Text or T.Main })
+	local icoScale = new("UIScale", { Scale = 0 }, ico)
+	local icoText = label(ico, "i", 14, { Font = F_BOLD, TextXAlignment = CENTER })
+	local spinRing = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(16, 16), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, ico)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, spinRing)
+	local spinSt = new("UIStroke", { Color = T.Accent, Thickness = 2, Transparency = 0 }, spinRing)
+	local spinGrad = new("UIGradient", { Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.6, 0.2),
+		NumberSequenceKeypoint.new(0.62, 1), NumberSequenceKeypoint.new(1, 1) }) }, spinSt)
+	local spinTw
 
-	-- contour intérieur + barre de durée
+	-- badge « x2 » (doublons)
+	local badge = new("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 9),
+		Size = UDim2.new(0, 26, 0, 16), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.86,
+		BorderSizePixel = 0, Visible = false, ZIndex = 6 }, card)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, badge)
+	local badgeScale = new("UIScale", { Scale = 1 }, badge)
+	local badgeL = label(badge, "x2", 10, { Font = F_BOLD, TextXAlignment = CENTER, ZIndex = 6 })
+
+	-- contour intérieur + piste de durée / progression
 	local outline = new("Frame", { Position = UDim2.new(0, 1, 0, 1), Size = UDim2.new(1, -2, 1, -2),
-		BackgroundTransparency = 1, BorderSizePixel = 0 }, card)
-	corner(outline, 9)
-	stroke(outline, 0.82)
-	local bar = new("Frame", { Position = UDim2.new(0, 12, 1, -4), Size = UDim2.new(1, -24, 0, 2),
-		BackgroundColor3 = T.Accent, BackgroundTransparency = 0.55, BorderSizePixel = 0 }, card)
-	new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
+		BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 7 }, card)
+	new("UICorner", { CornerRadius = UDim.new(0, 9) }, outline)
+	local outSt = stroke(outline, 0.82)
+	local track = new("Frame", { Position = UDim2.new(0, 12, 1, -6), Size = UDim2.new(1, -24, 0, 3),
+		BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, BorderSizePixel = 0, ClipsDescendants = true,
+		ZIndex = 6 }, card)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
+	local fill = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = T.Accent,
+		BackgroundTransparency = 0.35, BorderSizePixel = 0, ZIndex = 6 }, track)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
+
+	-- reflet qui balaie la carte
+	local shine = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0, Visible = false, ZIndex = 8 }, card)
+	new("UICorner", { CornerRadius = UDim.new(0, 10) }, shine)
+	local shineGrad = new("UIGradient", { Rotation = 20, Offset = Vector2.new(-1.3, 0),
+		Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.4, 1), NumberSequenceKeypoint.new(0.5, 0.82),
+			NumberSequenceKeypoint.new(0.6, 1), NumberSequenceKeypoint.new(1, 1) }) }, shine)
 
 	local clickArea = new("TextButton", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "",
-		ZIndex = 5 }, card)
+		AutoButtonColor = false, ZIndex = 5 }, card)
 
+	-- ---------------------------------------------------------------- état
 	local dead = false
-	local function dismiss()
+	local entry, handle
+	local token, remaining, startedAt, paused, barTw, loadTw = 0, dur, 0, false, nil, nil
+	local count = 1
+	local baseTr = 0.82
+	local hov = 0
+	local dismiss, runTimer
+
+	local function stopBar()
+		if barTw then barTw:Cancel() barTw = nil end
+	end
+
+	local function shinePlay()
+		if not Library.Animations then return end
+		local t = 0.8 / math.max(Library.AnimSpeed or 1, 0.05)
+		shine.Visible = true
+		shineGrad.Offset = Vector2.new(-1.3, 0)
+		tween(shineGrad, { Offset = Vector2.new(1.3, 0) }, 0.8)
+		local my = (shine:GetAttribute("S") or 0) + 1
+		shine:SetAttribute("S", my)
+		task.delay(t + 0.1, function()
+			if shine:GetAttribute("S") == my then shine.Visible = false end
+		end)
+	end
+
+	local function applyKind(k)
+		kind = k
+		local c = notifKindColor(k)
+		local ac = c or T.Accent
+		ico.BackgroundColor3 = ac
+		ico.BackgroundTransparency = c and 0.05 or 0.9
+		icoText.Text = NOTIF_ICON[k] or ""
+		icoText.Visible = k ~= "Loading"
+		icoText.TextColor3 = c and Color3.fromRGB(14, 14, 16) or T.Text
+		strip.BackgroundColor3 = ac
+		strip.Visible = c ~= nil
+		outSt.Color = ac
+		baseTr = c and 0.55 or 0.82
+		outSt.Transparency = baseTr
+		fill.BackgroundColor3 = ac
+		pulseSt.Color = ac
+		spinSt.Color = ac
+		spinRing.Visible = k == "Loading"
+		if spinTw then spinTw:Cancel() spinTw = nil end
+		if k == "Loading" then
+			spinTw = TweenService:Create(spinGrad, TweenInfo.new(0.9, LINEAR, OUT, -1), { Rotation = 360 })
+			spinTw:Play()
+		end
+	end
+
+	local function playIcon()
+		icoScale.Scale = 0
+		ico.Rotation = (kind == "Success") and -90 or 0
+		tween(icoScale, { Scale = 1 }, 0.5, BACK)
+		if kind == "Success" then tween(ico, { Rotation = 0 }, 0.5) end
+		pulse.Size = UDim2.fromOffset(24, 24)
+		pulseSt.Transparency = 0.15
+		tween(pulse, { Size = UDim2.fromOffset(52, 52) }, 0.75)
+		tween(pulseSt, { Transparency = 1 }, 0.75)
+		if not Library.Animations then return end
+		if kind == "Error" then
+			task.spawn(function()
+				task.wait(0.2)
+				for _, dx in ipairs({ -4, 4, -3, 3, -2, 2, 0 }) do
+					if dead then return end
+					tween(icoHold, { Position = UDim2.new(0, 11 + dx, 0, 10) }, 0.05, LINEAR)
+					task.wait(0.05)
+				end
+			end)
+		elseif kind == "Warning" then
+			task.spawn(function()
+				task.wait(0.2)
+				for _, r in ipairs({ -16, 14, -9, 6, 0 }) do
+					if dead then return end
+					tween(ico, { Rotation = r }, 0.07, LINEAR)
+					task.wait(0.07)
+				end
+			end)
+		end
+	end
+
+	-- ---------------------------------------------------------------- minuteur
+	runTimer = function()
+		if mode ~= "timer" or dead then return end
+		token += 1
+		local my = token
+		stopBar()
+		paused = false
+		startedAt = os.clock()
+		fill.Size = UDim2.new(math.clamp(remaining / dur, 0, 1), 0, 1, 0)
+		barTw = TweenService:Create(fill, TweenInfo.new(math.max(remaining, 0.01), LINEAR, OUT),
+			{ Size = UDim2.new(0, 0, 1, 0) })
+		barTw:Play()
+		task.delay(remaining, function()
+			if token == my and not dead then dismiss(nil, "timeout") end
+		end)
+	end
+
+	local function pauseTimer()
+		if mode ~= "timer" or paused or dead then return end
+		paused = true
+		token += 1
+		stopBar()
+		remaining = math.max(remaining - (os.clock() - startedAt), 0.25)
+		fill.Size = UDim2.new(math.clamp(remaining / dur, 0, 1), 0, 1, 0)
+	end
+
+	local function resumeTimer()
+		if paused and not dead then runTimer() end
+	end
+
+	local function applyMode()
+		if dead then return end
+		stopBar()
+		if loadTw then loadTw:Cancel() loadTw = nil end
+		token += 1
+		paused = false
+		fill.Position = UDim2.new(0, 0, 0, 0)
+		if mode == "timer" then
+			track.Visible = true
+			remaining = dur
+			runTimer()
+		elseif mode == "progress" then
+			track.Visible = true
+			tween(fill, { Size = UDim2.new(progress, 0, 1, 0) }, 0.25)
+		elseif mode == "loading" then
+			track.Visible = true
+			fill.Size = UDim2.new(0.35, 0, 1, 0)
+			fill.Position = UDim2.new(-0.35, 0, 0, 0)
+			loadTw = TweenService:Create(fill, TweenInfo.new(1.1, Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut, -1), { Position = UDim2.new(1, 0, 0, 0) })
+			loadTw:Play()
+		else
+			track.Visible = false
+		end
+	end
+
+	-- ---------------------------------------------------------------- fermeture
+	dismiss = function(dir, reason)
 		if dead then return end
 		dead = true
+		entry.dead = true
+		token += 1
+		stopBar()
+		if loadTw then loadTw:Cancel() loadTw = nil end
+		if spinTw then spinTw:Cancel() spinTw = nil end
 		for idx, fn in ipairs(activeNotifs) do
-			if fn == dismiss then table.remove(activeNotifs, idx) break end
+			if fn == entry.overflow then table.remove(activeNotifs, idx) break end
 		end
+		for idx, e in ipairs(notifEntries) do
+			if e == entry then table.remove(notifEntries, idx) break end
+		end
+		if o.OnDismiss then fire(o.OnDismiss, reason or "api") end
+
 		local h = slot.AbsoluteSize.Y
 		slot.AutomaticSize = AN
 		slot.Size = UDim2.new(1, 0, 0, h)
+		local sign = (type(dir) == "number" and dir ~= 0) and dir or nil
 		if canvasSupported then tween(card, { GroupTransparency = 1 }, 0.35) end
-		tween(card, { Position = UDim2.new(0, off, 0, 0) }, 0.4)
+		tween(card, { Position = farOffset(sign) }, 0.42)
+		tween(cardScale, { Scale = 0.94 }, 0.3)
 		task.delay(0.22, function()
 			if slot.Parent then tween(slot, { Size = UDim2.new(1, 0, 0, 0) }, 0.3) end
 		end)
-		task.delay(0.55, function() slot:Destroy() end)
+		task.delay(0.6, function()
+			for idx, c in ipairs(Library.CornerObjects) do
+				if c.Corner == cardCorner then table.remove(Library.CornerObjects, idx) break end
+			end
+			slot:Destroy()
+		end)
 	end
-	clickArea.MouseButton1Click:Connect(dismiss)
-	activeNotifs[#activeNotifs + 1] = dismiss
-	while #activeNotifs > 5 do activeNotifs[1]() end
 
-	tween(card, { Position = UDim2.new(0, 0, 0, 0) }, 0.5)
-	if canvasSupported then tween(card, { GroupTransparency = 0 }, 0.35) end
-	-- la barre de durée suit le temps réel (indépendante du multiplicateur d'animations)
-	TweenService:Create(bar, TweenInfo.new(dur, LINEAR, OUT), { Size = UDim2.new(0, 0, 0, 2) }):Play()
-	task.delay(dur, dismiss)
+	-- ---------------------------------------------------------------- survol (pause + petit décalage)
+	local function hoverChange(delta)
+		if dead then return end
+		hov = math.max(hov + delta, 0)
+		if hov > 0 then
+			if Library.NotifPauseOnHover ~= false then pauseTimer() end
+			tween(card, { Position = nudge }, 0.25)
+			tween(outSt, { Transparency = math.max(baseTr - 0.3, 0.05) }, 0.25)
+		else
+			task.delay(0.06, function()
+				if hov == 0 and not dead then
+					resumeTimer()
+					tween(card, { Position = ZERO }, 0.3)
+					tween(outSt, { Transparency = baseTr }, 0.3)
+				end
+			end)
+		end
+	end
+	clickArea.MouseEnter:Connect(function() hoverChange(1) end)
+	clickArea.MouseLeave:Connect(function() hoverChange(-1) end)
+
+	-- ---------------------------------------------------------------- boutons d'action
+	local function buildActions(list)
+		for _, c in ipairs(actRow:GetChildren()) do
+			if c:IsA("TextButton") then c:Destroy() end
+		end
+		actRow.Visible = type(list) == "table" and #list > 0
+		if type(list) ~= "table" then return end
+		for idx, a in ipairs(list) do
+			local btn = new("TextButton", { Size = UDim2.new(0, 0, 0, 24), AutomaticSize = Enum.AutomaticSize.X,
+				BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, Text = tostring(a.Text or a.Name or "OK"),
+				TextColor3 = T.Text, TextSize = 12, Font = F_MED, AutoButtonColor = false, BorderSizePixel = 0,
+				LayoutOrder = idx, ZIndex = 6 }, actRow)
+			new("UICorner", { CornerRadius = UDim.new(0, 6) }, btn)
+			new("UIPadding", { PaddingLeft = UDim.new(0, 11), PaddingRight = UDim.new(0, 11) }, btn)
+			btn.MouseEnter:Connect(function()
+				tween(btn, { BackgroundTransparency = 0.76 }, 0.15)
+				hoverChange(1)
+			end)
+			btn.MouseLeave:Connect(function()
+				tween(btn, { BackgroundTransparency = 0.9 }, 0.2)
+				hoverChange(-1)
+			end)
+			btn.MouseButton1Click:Connect(function()
+				btn.BackgroundTransparency = 0.3
+				tween(btn, { BackgroundTransparency = 0.76 }, 0.4)
+				fire(a.Callback, handle)
+				if a.Keep ~= true then dismiss(nil, "action") end
+			end)
+		end
+	end
+
+	-- ---------------------------------------------------------------- clic / swipe pour fermer
+	clickArea.InputBegan:Connect(function(i)
+		if not isPress(i) or dead then return end
+		local start = Vector2.new(i.Position.X, i.Position.Y)
+		local moved, dx = false, 0
+		pauseTimer()
+		startDrag(function(p)
+			dx = p.X - start.X
+			if math.abs(dx) > 6 and o.Dismissable ~= false and not center then moved = true end
+			if moved and not dead then
+				card.Position = UDim2.new(0, dx, 0, 0)
+				if canvasSupported then card.GroupTransparency = math.clamp(math.abs(dx) / 260, 0, 0.8) end
+			end
+		end, nil, i.Position, function()
+			if dead then return end
+			if not moved then
+				if o.OnClick then fire(o.OnClick, handle) end
+				if o.Dismissable ~= false then dismiss(nil, "click") else resumeTimer() end
+			elseif math.abs(dx) > 90 then
+				dismiss(dx > 0 and 1 or -1, "swipe")
+			else
+				tween(card, { Position = (hov > 0) and nudge or ZERO }, 0.4, BACK)
+				if canvasSupported then tween(card, { GroupTransparency = 0 }, 0.3) end
+				if hov == 0 then resumeTimer() end
+			end
+		end)
+	end)
+
+	-- ---------------------------------------------------------------- mise à jour
+	local function setProgress(p)
+		progress = math.clamp(tonumber(p) or 0, 0, 1)
+		if mode ~= "progress" then
+			mode = "progress"
+			applyMode()
+		end
+		tween(fill, { Size = UDim2.new(progress, 0, 1, 0) }, 0.25)
+		if progress >= 1 and o.AutoComplete ~= false then
+			task.delay(0.35, function()
+				if dead or progress < 1 then return end
+				if kind == "Loading" then
+					applyKind("Success")
+					playIcon()
+				end
+				shinePlay()
+				mode = "timer"
+				applyMode()
+			end)
+		end
+	end
+
+	local function update(d)
+		if type(d) ~= "table" or dead then return end
+		entry.stackable = false
+		if d.Title ~= nil then
+			titleL.Text = tostring(d.Title)
+			titleL.TextTransparency = 0.7
+			tween(titleL, { TextTransparency = 0 }, 0.3)
+		end
+		if d.Content ~= nil then
+			contentL.Text = tostring(d.Content)
+			contentL.Visible = contentL.Text ~= ""
+			contentL.TextTransparency = 0.7
+			tween(contentL, { TextTransparency = 0 }, 0.3)
+		end
+		local typeChanged = false
+		if d.Type and NOTIF_ICON[d.Type] and d.Type ~= kind then
+			applyKind(d.Type)
+			playIcon()
+			typeChanged = true
+		end
+		if d.Duration ~= nil then
+			local nd = tonumber(d.Duration) or dur
+			if nd > 0 and nd < math.huge then
+				dur = nd
+				mode = "timer"
+			else
+				mode = "sticky"
+			end
+			applyMode()
+		elseif typeChanged and (mode == "loading" or mode == "progress") and kind ~= "Loading" and d.Progress == nil then
+			mode = "timer"
+			applyMode()
+		end
+		if d.Progress ~= nil then setProgress(d.Progress) end
+		if typeChanged or d.Title ~= nil or d.Content ~= nil then shinePlay() end
+	end
+
+	handle = {}
+	handle.Update = function(...) update((unself(handle, ...))) end
+	handle.SetProgress = function(...)
+		local v = unself(handle, ...)
+		update({ Progress = v })
+	end
+	handle.SetTitle = function(...) update({ Title = (unself(handle, ...)) }) end
+	handle.SetContent = function(...) update({ Content = (unself(handle, ...)) }) end
+	handle.SetType = function(...) update({ Type = (unself(handle, ...)) }) end
+	handle.Dismiss = function() dismiss(nil, "api") end
+	handle.Pause = function() pauseTimer() end
+	handle.Resume = function() resumeTimer() end
+	handle.IsAlive = function() return not dead end
+
+	entry = { key = key, handle = handle, stackable = stackable, dead = false }
+	entry.overflow = function() dismiss(nil, "overflow") end
+	entry.bump = function()
+		if dead then return end
+		count += 1
+		badgeL.Text = "x" .. count
+		badge.Visible = true
+		badgeScale.Scale = 1.6
+		tween(badgeScale, { Scale = 1 }, 0.45, BACK)
+		card.Position = UDim2.new(0, inward * 10, 0, 0)
+		tween(card, { Position = (hov > 0) and nudge or ZERO }, 0.45, BACK)
+		shinePlay()
+		if mode == "timer" then
+			remaining = dur
+			if paused then fill.Size = UDim2.new(1, 0, 1, 0) else runTimer() end
+		end
+	end
+
+	applyKind(kind)
+	buildActions(o.Actions)
+	notifEntries[#notifEntries + 1] = entry
+	activeNotifs[#activeNotifs + 1] = entry.overflow
+	while #activeNotifs > math.max(tonumber(Library.NotifMax) or 5, 1) do activeNotifs[1]() end
+
+	-- ---------------------------------------------------------------- animation d'entrée
+	task.spawn(function()
+		RunService.Heartbeat:Wait()
+		if dead then return end
+		local h = card.AbsoluteSize.Y / math.max(cardScale.Scale, 0.01)
+		if h < 4 then
+			RunService.Heartbeat:Wait()
+			h = card.AbsoluteSize.Y / math.max(cardScale.Scale, 0.01)
+		end
+		local grow = tween(slot, { Size = UDim2.new(1, 0, 0, h) }, 0.38)
+		grow.Completed:Connect(function()
+			if not dead then
+				slot.AutomaticSize = AY
+				slot.Size = UDim2.new(1, 0, 0, 0)
+			end
+		end)
+		tween(card, { Position = ZERO }, 0.6)
+		tween(cardScale, { Scale = 1 }, 0.55, BACK)
+		if canvasSupported then tween(card, { GroupTransparency = 0 }, 0.35) end
+		if strip.Visible then tween(strip, { Size = UDim2.new(0, 3, 1, 0) }, 0.55) end
+		task.delay(0.12, function() if not dead then playIcon() end end)
+		task.delay(0.15, function() if not dead then tween(titleL, { TextTransparency = 0 }, 0.3) end end)
+		task.delay(0.25, function() if not dead then tween(contentL, { TextTransparency = 0 }, 0.3) end end)
+		task.delay(0.2, function() if not dead then shinePlay() end end)
+		task.delay(0.3, function() if not dead then applyMode() end end)
+	end)
+
+	return handle
 end
+
+-- Raccourcis : Library:NotifySuccess("Titre", "Contenu", 5)
+for _, k in ipairs({ "Info", "Success", "Warning", "Error" }) do
+	Library["Notify" .. k] = function(_, title, content, duration, extra)
+		local o = {}
+		if type(extra) == "table" then
+			for a, b in pairs(extra) do o[a] = b end
+		end
+		o.Title, o.Content, o.Duration, o.Type = title, content, duration, k
+		return Library:Notify(o)
+	end
+end
+
+-- Library:NotifyProgress({ Title = "Téléchargement", Content = "..." })  ->  handle:SetProgress(0.4)
+function Library:NotifyProgress(o)
+	o = o or {}
+	o.Progress = tonumber(o.Progress) or 0
+	return Library:Notify(o)
+end
+
+-- Onglet « Historique » : les 50 dernières notifications
+function Window:CreateNotifLogTab(name, icon)
+	local tab = self:CreateTab(name or "Historique", nil, icon)
+	local function rebuild()
+		tab:ClearBlocks()
+		local blk = tab:CreateBlock({ Name = "Notifications récentes", Side = "Left" })
+		blk._noFav = true
+		blk:CreateButton({ Name = "Vider l'historique", Favorite = false, Callback = function()
+			Library:ClearNotifHistory()
+			rebuild()
+		end })
+		local h = Library.NotifHistory
+		if #h == 0 then
+			blk:CreateParagraph({ Title = "Aucune notification", Content = "Elles apparaîtront ici au fur et à mesure." })
+			return
+		end
+		for i = #h, 1, -1 do
+			local e = h[i]
+			blk:CreateParagraph({
+				Title = os.date("%H:%M:%S", e.Time) .. "  ·  " .. e.Title,
+				Content = (e.Content ~= "") and e.Content or "(sans texte)",
+			})
+		end
+	end
+	tab.OnSelect = rebuild
+	rebuild()
+	return tab
+end
+
 
 
 -- ============================================================================
@@ -1078,7 +1655,8 @@ Library.Presets = {
 }
 Library.Names = {
 	Background = { full = "Complet", light = "Léger", off = "Désactivé" },
-	NotifPos   = { TopLeft = "Haut gauche", TopRight = "Haut droite", BottomLeft = "Bas gauche", BottomRight = "Bas droite" },
+	NotifPos   = { TopLeft = "Haut gauche", TopCenter = "Haut centre", TopRight = "Haut droite",
+		BottomLeft = "Bas gauche", BottomCenter = "Bas centre", BottomRight = "Bas droite" },
 	HolePos    = { TopRight = "Haut droite", TopLeft = "Haut gauche", BottomRight = "Bas droite", BottomLeft = "Bas gauche", Center = "Centre" },
 }
 
@@ -2822,16 +3400,62 @@ function Window:CreateSettingsTab(name, icon, docked)
 
 	-- ───────────── Notifications ─────────────
 	local C = tab:CreateBlock({ Name = "Notifications", Side = "Left", Collapsed = true })
-	local posItems, posKeys = { "Haut gauche", "Haut droite", "Bas gauche", "Bas droite" }, {}
+	local posItems, posKeys = { "Haut gauche", "Haut centre", "Haut droite", "Bas gauche", "Bas centre", "Bas droite" }, {}
 	for k, v in pairs(N.NotifPos) do posKeys[v] = k end
+	C:CreateSection("Affichage")
 	C:CreateDropdown({ Name = "Position", Flag = "ui.notifpos", Items = posItems,
 		Default = N.NotifPos[Library.NotifPos] or "Bas droite", Search = false,
 		Callback = function(v) Library:SetNotifPosition(posKeys[v] or "BottomRight") end })
 	C:CreateSlider({ Name = "Durée par défaut", Flag = "ui.notifdur", Min = 1, Max = 15, Step = 0.5, Suffix = " s",
 		Default = Library.NotifDuration, Callback = function(v) Library:SetNotifDuration(v) end })
+	C:CreateSlider({ Name = "Largeur", Flag = "ui.notifwidth", Min = 240, Max = 420, Step = 10, Suffix = " px",
+		Default = Library.NotifWidth, Callback = function(v) Library:SetNotifWidth(v) end })
+	C:CreateSlider({ Name = "Maximum affichées", Flag = "ui.notifmax", Min = 1, Max = 8, Step = 1,
+		Default = Library.NotifMax, Callback = function(v) Library.NotifMax = v end })
+	C:CreateSection("Comportement")
+	C:CreateToggle({ Name = "Couleurs par type", Flag = "ui.notifcolored", Default = Library.NotifColored,
+		Tooltip = "Vert / orange / rouge selon le type. Désactivé : tout en noir et blanc.",
+		Callback = function(v) Library.NotifColored = v end })
+	C:CreateToggle({ Name = "Pause au survol", Flag = "ui.notifhover", Default = Library.NotifPauseOnHover,
+		Tooltip = "Le minuteur s'arrête tant que la souris est sur la notification.",
+		Callback = function(v) Library.NotifPauseOnHover = v end })
+	C:CreateToggle({ Name = "Regrouper les doublons", Flag = "ui.notifstack", Default = Library.NotifStack,
+		Tooltip = "Une notification identique incrémente un badge (x2, x3...) au lieu de se répéter.",
+		Callback = function(v) Library.NotifStack = v end })
+	C:CreateToggle({ Name = "Ne pas déranger", Flag = "ui.notifmute", Default = Library.NotifMuted,
+		Tooltip = "Masque les notifications (les erreurs passent quand même). Elles restent dans l'historique.",
+		Callback = function(v) Library:SetNotifMuted(v) end })
+	C:CreateSection("Tests")
 	C:CreateButton({ Name = "Tester une notification", Favorite = false, Callback = function()
 		Library:Notify({ Title = "Test", Content = "Voilà à quoi ressemblent les notifications.", Type = "Info" })
 	end })
+	C:CreateButton({ Name = "Tester les 4 types", Favorite = false, Callback = function()
+		Library:NotifyInfo("Information", "Un message tout simple.", 5)
+		Library:NotifySuccess("Succès", "Action effectuée.", 5)
+		Library:NotifyWarning("Attention", "Quelque chose mérite ton attention.", 5)
+		Library:NotifyError("Erreur", "Impossible de terminer l'action.", 5)
+	end })
+	C:CreateButton({ Name = "Tester la progression", Favorite = false, Callback = function()
+		local n = Library:NotifyProgress({ Title = "Téléchargement", Content = "Préparation..." })
+		task.spawn(function()
+			for i = 1, 10 do
+				task.wait(0.3)
+				if not n.IsAlive() then return end
+				n.SetProgress(i / 10)
+				if i == 5 then n.SetContent("Presque à la moitié...") end
+			end
+			n.Update({ Title = "Terminé", Content = "Tout est prêt." })
+		end)
+	end })
+	C:CreateButton({ Name = "Tester avec boutons", Favorite = false, Callback = function()
+		Library:Notify({ Title = "Mise à jour disponible", Content = "Une nouvelle version est prête.",
+			Type = "Info", Duration = 8,
+			Actions = {
+				{ Text = "Installer", Callback = function() Library:NotifySuccess("Installation", "Mise à jour lancée.", 3) end },
+				{ Text = "Plus tard" },
+			} })
+	end })
+	C:CreateButton({ Name = "Tout fermer", Favorite = false, Callback = function() Library:ClearNotifications() end })
 
 	-- ───────────── Fenêtre ─────────────
 	local D = tab:CreateBlock({ Name = "Fenêtre", Side = "Right", Collapsed = true })
@@ -3795,6 +4419,7 @@ function Library:Destroy()
 	table.clear(Conns)
 	table.clear(spinners)
 	table.clear(activeNotifs)
+	table.clear(notifEntries)
 	Library._openDD = nil
 	Library._listening = false
 	if Library.Window and Library.Window.Gui then Library.Window.Gui:Destroy() end
