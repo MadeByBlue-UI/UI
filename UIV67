@@ -39,7 +39,7 @@
 		  Window:SetBackground(mode) / Library:SetBackground(mode) à tout moment.
 		  Le fond se met en pause tout seul pendant les déplacements, redimensionnements et animations lourdes.
 
-	─────────────  V3 : THÈMES, VAGUES, ANIMATIONS  ─────────────
+	─────────────  V3 : THÈMES, ANIMATIONS  (les vagues ont été retirées en V4)  ─────────────
 	THÈMES (onglet Paramètres > Thèmes / Couleurs)
 		Library:GetTheme() / ApplyTheme(t) / ApplyPreset(nom) / SaveTheme / LoadTheme / DeleteTheme / ListThemes
 		Library:ExportTheme() -> "UILIB-THEME:{json}" (copié dans le presse-papiers) / ImportTheme(texte)
@@ -74,6 +74,17 @@
 		• Block:CreateSeparator() (alias de CreateDivider). CreateLabel / CreateParagraph / Dropdown Multi existaient déjà.
 		• Indicateur FPS/ping dans la barre de titre (CreateWindow({ ShowStats = false }) pour le cacher).
 		• Library:SetAccent / SetFontScale / SetAnimSpeed / SetAnimations / SetNotifPosition / SetNotifDuration
+
+	─────────────  V4 : FLOU, ÉTOILES QUI REBONDISSENT, STYLES  ─────────────
+		• Les vagues (contour ondulant + vagues intérieures) ont été retirées.
+		• Étoiles qui rebondissent sur les bords de l'écran, DERRIÈRE la fenêtre (elles disparaissent sous la fenêtre) :
+		  Library.StarCount / Library:SetStars(n), Library.StarSpeed, Library.StarsThroughWindow.
+		  Les étoiles aspirées par le trou noir (dans la fenêtre) sont optionnelles : Library.HoleStars = true.
+		• Flou d'arrière-plan (BlurEffect dans Lighting, seulement quand l'interface est ouverte) :
+		  Library:SetBlur(0 à 56)  /  CreateWindow({ Blur = 14 }).  Il floute le jeu, pas les fenêtres.
+		• STYLES : Library:SetStyle("Standard" | "Verre" | "Givré" | "Mat" | "Néon")  /  CreateWindow({ Style = "Verre" })
+		  et dans Réglages > Style. Pour en ajouter un : copie une entrée de la table STYLES plus bas.
+		• Formes : "Arrondie" | "Douce" | "Classique" (l'ancienne "Vague" est convertie en "Arrondie").
 ]]
 
 local Players      = game:GetService("Players")
@@ -85,6 +96,7 @@ local GuiService   = game:GetService("GuiService")
 local CoreGui      = game:GetService("CoreGui")
 local LP           = Players.LocalPlayer
 local Stats        = game:GetService("Stats")
+local Lighting     = game:GetService("Lighting")
 
 local Library = {
 	Flags             = {},
@@ -92,7 +104,7 @@ local Library = {
 	CornerObjects     = {},
 	GlobalCornerValue = 10,    -- 10 = rayon normal (le script le change via son slider)
 	FireDefaults      = false, -- true = appelle les Callback avec la valeur Default à la création
-	StarCount         = 26,    -- étoiles du fond (0 pour désactiver)
+	StarCount         = 40,    -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 pour désactiver)
 	ConfigFolder      = "Ui-Lib",
 	Scale             = 1,
 	Animations        = true,  -- false = aucune animation (PC faibles)
@@ -103,12 +115,13 @@ local Library = {
 	Favorites         = {},
 	FavEntries        = {},
 	FavStars          = {},
-	Shape             = "Vague",   -- "Vague" | "Douce" | "Classique"
+	Shape              = "Arrondie", -- "Arrondie" | "Douce" | "Classique"
+	StyleName          = "Standard", -- "Standard" | "Verre" | "Givré" | "Mat" | "Néon"
+	BlurSize           = 14,         -- flou de l'arrière-plan (0 = aucun)
+	StarSpeed          = 1,          -- vitesse des étoiles qui rebondissent
+	StarsThroughWindow = false,      -- true = on voit aussi les étoiles à travers la fenêtre
+	HoleStars          = false,      -- true = étoiles aspirées par le trou noir (dans la fenêtre)
 	WinRound          = 1,         -- multiplicateur de rondeur de la fenêtre
-	OutlineWaves      = true,      -- contour ondulant
-	InnerWaves        = true,      -- vagues au fond de la fenêtre
-	WaveAmp           = 1,
-	WaveSpeed         = 1,
 	Breathing         = true,      -- le contour « respire »
 	Ripple            = true,      -- onde au clic
 	SpinSpeed         = 1,
@@ -189,6 +202,60 @@ local function refreshTheme()
 end
 refreshTheme()
 
+-- ============================================================================
+-- STYLES  (Standard / Verre / Givré / Mat / Néon)
+-- Chaque style règle la transparence de la fenêtre, des blocs, des lignes et des champs, les bordures,
+-- le reflet de verre et le flou. Les champs absents d'un style reprennent la valeur « Standard ».
+--   WinAlpha : multiplie l'opacité de la fenêtre   RowTr/RowHot : lignes (repos / survol)
+--   StrokeTr/StrokeHot : bordures des lignes        BlockTr/BlockStroke : blocs
+--   PanelTr/PanelStroke : tiroirs                   InputTr/InputStroke : champs de saisie
+--   NotifTr : notifications   VeilTr : voile au changement d'onglet   Edge/EdgeThick : bordure de la fenêtre
+--   Glass : voile de lumière + reflet animé   BlurSize : flou proposé par le style
+-- ============================================================================
+local STYLES = {
+	["Standard"] = {
+		WinAlpha = 1, RowTr = 0.4, RowHot = 0.2, StrokeTr = 0.93, StrokeHot = 0.72,
+		BlockTr = 0.35, BlockStroke = 0.9, PanelTr = 0.1, PanelStroke = 0.9,
+		InputTr = 0.4, InputStroke = 0.9, NotifTr = 0.04, VeilTr = 0,
+		Edge = 0.3, EdgeThick = 1.5, Glass = false, BlurSize = 14,
+	},
+	["Verre"] = {
+		WinAlpha = 0.45, RowTr = 0.8, RowHot = 0.6, StrokeTr = 0.6, StrokeHot = 0.25,
+		BlockTr = 0.88, BlockStroke = 0.5, PanelTr = 0.55, PanelStroke = 0.5,
+		InputTr = 0.75, InputStroke = 0.55, NotifTr = 0.5, VeilTr = 0.75,
+		Edge = 0.15, EdgeThick = 1.2, Glass = true, BlurSize = 24,
+	},
+	["Givré"] = {
+		WinAlpha = 0.72, RowTr = 0.62, RowHot = 0.42, StrokeTr = 0.75, StrokeHot = 0.4,
+		BlockTr = 0.72, BlockStroke = 0.68, PanelTr = 0.35, PanelStroke = 0.68,
+		InputTr = 0.55, InputStroke = 0.7, NotifTr = 0.3, VeilTr = 0.45,
+		Edge = 0.35, EdgeThick = 1.2, Glass = true, BlurSize = 34,
+	},
+	["Mat"] = {
+		WinAlpha = 1, RowTr = 0.12, RowHot = 0, StrokeTr = 1, StrokeHot = 0.9,
+		BlockTr = 0.04, BlockStroke = 1, PanelTr = 0, PanelStroke = 1,
+		InputTr = 0.1, InputStroke = 1, NotifTr = 0, VeilTr = 0,
+		Edge = 0.88, EdgeThick = 1, Glass = false, BlurSize = 0,
+	},
+	["Néon"] = {
+		WinAlpha = 1, RowTr = 0.5, RowHot = 0.3, StrokeTr = 0.55, StrokeHot = 0.05,
+		BlockTr = 0.3, BlockStroke = 0.35, PanelTr = 0.15, PanelStroke = 0.4,
+		InputTr = 0.45, InputStroke = 0.45, NotifTr = 0.05, VeilTr = 0,
+		Edge = 0, EdgeThick = 2.4, Glass = false, BlurSize = 6,
+	},
+}
+Library.StyleOrder = { "Standard", "Verre", "Givré", "Mat", "Néon" }
+Library.StyleInfo = {
+	["Standard"] = "Le look d'origine : noir profond, bordures discrètes.",
+	["Verre"]    = "Tout en verre : fenêtre, blocs et boutons translucides, bordures lumineuses et reflet qui balaie la vitre. Garde le flou activé pour l'effet complet.",
+	["Givré"]    = "Verre dépoli : un peu plus opaque, bordures douces et gros flou derrière.",
+	["Mat"]      = "Aplats pleins, sans bordures ni reflets : sobre et très lisible.",
+	["Néon"]     = "Bordures lumineuses à la couleur d'accent, fenêtre sombre qui brille sur les bords.",
+}
+-- valeurs du style actuellement appliqué
+local Sty = {}
+for k, v in pairs(STYLES["Standard"]) do Sty[k] = v end
+
 -- Raccourcis
 local AY      = Enum.AutomaticSize.Y
 local AN      = Enum.AutomaticSize.None
@@ -267,6 +334,59 @@ local function stroke(parent, transparency, thickness)
 		Color = T.Accent, Transparency = transparency or 0.9, Thickness = thickness or 1,
 		ApplyStrokeMode = BORDER,
 	}, parent)
+end
+
+-- Registre des éléments qui changent d'apparence avec le style (lignes, blocs, tiroirs, champs)
+local STYLE_KIND = {
+	row   = { "RowTr", "StrokeTr" },
+	block = { "BlockTr", "BlockStroke" },
+	panel = { "PanelTr", "PanelStroke" },
+	input = { "InputTr", "InputStroke" },
+}
+-- reflet de verre sur les bordures : lumineuse en haut à gauche, qui s'éteint vers le bas à droite
+local GLASS_EDGE = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 0),
+	NumberSequenceKeypoint.new(0.45, 0.5),
+	NumberSequenceKeypoint.new(1, 0.82),
+})
+local styled, stylePrune = {}, 300
+
+local function styleOne(e)
+	local inst, st = e.inst, e.st
+	if not (inst and inst.Parent) then return false end
+	local k = STYLE_KIND[e.kind]
+	inst.BackgroundTransparency = Sty[k[1]]
+	if st then
+		st.Transparency = Sty[k[2]]
+		local g = st:FindFirstChild("GlassGrad")
+		if Sty.Glass then
+			if not g then
+				g = Instance.new("UIGradient")
+				g.Name = "GlassGrad"
+				g.Rotation = 40
+				g.Transparency = GLASS_EDGE
+				g.Parent = st
+			end
+			g.Enabled = true
+		elseif g then
+			g.Enabled = false
+		end
+	end
+	return true
+end
+
+local function trackStyled(inst, st, kind)
+	local e = { inst = inst, st = st, kind = kind }
+	styled[#styled + 1] = e
+	styleOne(e)
+	if #styled >= stylePrune then
+		local keep = {}
+		for _, x in ipairs(styled) do
+			if x.inst and x.inst.Parent then keep[#keep + 1] = x end
+		end
+		styled = keep
+		stylePrune = #styled + 300
+	end
 end
 
 local function label(parent, text, size, props)
@@ -381,12 +501,12 @@ end
 local function hover(f, st, hit)
 	hit = hit or f
 	hit.MouseEnter:Connect(function()
-		tween(f, { BackgroundTransparency = 0.2 }, 0.2)
-		if st then tween(st, { Transparency = 0.72 }, 0.2) end
+		tween(f, { BackgroundTransparency = Sty.RowHot }, 0.2)
+		if st then tween(st, { Transparency = Sty.StrokeHot }, 0.2) end
 	end)
 	hit.MouseLeave:Connect(function()
-		tween(f, { BackgroundTransparency = 0.4 }, 0.3)
-		if st then tween(st, { Transparency = 0.93 }, 0.3) end
+		tween(f, { BackgroundTransparency = Sty.RowTr }, 0.3)
+		if st then tween(st, { Transparency = Sty.StrokeTr }, 0.3) end
 	end)
 end
 
@@ -465,6 +585,69 @@ local function fadeLine(parent, props)
 end
 
 -- ============================================================================
+-- FLOU D'ARRIÈRE-PLAN  (BlurEffect dans Lighting : floute le jeu derrière l'interface)
+-- ============================================================================
+local blurFx
+local blurToken = 0
+local function setBlurTarget(size, instant)
+	blurToken += 1
+	local my = blurToken
+	size = math.clamp(tonumber(size) or 0, 0, 56)
+	if size <= 0 and not (blurFx and blurFx.Parent) then return end
+	if not (blurFx and blurFx.Parent) then
+		local ok, fx = pcall(function()
+			local b = Instance.new("BlurEffect")
+			b.Name = "UILibBlur"
+			b.Size = 0
+			b.Parent = Lighting
+			return b
+		end)
+		if not ok or not fx then return end
+		blurFx = fx
+	end
+	if instant or not Library.Animations then
+		blurFx.Size = size
+		blurFx.Enabled = size > 0
+		return
+	end
+	blurFx.Enabled = true
+	local tw = tween(blurFx, { Size = size }, 0.45)
+	if size <= 0 then
+		tw.Completed:Connect(function()
+			if blurToken == my and blurFx then blurFx.Enabled = false end
+		end)
+	end
+end
+
+function Library:SetBlur(n)
+	Library.BlurSize = math.clamp(tonumber(n) or 0, 0, 56)
+	local w = Library.Window
+	setBlurTarget((w and w.Open) and Library.BlurSize or 0)
+end
+
+-- ============================================================================
+-- STYLES : application
+-- ============================================================================
+function Library:SetStyle(name)
+	local st = STYLES[name]
+	if not st then return false end
+	Library.StyleName = name
+	for k, v in pairs(STYLES["Standard"]) do Sty[k] = v end
+	for k, v in pairs(st) do Sty[k] = v end
+	local keep = {}
+	for _, e in ipairs(styled) do
+		if styleOne(e) then keep[#keep + 1] = e end
+	end
+	styled = keep
+	-- flou proposé par le style (le curseur « Flou » suit)
+	local it = Library.Items["ui.blur"]
+	if it and it.Set then pcall(it.Set, it, Sty.BlurSize) else Library:SetBlur(Sty.BlurSize) end
+	local w = Library.Window
+	if w and w.ApplyStyle then w:ApplyStyle() end
+	return true
+end
+
+-- ============================================================================
 -- NOTIFICATIONS
 -- ============================================================================
 local notifGui, notifHolder, notifList
@@ -525,7 +708,7 @@ function Library:Notify(o)
 	}, notifHolder)
 	local card = new(canvasSupported and "CanvasGroup" or "Frame", {
 		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Position = UDim2.new(0, off, 0, 0),
-		BackgroundColor3 = T.Second, BackgroundTransparency = 0.04, BorderSizePixel = 0,
+		BackgroundColor3 = T.Second, BackgroundTransparency = Sty.NotifTr, BorderSizePixel = 0,
 	}, slot)
 	if canvasSupported then card.GroupTransparency = 1 end
 	corner(card, 10)
@@ -692,6 +875,7 @@ function Library:SetAnimations(v)
 	if w and w.RefreshShape then
 		w:RefreshShape()
 		w:ApplyTitle()
+		if w.ApplyStyle then w:ApplyStyle() end
 	end
 end
 function Library:SetAnimSpeed(v) Library.AnimSpeed = math.clamp(tonumber(v) or 1, 0.25, 4) end
@@ -869,10 +1053,12 @@ function Library:SetOption(name, v)
 	local p = string.sub(name, 1, 4)
 	if p == "Hole" then w:RefreshHole()
 	elseif p == "Titl" then w:ApplyTitle()
+	elseif p == "Star" then w:RefreshSky()
 	else w:RefreshShape() end
 end
 function Library:SetShape(n)
-	if n == "Vague" or n == "Douce" or n == "Classique" then Library:SetOption("Shape", n) end
+	if n == "Vague" then n = "Arrondie" end
+	if n == "Arrondie" or n == "Douce" or n == "Classique" then Library:SetOption("Shape", n) end
 end
 function Library:SetStars(n)
 	Library.StarCount = n
@@ -914,10 +1100,11 @@ function Library:GetTheme()
 		FontScale = Library.FontScale,
 		Font = Library.FontFamily,
 		Shape = Library.Shape,
-		OutlineWaves = Library.OutlineWaves,
-		InnerWaves = Library.InnerWaves,
-		WaveAmp = Library.WaveAmp,
-		WaveSpeed = Library.WaveSpeed,
+		Style = Library.StyleName,
+		BlurSize = Library.BlurSize,
+		StarSpeed = Library.StarSpeed,
+		StarsThroughWindow = Library.StarsThroughWindow,
+		HoleStars = Library.HoleStars,
 		Breathing = Library.Breathing,
 		TitleFont = Library.TitleFont,
 		TitleShine = Library.TitleShine,
@@ -965,17 +1152,14 @@ function Library:ApplyTheme(t)
 	end
 	local function opt(name) return function(v) Library:SetOption(name, v) end end
 	local S = {
+		{ "Style", "ui.style", nil, function(v) Library:SetStyle(v) end },
 		{ "Opacity", "ui.opacity", pct, function(v) if w then w:SetOpacity(v) end end },
 		{ "Radius", "ui.radius", nil, function(v) Library:SetCornerRadius(v) end },
 		{ "WinRound", "ui.winround", pct, opt("WinRound") },
 		{ "Scale", "ui.scale", nil, function(v) if w then w:SetScale(v) end end },
 		{ "FontScale", "ui.fontscale", pct, function(v) Library:SetFontScale(v) end },
 		{ "Font", "ui.fontfamily", nil, function(v) Library:SetFont(v) end },
-		{ "Shape", "ui.shape", nil, function(v) Library:SetShape(v) end },
-		{ "OutlineWaves", "ui.outline", nil, opt("OutlineWaves") },
-		{ "InnerWaves", "ui.innerwaves", nil, opt("InnerWaves") },
-		{ "WaveAmp", "ui.waveamp", pct, opt("WaveAmp") },
-		{ "WaveSpeed", "ui.wavespeed", pct, opt("WaveSpeed") },
+		{ "Shape", "ui.shape", function(v) return v == "Vague" and "Arrondie" or v end, function(v) Library:SetShape(v) end },
 		{ "Breathing", "ui.breath", nil, opt("Breathing") },
 		{ "TitleFont", "ui.titlefont", nil, opt("TitleFont") },
 		{ "TitleShine", "ui.titleshine", nil, opt("TitleShine") },
@@ -985,6 +1169,10 @@ function Library:ApplyTheme(t)
 		{ "HolePos", "ui.holepos", function(v) return N.HolePos[v] or v end, opt("HolePos") },
 		{ "HoleScale", "ui.holescale", pct, opt("HoleScale") },
 		{ "Stars", "ui.stars", nil, function(v) Library:SetStars(v) end },
+		{ "BlurSize", "ui.blur", nil, function(v) Library:SetBlur(v) end },
+		{ "StarSpeed", "ui.starspeed", pct, opt("StarSpeed") },
+		{ "StarsThroughWindow", "ui.starsthrough", nil, opt("StarsThroughWindow") },
+		{ "HoleStars", "ui.holestars", nil, opt("HoleStars") },
 		{ "Background", "ui.bg", function(v) return N.Background[v] or v end, function(v) Library:SetBackground(v) end },
 		{ "Animations", "ui.anim", nil, function(v) Library:SetAnimations(v) end },
 		{ "AnimSpeed", "ui.animspeed", function(v) return tostring(v) .. "x" end, function(v) Library:SetAnimSpeed(v) end },
@@ -1087,8 +1275,16 @@ end
 function Library:_applyFlags(data)
 	-- les réglages d'interface d'abord, pour que le reste s'affiche déjà avec le bon thème
 	local later = {}
+	do
+		local sty = data["ui.style"]
+		local sit = Library.Items["ui.style"]
+		if sty ~= nil and sit and sit.Set then pcall(sit.Set, sit, sty) end
+	end
 	for flag, value in pairs(data) do
-		if string.sub(flag, 1, 3) == "ui." then
+		if flag == "ui.shape" and value == "Vague" then value = "Arrondie" end
+		if flag == "ui.style" then
+			-- déjà appliqué plus haut
+		elseif string.sub(flag, 1, 3) == "ui." then
 			local it = Library.Items[flag]
 			if it and it.Set then pcall(it.Set, it, value) end
 		else
@@ -1178,6 +1374,7 @@ local function makeRow(self, h, name)
 	}, self.Body)
 	corner(f, 8)
 	local st = stroke(f, 0.93)
+	trackStyled(f, st, "row")
 	self:_reg(f, name)
 	return f, st
 end
@@ -1233,7 +1430,7 @@ function Block:CreateParagraph(o)
 		BackgroundTransparency = 0.4, BorderSizePixel = 0,
 	}, self.Body)
 	corner(holder, 8)
-	stroke(holder, 0.93)
+	trackStyled(holder, stroke(holder, 0.93), "row")
 	new("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
 		PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, holder)
 	new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = BYORDER }, holder)
@@ -1286,6 +1483,7 @@ function Block:CreateButton(o)
 	}, self.Body)
 	corner(b, 8)
 	local st = stroke(b, 0.93)
+	trackStyled(b, st, "row")
 	hover(b, st)
 	self:_reg(b, o.Name)
 	local armed, armToken = false, 0
@@ -1302,7 +1500,7 @@ function Block:CreateButton(o)
 					if armed and armToken == my then
 						armed = false
 						b.Text = baseText
-						tween(b, { BackgroundColor3 = T.Element, BackgroundTransparency = 0.4 }, 0.3)
+						tween(b, { BackgroundColor3 = T.Element, BackgroundTransparency = Sty.RowTr }, 0.3)
 					end
 				end)
 				return
@@ -1315,7 +1513,7 @@ function Block:CreateButton(o)
 		b.BackgroundColor3 = T.Accent
 		b.BackgroundTransparency = 0
 		b.TextColor3 = T.Main
-		tween(b, { BackgroundColor3 = T.Element, BackgroundTransparency = 0.4, TextColor3 = T.Text }, 0.5)
+		tween(b, { BackgroundColor3 = T.Element, BackgroundTransparency = Sty.RowTr, TextColor3 = T.Text }, 0.5)
 		fire(o.Callback)
 	end)
 	local item = {}
@@ -1507,6 +1705,7 @@ function Block:CreateDropdown(o)
 	}, holder)
 	corner(head, 8)
 	local hst = stroke(head, 0.93)
+	trackStyled(head, hst, "row")
 	hover(head, hst)
 	label(head, o.Name or "Dropdown", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0.5, -12, 1, 0) })
 	local valL = label(head, "", 12, { Position = UDim2.new(0.5, 0, 0, 0), Size = UDim2.new(0.5, -34, 1, 0),
@@ -1519,7 +1718,7 @@ function Block:CreateDropdown(o)
 		Size = UDim2.new(1, 0, 0, 100), BackgroundColor3 = T.Panel, BackgroundTransparency = 0.1, BorderSizePixel = 0,
 	}, dr.Wrap)
 	corner(panel, 8)
-	stroke(panel, 0.9)
+	trackStyled(panel, stroke(panel, 0.9), "panel")
 	local search = new("TextBox", {
 		Position = UDim2.new(0, 6, 0, 6), Size = UDim2.new(1, -12, 0, 24), BackgroundColor3 = T.Off,
 		BackgroundTransparency = 0.45, Text = "", PlaceholderText = "Rechercher...",
@@ -1755,12 +1954,13 @@ function Block:CreateInput(o)
 	}, f)
 	corner(tb, 6)
 	local tst = stroke(tb, 0.9)
+	trackStyled(tb, tst, "input")
 	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, tb)
 	hover(f, st)
 
 	tb.Focused:Connect(function() tween(tst, { Transparency = 0.35 }, 0.2) end)
 	tb.FocusLost:Connect(function()
-		tween(tst, { Transparency = 0.9 }, 0.3)
+		tween(tst, { Transparency = Sty.InputStroke }, 0.3)
 		fire(o.Callback, tb.Text)
 	end)
 	tb:GetPropertyChangedSignal("Text"):Connect(function()
@@ -1795,6 +1995,7 @@ function Block:CreateKeybind(o)
 	}, f)
 	corner(btn, 6)
 	local bst = stroke(btn, 0.9)
+	trackStyled(btn, bst, "input")
 	hover(f, st)
 
 	local function apply(k, silent)
@@ -1816,7 +2017,7 @@ function Block:CreateKeybind(o)
 				c:Disconnect()
 				listening = false
 				Library._listening = false
-				tween(bst, { Transparency = 0.9 }, 0.3)
+				tween(bst, { Transparency = Sty.InputStroke }, 0.3)
 				if i.KeyCode == Enum.KeyCode.Escape then btn.Text = key.Name else apply(i.KeyCode) end
 			end
 		end)
@@ -1851,6 +2052,7 @@ function Block:CreateColorPicker(o)
 	}, holder)
 	corner(head, 8)
 	local hst = stroke(head, 0.93)
+	trackStyled(head, hst, "row")
 	hover(head, hst)
 	label(head, o.Name or "Color", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -66, 1, 0) })
 	local swatch = new("Frame", {
@@ -1867,7 +2069,7 @@ function Block:CreateColorPicker(o)
 		Size = UDim2.new(1, 0, 0, 146), BackgroundColor3 = T.Panel, BackgroundTransparency = 0.1, BorderSizePixel = 0,
 	}, dr.Wrap)
 	corner(panel, 8)
-	stroke(panel, 0.9)
+	trackStyled(panel, stroke(panel, 0.9), "panel")
 	panel:SetAttribute("NoAccent", true)
 
 	-- Carré saturation / valeur
@@ -1911,6 +2113,7 @@ function Block:CreateColorPicker(o)
 		Font = F_MED, ClearTextOnFocus = false, BorderSizePixel = 0,
 	}, panel)
 	corner(hex, 6)
+	trackStyled(hex, nil, "input")
 
 	local item = {}
 	local function refreshHex()
@@ -2112,7 +2315,7 @@ function Tab:CreateBlock(o)
 		BackgroundColor3 = T.Second, BackgroundTransparency = 0.35, BorderSizePixel = 0, LayoutOrder = self.Order,
 	}, col)
 	corner(frame, 10)
-	stroke(frame, 0.9)
+	trackStyled(frame, stroke(frame, 0.9), "block")
 	new("UIListLayout", { SortOrder = BYORDER }, frame)
 
 	local head = new("TextButton", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Text = "",
@@ -2284,7 +2487,7 @@ function Window:CreateTab(name, _, icon)
 			win.VeilToken = (win.VeilToken or 0) + 1
 			local my = win.VeilToken
 			win.Veil.Visible = true
-			win.Veil.BackgroundTransparency = 0
+			win.Veil.BackgroundTransparency = Sty.VeilTr
 			local tw = tween(win.Veil, { BackgroundTransparency = 1 }, 0.42)
 			tw.Completed:Connect(function()
 				if win.VeilToken == my then win.Veil.Visible = false end
@@ -2461,6 +2664,24 @@ function Window:CreateSettingsTab(name, icon, docked)
 	local function opt(n) return function(v) Library:SetOption(n, v) end end
 	local function optPct(n) return function(v) Library:SetOption(n, v / 100) end end
 
+	-- ───────────── Style ─────────────
+	local ST = tab:CreateBlock({ Name = "Style", Side = "Left" })
+	ST:CreateSection("Style de l'interface")
+	local styleInfo
+	ST:CreateDropdown({ Name = "Style", Flag = "ui.style", Items = Library.StyleOrder, Search = false, Favorite = false,
+		Default = Library.StyleName,
+		Tooltip = "Change tout l'aspect d'un coup : Verre, Givré, Mat, Néon...",
+		Callback = function(v)
+			Library:SetStyle(v)
+			if styleInfo then styleInfo.Set({ Title = v, Content = Library.StyleInfo[v] or "" }) end
+		end })
+	styleInfo = ST:CreateParagraph({ Title = Library.StyleName, Content = Library.StyleInfo[Library.StyleName] or "" })
+	ST:CreateSection("Flou")
+	ST:CreateSlider({ Name = "Flou de l'arrière-plan", Flag = "ui.blur", Min = 0, Max = 40, Step = 1,
+		Default = Library.BlurSize,
+		Tooltip = "Floute le jeu derrière l'interface (0 = aucun). Chaque style propose sa valeur, tu peux la changer.",
+		Callback = function(v) Library:SetBlur(v) end })
+
 	-- ───────────── Thèmes ─────────────
 	local TH = tab:CreateBlock({ Name = "Thèmes", Side = "Left" })
 	TH:CreateSection("Préréglages")
@@ -2513,7 +2734,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	-- ───────────── Couleurs ─────────────
 	local CO = tab:CreateBlock({ Name = "Couleurs", Side = "Right" })
 	CO:CreateColorPicker({ Name = "Accent", Flag = "ui.accent", Default = T.Accent, Favorite = false,
-		Tooltip = "Boutons, curseurs, anneaux, vagues : appliqué en direct.",
+		Tooltip = "Boutons, curseurs, anneaux, étoiles : appliqué en direct.",
 		Callback = function(c) Library:SetColor("Accent", c) end })
 	CO:CreateColorPicker({ Name = "Fond", Flag = "ui.c.main", Default = T.Main, Favorite = false,
 		Callback = function(c) Library:SetColor("Main", c) end })
@@ -2544,19 +2765,23 @@ function Window:CreateSettingsTab(name, icon, docked)
 	A:CreateToggle({ Name = "Titre qui brille", Flag = "ui.titleshine", Default = Library.TitleShine,
 		Tooltip = "Un reflet balaie le titre de temps en temps.", Callback = opt("TitleShine") })
 
-	-- ───────────── Forme & vagues ─────────────
-	local F = tab:CreateBlock({ Name = "Forme & vagues", Side = "Right" })
-	F:CreateDropdown({ Name = "Forme", Flag = "ui.shape", Items = { "Vague", "Douce", "Classique" }, Search = false,
-		Default = Library.Shape, Tooltip = "Vague : contour ondulant + vagues. Douce : très arrondie. Classique : rectangle arrondi.",
+	-- ───────────── Étoiles & forme ─────────────
+	local F = tab:CreateBlock({ Name = "Étoiles & forme", Side = "Right" })
+	F:CreateSection("Étoiles de l'écran")
+	F:CreateSlider({ Name = "Nombre d'étoiles", Flag = "ui.stars", Min = 0, Max = 80, Step = 1,
+		Default = Library.StarCount,
+		Tooltip = "Des étoiles rebondissent sur les bords de l'écran, derrière l'interface.",
+		Callback = function(v) Library:SetStars(v) end })
+	F:CreateSlider({ Name = "Vitesse des étoiles", Flag = "ui.starspeed", Min = 20, Max = 300, Step = 10, Suffix = "%",
+		Default = pct(Library.StarSpeed), Callback = optPct("StarSpeed") })
+	F:CreateToggle({ Name = "Visibles à travers la fenêtre", Flag = "ui.starsthrough", Default = Library.StarsThroughWindow,
+		Tooltip = "Désactivé : les étoiles disparaissent sous la fenêtre, elles ne sont jamais dedans.",
+		Callback = opt("StarsThroughWindow") })
+	F:CreateSection("Forme")
+	F:CreateDropdown({ Name = "Forme", Flag = "ui.shape", Items = { "Arrondie", "Douce", "Classique" }, Search = false,
+		Default = (Library.Shape == "Vague") and "Arrondie" or Library.Shape,
+		Tooltip = "Arrondie : standard. Douce : très arrondie. Classique : rectangle arrondi.",
 		Callback = function(v) Library:SetShape(v) end })
-	F:CreateToggle({ Name = "Contour ondulant", Flag = "ui.outline", Default = Library.OutlineWaves,
-		Tooltip = "Des vagues voyagent autour de la fenêtre (forme Vague).", Callback = opt("OutlineWaves") })
-	F:CreateToggle({ Name = "Vagues intérieures", Flag = "ui.innerwaves", Default = Library.InnerWaves,
-		Tooltip = "Deux vagues douces au fond de la fenêtre (fond animé « Complet »).", Callback = opt("InnerWaves") })
-	F:CreateSlider({ Name = "Amplitude des vagues", Flag = "ui.waveamp", Min = 0, Max = 200, Step = 5, Suffix = "%",
-		Default = pct(Library.WaveAmp), Callback = optPct("WaveAmp") })
-	F:CreateSlider({ Name = "Vitesse des vagues", Flag = "ui.wavespeed", Min = 0, Max = 300, Step = 10, Suffix = "%",
-		Default = pct(Library.WaveSpeed), Callback = optPct("WaveSpeed") })
 	F:CreateToggle({ Name = "Respiration du contour", Flag = "ui.breath", Default = Library.Breathing,
 		Callback = opt("Breathing") })
 
@@ -2572,13 +2797,13 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Default = pct(Library.HoleScale), Callback = optPct("HoleScale") })
 	H:CreateSlider({ Name = "Vitesse de rotation", Flag = "ui.spin", Min = 0, Max = 300, Step = 10, Suffix = "%",
 		Default = pct(Library.SpinSpeed), Callback = optPct("SpinSpeed") })
-	H:CreateSlider({ Name = "Nombre d'étoiles", Flag = "ui.stars", Min = 0, Max = 80, Step = 1,
-		Default = win:GetStars(), Callback = function(v) Library:SetStars(v) end })
+	H:CreateToggle({ Name = "Étoiles aspirées (dans la fenêtre)", Flag = "ui.holestars", Default = Library.HoleStars,
+		Tooltip = "Petites étoiles qui tournent vers le trou noir, à l'intérieur de la fenêtre.", Callback = opt("HoleStars") })
 	local bgKeys = {}
 	for k, v in pairs(N.Background) do bgKeys[v] = k end
 	H:CreateDropdown({ Name = "Fond animé", Flag = "ui.bg", Items = { "Complet", "Léger", "Désactivé" }, Search = false,
 		Default = N.Background[win:GetBackground()] or "Complet",
-		Tooltip = "Désactiver le trou noir, les vagues et les étoiles réduit la charge.",
+		Tooltip = "Désactiver le trou noir et les étoiles réduit la charge.",
 		Callback = function(v) win:SetBackground(bgKeys[v] or "full") end })
 
 	-- ───────────── Animations & performances ─────────────
@@ -2653,7 +2878,9 @@ function Library:CreateWindow(cfg)
 	end
 	refreshTheme()
 	snapshotColors()
-	if cfg.Shape then Library.Shape = cfg.Shape end
+	if cfg.Shape then Library.Shape = (cfg.Shape == "Vague") and "Arrondie" or cfg.Shape end
+	if cfg.Style and STYLES[cfg.Style] then Library:SetStyle(cfg.Style) end
+	if cfg.Blur ~= nil then Library.BlurSize = math.clamp(tonumber(cfg.Blur) or 0, 0, 56) end
 	local transp = tonumber(cfg.Transparency) or 0.04
 	Library.ConfigFolder = cfg.ConfigFolder or Library.ConfigFolder or "Ui-Lib"
 	if cfg.Animations ~= nil then Library.Animations = cfg.Animations and true or false end
@@ -2710,92 +2937,25 @@ function Library:CreateWindow(cfg)
 	mount(gui)
 
 	-- ------------------------------------------------------------------
-	-- Contour ondulant SANS calcul par frame.
-	-- Chaque côté est un cadre qui coupe ce qui dépasse ; dedans, un « rail » de bosses (calottes de cercles) dont les
-	-- hauteurs sont périodiques. Un seul Tween en boucle fait glisser le rail d'une période : la vague voyage et
-	-- c'est le moteur qui travaille, pas le script. Les bosses ne sont recalculées que si l'amplitude change.
-	-- Créé AVANT la fenêtre = dessiné derrière.
+	-- Ciel : étoiles qui rebondissent sur les bords de l'écran, DERRIÈRE la fenêtre.
+	-- Créé AVANT la fenêtre = dessiné derrière. La logique est plus bas (boucle Heartbeat).
 	-- ------------------------------------------------------------------
-	local auraFillTr = math.min(transp, 0.3)
-	local aura = new("Frame", { Name = "Aura", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(W, H),
-		Position = UDim2.fromOffset(center.X, center.Y), BackgroundTransparency = 1, BorderSizePixel = 0 }, gui)
-	local auraScale = new("UIScale", { Scale = 1 }, aura)
-	local STRIP, PILL, SPACING, NP = 22, 48, 26, 5   -- NP bosses par période -> période = 130 px
-	local PERIOD = SPACING * NP
-	local auraEdges = {}
-	for ei = 1, 4 do
-		local strip = new("Frame", { BackgroundTransparency = 1, ClipsDescendants = true, BorderSizePixel = 0 }, aura)
-		local rail = new("Frame", { BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.fromOffset(0, 0) }, strip)
-		auraEdges[ei] = { strip = strip, rail = rail, fill = {}, line = {} }
-	end
-	local auraAmp = -1
-	local function placeAuraPill(ei, idx, amp)
-		local e = auraEdges[ei]
-		local out = math.min(amp * (2 + 7 * (0.5 + 0.5 * math.sin(2 * math.pi * (idx % NP) / NP))), STRIP - 3)
-		local a = idx * SPACING
-		local fx, fy
-		if ei == 1 then fx, fy = a, STRIP - out
-		elseif ei == 2 then fx, fy = out - PILL, a
-		elseif ei == 3 then fx, fy = a, out - PILL
-		else fx, fy = STRIP - out, a end
-		e.fill[idx + 1].Position = UDim2.fromOffset(fx, fy)
-		e.line[idx + 1].Position = UDim2.fromOffset(fx - 1.5, fy - 1.5)
-	end
-	local function addAuraPill(ei)
-		local e = auraEdges[ei]
-		local idx = #e.fill
-		local line = new("Frame", { BackgroundColor3 = T.Accent, BackgroundTransparency = 0.5, BorderSizePixel = 0,
-			Size = UDim2.fromOffset(PILL + 3, PILL + 3), ZIndex = 1 }, e.rail)
-		new("UICorner", { CornerRadius = UDim.new(1, 0) }, line)
-		local fill = new("Frame", { BackgroundColor3 = T.Main, BackgroundTransparency = auraFillTr, BorderSizePixel = 0,
-			Size = UDim2.fromOffset(PILL, PILL), ZIndex = 2 }, e.rail)
-		new("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
-		e.line[#e.line + 1] = line
-		e.fill[#e.fill + 1] = fill
-		placeAuraPill(ei, idx, math.max(auraAmp, 0))
-	end
-	local function setAuraAmp(amp)
-		auraAmp = amp
-		for ei = 1, 4 do
-			for idx = 0, #auraEdges[ei].fill - 1 do placeAuraPill(ei, idx, amp) end
-		end
-	end
-	local auraGeom = ""
-	local function layoutAura(w, h, r)
-		local geom = w .. "x" .. h .. "x" .. r
-		if geom == auraGeom then return end
-		auraGeom = geom
-		local lenH, lenV = math.max(w - 2 * r, 0), math.max(h - 2 * r, 0)
-		auraEdges[1].strip.Position = UDim2.fromOffset(r, -STRIP)
-		auraEdges[1].strip.Size = UDim2.fromOffset(lenH, STRIP)
-		auraEdges[2].strip.Position = UDim2.fromOffset(w, r)
-		auraEdges[2].strip.Size = UDim2.fromOffset(STRIP, lenV)
-		auraEdges[3].strip.Position = UDim2.fromOffset(r, h)
-		auraEdges[3].strip.Size = UDim2.fromOffset(lenH, STRIP)
-		auraEdges[4].strip.Position = UDim2.fromOffset(-STRIP, r)
-		auraEdges[4].strip.Size = UDim2.fromOffset(STRIP, lenV)
-		for ei = 1, 4 do
-			local len = (ei == 1 or ei == 3) and lenH or lenV
-			local n = math.ceil((len + PERIOD + PILL) / SPACING) + 1
-			while #auraEdges[ei].fill < n do addAuraPill(ei) end
-		end
-	end
+	local sky = new("Frame", { Name = "Sky", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+		BorderSizePixel = 0, Visible = false }, gui)
+	local refreshSky       -- défini plus bas
+	local skyTarget = 1    -- 1 = visible (fenêtre ouverte), 0 = s'éteint en fondu
 
 	-- CanvasGroup = fondu d'ouverture, mais coûteux. NoCanvasGroup = true -> simple Frame, beaucoup plus fluide.
 	local useCanvas = canvasSupported and not cfg.NoCanvasGroup and not Library.NoCanvasGroup
 	local main = new(useCanvas and "CanvasGroup" or "Frame", {
 		Name = "MainBackground", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(W, H),
 		Position = UDim2.fromOffset(center.X, center.Y), BackgroundColor3 = T.Main,
-		BackgroundTransparency = transp, BorderSizePixel = 0, ClipsDescendants = true,
+		BackgroundTransparency = 1 - (1 - transp) * Sty.WinAlpha, BorderSizePixel = 0, ClipsDescendants = true,
 	}, gui)
 	local mainCorner = corner(main, 26)
 	local mainEntry = Library.CornerObjects[#Library.CornerObjects]
 	local uiScale = new("UIScale", { Scale = 1 }, main)
 	local scaleBase = 1
-	-- l'aura suit la fenêtre (position, taille, échelle)
-	main:GetPropertyChangedSignal("Position"):Connect(function() aura.Position = main.Position end)
-	main:GetPropertyChangedSignal("Size"):Connect(function() aura.Size = main.Size end)
-	uiScale:GetPropertyChangedSignal("Scale"):Connect(function() auraScale.Scale = uiScale.Scale end)
 
 	-- ------------------------------------------------------------------
 	-- Etat de la fenêtre : position / taille lissées
@@ -2854,41 +3014,23 @@ function Library:CreateWindow(cfg)
 	-- ------------------------------------------------------------------
 	local space = new("Frame", { Name = "Space", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
 		ClipsDescendants = true, BorderSizePixel = 0 }, main)
-	-- Vagues intérieures : deux nappes de petites bosses, glissées par un Tween (aucun calcul par frame)
-	local wavesHolder = new("Frame", { Name = "Waves", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
-		BorderSizePixel = 0 }, space)
-	local INNER_W = 14
-	local innerLayers = {
-		{ tr = 0.95, base = 34, A = 9, N = 12, dir = 1, pxs = 52, pills = {} },
-		{ tr = 0.93, base = 22, A = 7, N = 8, dir = -1, pxs = 70, pills = {} },
-	}
-	for _, ly in ipairs(innerLayers) do
-		ly.period = ly.N * INNER_W
-		ly.rail = new("Frame", { BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.new(0, 1, 1, 0) }, wavesHolder)
-	end
-	local innerAmp = -1
-	local function placeInner(ly, i, amp)
-		ly.pills[i].Position = UDim2.new(0, (i - 1) * INNER_W, 1,
-			-(ly.base + ly.A * amp * math.sin(2 * math.pi * ((i - 1) % ly.N) / ly.N)))
-	end
-	local function setInnerAmp(amp)
-		innerAmp = amp
-		for _, ly in ipairs(innerLayers) do
-			for i = 1, #ly.pills do placeInner(ly, i, amp) end
-		end
-	end
-	local function layoutInner(w)
-		for _, ly in ipairs(innerLayers) do
-			local n = math.ceil((w + ly.period) / INNER_W) + 2
-			while #ly.pills < n do
-				local p = new("Frame", { BackgroundColor3 = T.Accent, BackgroundTransparency = ly.tr, BorderSizePixel = 0,
-					Size = UDim2.fromOffset(INNER_W, 160) }, ly.rail)
-				new("UICorner", { CornerRadius = UDim.new(1, 0) }, p)
-				ly.pills[#ly.pills + 1] = p
-				placeInner(ly, #ly.pills, math.max(innerAmp, 0))
-			end
-		end
-	end
+	-- Style « Verre » : voile de lumière + reflet qui balaie la vitre (visibles seulement dans les styles de verre)
+	local sheen = new("Frame", { Name = "GlassSheen", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0, Visible = false }, main)
+	sheen:SetAttribute("NoAccent", true)
+	corner(sheen, 26)
+	local sheenEntry = Library.CornerObjects[#Library.CornerObjects]
+	new("UIGradient", { Rotation = 35, Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.82), NumberSequenceKeypoint.new(0.4, 0.94),
+		NumberSequenceKeypoint.new(0.7, 1), NumberSequenceKeypoint.new(1, 0.95) }) }, sheen)
+	local glint = new("Frame", { Name = "GlassGlint", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0, Visible = false }, main)
+	glint:SetAttribute("NoAccent", true)
+	corner(glint, 26)
+	local glintEntry = Library.CornerObjects[#Library.CornerObjects]
+	local glintGrad = new("UIGradient", { Rotation = 20, Offset = Vector2.new(-1, 0), Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.42, 1), NumberSequenceKeypoint.new(0.5, 0.9),
+		NumberSequenceKeypoint.new(0.58, 1), NumberSequenceKeypoint.new(1, 1) }) }, glint)
 
 	local HOLE_POS = {
 		TopRight = { 1, -66, 0, 54 }, TopLeft = { 0, 66, 0, 54 }, BottomRight = { 1, -66, 1, -54 },
@@ -2929,11 +3071,10 @@ function Library:CreateWindow(cfg)
 		Transparency = ringSeq() }, coreSt), 110)
 	ring(hole, 210, 26, 1, 0.72, -90, -16)
 
-	-- Étoiles aspirées par le trou noir
+	-- Étoiles aspirées par le trou noir (optionnelles : Library.HoleStars)
 	local rng = Random.new()
 	local stars = {}
-	local starCount = tonumber(cfg.Stars)
-	if starCount == nil then starCount = Library.StarCount end
+	if cfg.Stars ~= nil then Library.StarCount = math.clamp(math.floor(tonumber(cfg.Stars) or 0), 0, 80) end
 	local function respawn(s, w, h, cx, cy)
 		for _ = 1, 6 do
 			s.x, s.y = rng:NextNumber(0, w), rng:NextNumber(0, h)
@@ -2953,7 +3094,7 @@ function Library:CreateWindow(cfg)
 		s.born = os.clock() - rng:NextNumber(0, 1)
 		stars[#stars + 1] = s
 	end
-	for _ = 1, starCount do addStar() end
+	for _ = 1, 22 do addStar() end
 
 	-- Fond animé : "full" (tout), "light" (moitié d'étoiles), "off" (aucun fond, le plus fluide)
 	local bgMode = cfg.Background or "full"
@@ -2961,8 +3102,9 @@ function Library:CreateWindow(cfg)
 	local function applyBg()
 		space.Visible = bgMode ~= "off"
 		starLim = (bgMode == "light") and math.ceil(#stars / 2) or #stars
-		if Library.HoleVisible == false then starLim = 0 end
+		if Library.HoleVisible == false or not Library.HoleStars then starLim = 0 end
 		for n, st in ipairs(stars) do st.f.Visible = n <= starLim end
+		if refreshSky then refreshSky() end
 	end
 	applyBg()
 
@@ -3036,9 +3178,10 @@ function Library:CreateWindow(cfg)
 	}, main)
 	corner(search, 8)
 	local sst = stroke(search, 0.92)
+	trackStyled(search, sst, "input")
 	new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 8) }, search)
 	search.Focused:Connect(function() tween(sst, { Transparency = 0.4 }, 0.2) end)
-	search.FocusLost:Connect(function() tween(sst, { Transparency = 0.92 }, 0.3) end)
+	search.FocusLost:Connect(function() tween(sst, { Transparency = Sty.InputStroke }, 0.3) end)
 
 	local sidebar = new("ScrollingFrame", {
 		Position = UDim2.new(0, 10, 0, 88), Size = UDim2.new(0, 116, 1, -140), BackgroundTransparency = 1,
@@ -3215,11 +3358,7 @@ function Library:CreateWindow(cfg)
 	function win:SetOpacity(o)
 		o = math.clamp(tonumber(o) or 1, 0.1, 1)
 		win.Opacity = o
-		main.BackgroundTransparency = 1 - o
-		auraFillTr = math.min(1 - o, 0.3)
-		for _, e in ipairs(auraEdges) do
-			for _, f in ipairs(e.fill) do f.BackgroundTransparency = auraFillTr end
-		end
+		main.BackgroundTransparency = 1 - o * (Sty.WinAlpha or 1)
 	end
 	function win:SetStats(v)
 		statsOn = v and true or false
@@ -3242,62 +3381,47 @@ function Library:CreateWindow(cfg)
 	-- Ouverture / fermeture animées, échelle
 	-- ------------------------------------------------------------------
 	-- ------------------------------------------------------------------
-	-- Forme de la fenêtre (rayon, contour ondulant, vagues), trou noir, étoiles
+	-- Forme de la fenêtre (rayon), style (verre), trou noir, étoiles
 	-- ------------------------------------------------------------------
-	local SHAPE_RADIUS = { Vague = 26, Douce = 34, Classique = 12 }
+	local SHAPE_RADIUS = { Arrondie = 26, Douce = 34, Classique = 12 }
 	local lastHolePos = Library.HolePos
-	local waveTweens, waveKey = {}, ""
-	local function stopWaveTweens()
-		for _, tw in ipairs(waveTweens) do tw:Cancel() end
-		table.clear(waveTweens)
-	end
-	local function loopTween(obj, from, to, period)
-		obj.Position = from
-		local tw = TweenService:Create(obj, TweenInfo.new(period, LINEAR, OUT, -1), { Position = to })
-		tw:Play()
-		waveTweens[#waveTweens + 1] = tw
-	end
-	local function refreshWaves(auraOn, innerOn)
-		local amp = Library.WaveAmp or 1
-		if amp ~= auraAmp then setAuraAmp(amp) end
-		if amp ~= innerAmp then setInnerAmp(amp) end
-		local speed = Library.WaveSpeed or 1
-		local anim = Library.Animations and speed > 0
-		local key = tostring(auraOn) .. tostring(innerOn) .. tostring(anim) .. tostring(speed)
-		if key == waveKey then return end
-		waveKey = key
-		stopWaveTweens()
-		if not anim then return end
-		if auraOn then
-			local pr = PERIOD / (46 * speed)
-			loopTween(auraEdges[1].rail, UDim2.fromOffset(-PERIOD, 0), UDim2.fromOffset(0, 0), pr)   -- haut : vers la droite
-			loopTween(auraEdges[2].rail, UDim2.fromOffset(0, -PERIOD), UDim2.fromOffset(0, 0), pr)   -- droite : vers le bas
-			loopTween(auraEdges[3].rail, UDim2.fromOffset(0, 0), UDim2.fromOffset(-PERIOD, 0), pr)   -- bas : vers la gauche
-			loopTween(auraEdges[4].rail, UDim2.fromOffset(0, 0), UDim2.fromOffset(0, -PERIOD), pr)   -- gauche : vers le haut
-		end
-		if innerOn then
-			for _, ly in ipairs(innerLayers) do
-				local pr = ly.period / (ly.pxs * speed)
-				if ly.dir > 0 then
-					loopTween(ly.rail, UDim2.fromOffset(-ly.period, 0), UDim2.fromOffset(0, 0), pr)
-				else
-					loopTween(ly.rail, UDim2.fromOffset(0, 0), UDim2.fromOffset(-ly.period, 0), pr)
-				end
-			end
+
+	function win:RefreshShape()
+		local shape = Library.Shape
+		if shape == "Vague" then shape = "Arrondie" end
+		local base = (SHAPE_RADIUS[shape] or 26) * (Library.WinRound or 1)
+		mainEntry.BaseRadius = base
+		horizonEntry.BaseRadius = math.max(base - 1, 0)
+		sheenEntry.BaseRadius = base
+		glintEntry.BaseRadius = base
+		for _, e in ipairs({ mainEntry, horizonEntry, sheenEntry, glintEntry }) do
+			e.Corner.CornerRadius = UDim.new(0, math.floor(e.BaseRadius * Library.GlobalCornerValue / 10))
 		end
 	end
 
-	function win:RefreshShape()
-		local base = (SHAPE_RADIUS[Library.Shape] or 26) * (Library.WinRound or 1)
-		mainEntry.BaseRadius = base
-		horizonEntry.BaseRadius = math.max(base - 1, 0)
-		for _, e in ipairs({ mainEntry, horizonEntry }) do
-			e.Corner.CornerRadius = UDim.new(0, math.floor(e.BaseRadius * Library.GlobalCornerValue / 10))
+	-- Style : opacité de la fenêtre, bordure, voile + reflet de verre
+	local glintTw
+	local function refreshGlass()
+		sheen.Visible = Sty.Glass == true
+		if glintTw then
+			glintTw:Cancel()
+			glintTw = nil
 		end
-		local alive = main.Visible and win.Open and bgMode ~= "off"
-		aura.Visible = alive and Library.Shape == "Vague" and Library.OutlineWaves ~= false
-		wavesHolder.Visible = alive and Library.Shape ~= "Classique" and Library.InnerWaves ~= false and bgMode == "full"
-		refreshWaves(aura.Visible, wavesHolder.Visible)
+		local show = Sty.Glass == true and Library.Animations
+		glint.Visible = show and true or false
+		if show then
+			glintGrad.Offset = Vector2.new(-1, 0)
+			glintTw = TweenService:Create(glintGrad,
+				TweenInfo.new(5.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, false, 2.5),
+				{ Offset = Vector2.new(1, 0) })
+			glintTw:Play()
+		end
+	end
+	function win:ApplyStyle()
+		win:SetOpacity(win.Opacity)
+		hst.Thickness = Sty.EdgeThick
+		if not Library.Breathing then hst.Transparency = Sty.Edge end
+		refreshGlass()
 	end
 
 	-- Titre : police au choix + reflet qui balaie (un seul Tween en boucle)
@@ -3335,26 +3459,15 @@ function Library:CreateWindow(cfg)
 		applyBg()
 	end
 	function win:SetStars(n)
-		n = math.clamp(math.floor(tonumber(n) or 0), 0, 80)
-		while #stars < n do addStar() end
-		while #stars > n do
-			local s = table.remove(stars)
-			s.f:Destroy()
-		end
-		applyBg()
+		Library.StarCount = math.clamp(math.floor(tonumber(n) or 0), 0, 80)
+		if refreshSky then refreshSky() end
 	end
-	function win:GetStars() return #stars end
+	function win:GetStars() return Library.StarCount end
+	function win:RefreshSky() if refreshSky then refreshSky() end end
 	main:GetPropertyChangedSignal("Visible"):Connect(function()
 		win:RefreshShape()
 		win:ApplyTitle()
 	end)
-
-	local function stepWaves(w, h)
-		if aura.Visible then
-			layoutAura(w, h, math.min(mainCorner.CornerRadius.Offset, h / 2, w / 2))
-		end
-		if wavesHolder.Visible and not collapsed then layoutInner(w) end
-	end
 
 	local toggleToken = 0
 	local hintShown = false
@@ -3364,6 +3477,9 @@ function Library:CreateWindow(cfg)
 		v = v and true or false
 		if v == self.Open then return end
 		self.Open = v
+		skyTarget = v and 1 or 0
+		if v and refreshSky then refreshSky() end
+		setBlurTarget(v and Library.BlurSize or 0)
 		toggleToken = toggleToken + 1
 		local my = toggleToken
 		if v then
@@ -3528,9 +3644,8 @@ function Library:CreateWindow(cfg)
 			sp.a = ((sp.a or 0) + step * sp.speed * (Library.SpinSpeed or 1)) % 360
 			sp.g.Rotation = sp.a
 		end
-		hst.Transparency = Library.Breathing and (0.34 + 0.16 * math.sin(now * 1.7)) or 0.3
+		hst.Transparency = Library.Breathing and math.clamp(Sty.Edge + 0.04 + 0.16 * math.sin(now * 1.7), 0, 1) or Sty.Edge
 		local w, h = main.Size.X.Offset, main.Size.Y.Offset
-		stepWaves(w, h)
 		if collapsed then return end
 		local cx, cy = holeCenter(w, h)
 		for n = 1, starLim do
@@ -3551,6 +3666,89 @@ function Library:CreateWindow(cfg)
 			end
 		end
 	end))
+
+	-- ------------------------------------------------------------------
+	-- Ciel : étoiles qui rebondissent sur les bords de l'écran (derrière la fenêtre, jamais dedans)
+	-- ------------------------------------------------------------------
+	local skyRng = Random.new()
+	local skyStars = {}
+	local skyLim, skyFade, skyAcc = 0, 0, 0
+
+	local function newSkyStar()
+		local sz = skyRng:NextInteger(2, 4)
+		local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(sz, sz),
+			BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, sky)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
+		local halo
+		if sz >= 3 then
+			halo = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(sz * 4, sz * 4), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
+				BorderSizePixel = 0 }, f)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, halo)
+		end
+		local v = viewport()
+		local ang = skyRng:NextNumber(0, math.pi * 2)
+		local spd = skyRng:NextNumber(24, 80)
+		local vx, vy = math.cos(ang) * spd, math.sin(ang) * spd
+		-- jamais presque horizontale / verticale : sinon l'étoile reste coincée sur une ligne
+		if math.abs(vx) < 12 then vx = (vx < 0) and -12 or 12 end
+		if math.abs(vy) < 12 then vy = (vy < 0) and -12 or 12 end
+		skyStars[#skyStars + 1] = {
+			f = f, halo = halo, x = skyRng:NextNumber(0, v.X), y = skyRng:NextNumber(0, v.Y), vx = vx, vy = vy,
+			a = skyRng:NextNumber(0.35, 0.95), ph = skyRng:NextNumber(0, 6.28), ts = skyRng:NextNumber(0.8, 2.4), vis = 0,
+		}
+	end
+
+	refreshSky = function()
+		local want = math.clamp(math.floor(tonumber(Library.StarCount) or 0), 0, 80)
+		while #skyStars < want do newSkyStar() end
+		while #skyStars > want do
+			local st = table.remove(skyStars)
+			st.f:Destroy()
+		end
+		local n = want
+		if bgMode == "light" then n = math.ceil(want / 2) end
+		if bgMode == "off" then n = 0 end
+		skyLim = n
+		for i, st in ipairs(skyStars) do st.f.Visible = i <= n end
+		sky.Visible = n > 0 and (skyTarget > 0 or skyFade > 0.01)
+	end
+
+	track(RunService.Heartbeat:Connect(function(dt)
+		skyFade = skyFade + (skyTarget - skyFade) * (1 - math.exp(-dt * 7))
+		if skyTarget == 0 and skyFade < 0.01 then
+			skyFade = 0
+			if sky.Visible then sky.Visible = false end
+			return
+		end
+		if skyLim <= 0 then return end
+		skyAcc = skyAcc + dt
+		if skyAcc < 1 / 40 then return end
+		local dtS = math.min(skyAcc, 0.1)
+		skyAcc = 0
+		local move = dtS * (Library.StarSpeed or 1)
+		local v = viewport()
+		local vw, vh = v.X, v.Y
+		local ap, as = main.AbsolutePosition, main.AbsoluteSize
+		local hideUnder = (not Library.StarsThroughWindow) and main.Visible
+		local now = os.clock()
+		for i = 1, skyLim do
+			local st = skyStars[i]
+			local x, y = st.x + st.vx * move, st.y + st.vy * move
+			local vx, vy = st.vx, st.vy
+			if x < 0 then x, vx = -x, math.abs(vx) elseif x > vw then x, vx = 2 * vw - x, -math.abs(vx) end
+			if y < 0 then y, vy = -y, math.abs(vy) elseif y > vh then y, vy = 2 * vh - y, -math.abs(vy) end
+			x, y = math.clamp(x, 0, vw), math.clamp(y, 0, vh)
+			st.x, st.y, st.vx, st.vy = x, y, vx, vy
+			local inside = hideUnder and x > ap.X - 3 and x < ap.X + as.X + 3 and y > ap.Y - 3 and y < ap.Y + as.Y + 3
+			st.vis = st.vis + ((inside and 0 or 1) - st.vis) * math.min(1, dtS * 9)
+			local alpha = st.a * (0.7 + 0.3 * math.sin(now * st.ts + st.ph)) * st.vis * skyFade
+			st.f.Position = UDim2.fromOffset(math.floor(x + 0.5), math.floor(y + 0.5))
+			st.f.BackgroundTransparency = 1 - alpha
+			if st.halo then st.halo.BackgroundTransparency = 1 - alpha * 0.18 end
+		end
+	end))
+	refreshSky()
 
 	-- Animation d'apparition
 	if useCanvas then main.GroupTransparency = 1 end
@@ -3580,6 +3778,8 @@ function Library:CreateWindow(cfg)
 	win:RefreshShape()
 	win:RefreshHole()
 	win:ApplyTitle()
+	win:ApplyStyle()
+	setBlurTarget(Library.BlurSize)
 	Library.DefaultTheme = Library:GetTheme()
 	Library._autoDone = false
 	if cfg.AutoLoad ~= false then
@@ -3608,6 +3808,12 @@ function Library:Destroy()
 	table.clear(Library.Defaults)
 	Library._titleGrad = nil
 	tipLabel, tipShown = nil, false
+	table.clear(styled)
+	blurToken += 1
+	if blurFx then
+		pcall(function() blurFx:Destroy() end)
+		blurFx = nil
+	end
 	Library._autoDone = false
 end
 
