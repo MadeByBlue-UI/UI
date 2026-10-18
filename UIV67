@@ -94,6 +94,20 @@
 		• Pause du minuteur au survol, swipe latéral pour fermer, doublons regroupés (badge x2, x3...),
 		  boutons d'action (Actions = {...}), OnClick / OnDismiss, mode « Ne pas déranger », historique
 		  (Window:CreateNotifLogTab), 6 positions (haut / bas x gauche / centre / droite), couleurs par type.
+
+	─────────────  V6 : TROU NOIR À LA FERMETURE, PASTILLE +N, SONS, PALETTE (Ctrl+K)  ─────────────
+		• Fermeture d'une notification : effet « aspiré par le trou noir » (carte étirée qui tourne et disparaît dans
+		  un mini trou noir, étincelles en spirale, onde de choc). Library.NotifBlackHole = false pour le couper
+		  (le swipe latéral garde son glissement). Réglages > Notifications.
+		• Au-delà du maximum affiché (NotifMax) les plus anciennes ne sont plus fermées : elles sont masquées (minuteur en
+		  pause) et une pastille « +3 » apparaît. Clic sur la pastille = tout vider. Library.NotifOverflow = "Close" pour
+		  retrouver l'ancien comportement. Library:SetNotifMax(n) / SetNotifOverflow("Pill" | "Close").
+		• Un son par type (Info / Succès / Alerte / Erreur) : Réglages > Sons des notifications (liste de sons, ID perso,
+		  fichier du workspace, volume). Library:SetNotifSound("Error", "Basse") / PlayNotifSound(type).
+		• Palette de commandes : Ctrl+K ouvre une roue de 10 cases au milieu de l'écran (curseur libre).
+		  1-0 ou clic pour choisir, Tab = filtre (Tout / Favoris / Boutons / Toggles / Réglages), molette ou flèches = page,
+		  / = recherche, Échap = retour. Boutons lancés, toggles basculés, curseurs / listes / champs / couleurs / touches
+		  réglés sans ouvrir la fenêtre. Library:OpenPalette() / ClosePalette() / TogglePalette(). { Palette = false } exclut un élément.
 ]]
 
 local Players      = game:GetService("Players")
@@ -123,6 +137,7 @@ local Library = {
 	NotifDuration     = 4,
 	Favorites         = {},
 	FavEntries        = {},
+	CmdEntries        = {},    -- éléments disponibles dans la palette de commandes (Ctrl+K)
 	FavStars          = {},
 	Shape              = "Arrondie", -- "Arrondie" | "Douce" | "Classique"
 	StyleName          = "Standard", -- "Standard" | "Verre" | "Givré" | "Mat" | "Néon"
@@ -772,6 +787,318 @@ local function notifKindColor(kind)
 	return Library.NotifColors[kind]
 end
 
+local V6 = {}
+do
+-- ============================================================================
+-- V6 : SONS PAR TYPE · PASTILLE « +N » · EFFET « TROU NOIR » À LA FERMETURE
+-- ============================================================================
+
+-- ───────────── Sons (un par type, réglables dans Paramètres > Sons des notifications) ─────────────
+-- Les sons « rbxasset:// » viennent du dossier de contenu du client Roblox. Si l'un manque sur ta version,
+-- choisis « Personnalisé » et donne un ID (123456), un rbxassetid://..., ou un fichier du workspace (mon_son.mp3).
+local SOUND_PRESETS = {
+	{ Name = "Aucun" },
+	{ Name = "Ping",          Id = "rbxasset://sounds/electronicpingshort.wav", Speed = 1 },
+	{ Name = "Ping aigu",     Id = "rbxasset://sounds/electronicpingshort.wav", Speed = 1.45 },
+	{ Name = "Ping grave",    Id = "rbxasset://sounds/electronicpingshort.wav", Speed = 0.7 },
+	{ Name = "Clic",          Id = "rbxasset://sounds/clickfast.wav", Speed = 1 },
+	{ Name = "Interrupteur",  Id = "rbxasset://sounds/switch.wav", Speed = 1 },
+	{ Name = "Claquement",    Id = "rbxasset://sounds/snap.mp3", Speed = 1 },
+	{ Name = "Basse",         Id = "rbxasset://sounds/bass.wav", Speed = 1 },
+	{ Name = "Victoire",      Id = "rbxasset://sounds/victory.wav", Speed = 1 },
+	{ Name = "Uh-oh",         Id = "rbxasset://sounds/uuhhh.mp3", Speed = 1 },
+	{ Name = "Personnalisé" },
+}
+local SOUND_BY_NAME, SOUND_NAMES = {}, {}
+for _, p in ipairs(SOUND_PRESETS) do
+	SOUND_BY_NAME[p.Name] = p
+	SOUND_NAMES[#SOUND_NAMES + 1] = p.Name
+end
+Library.SoundPresetNames = SOUND_NAMES
+Library.NotifSound  = true
+Library.NotifVolume = 0.6
+Library.NotifSounds = {
+	Info    = { Preset = "Ping",         Custom = "" },
+	Success = { Preset = "Ping aigu",    Custom = "" },
+	Warning = { Preset = "Interrupteur", Custom = "" },
+	Error   = { Preset = "Basse",        Custom = "" },
+	Loading = { Preset = "Aucun",        Custom = "" },
+}
+Library.NotifBlackHole = true      -- effet « aspiré par le trou noir » à la fermeture
+Library.NotifOverflow  = "Pill"    -- "Pill" = pastille +N au-delà du max | "Close" = ferme les plus anciennes
+Library._silentSound   = 0         -- >0 : pas d'aperçu sonore (chargement d'une config)
+
+local notifSoundObjs, lastSndAt = {}, 0
+
+local function resolveSound(spec)
+	if type(spec) ~= "table" then return nil end
+	if spec.Preset == "Personnalisé" then
+		local c = tostring(spec.Custom or ""):match("^%s*(.-)%s*$")
+		if c == "" then return nil end
+		if tonumber(c) then return "rbxassetid://" .. c, 1 end
+		if c:find("^rbx") then return c, 1 end
+		local ok, r = pcall(function()
+			if isfile and getcustomasset and isfile(c) then return getcustomasset(c) end
+		end)
+		if ok and r then return r, 1 end
+		return nil
+	end
+	local p = SOUND_BY_NAME[spec.Preset]
+	if p and p.Id then return p.Id, p.Speed or 1 end
+	return nil
+end
+
+local function playNotifSound(kind, preview)
+	if not preview then
+		if not Library.NotifSound then return end
+		local now = os.clock()
+		if now - lastSndAt < 0.12 then return end
+		lastSndAt = now
+	end
+	local id, speed = resolveSound(Library.NotifSounds[kind])
+	if not id then return end
+	ensureNotif()
+	local s = notifSoundObjs[kind]
+	if not (s and s.Parent) then
+		s = Instance.new("Sound")
+		s.Name = "Snd" .. tostring(kind)
+		s.Parent = notifGui
+		notifSoundObjs[kind] = s
+	end
+	if s.SoundId ~= id then s.SoundId = id end
+	s.PlaybackSpeed = speed or 1
+	s.Volume = math.clamp(tonumber(Library.NotifVolume) or 0.6, 0, 1)
+	s.TimePosition = 0
+	s:Play()
+end
+
+function Library:PlayNotifSound(kind) playNotifSound(NOTIF_ICON[kind] and kind or "Info", true) end
+function Library:GetSoundPresets() return table.clone(SOUND_NAMES) end
+
+-- Library:SetNotifSound("Error", "Basse")  |  Library:SetNotifSound("Success", "123456789")  (ID perso)
+function Library:SetNotifSound(kind, preset, custom)
+	local spec = Library.NotifSounds[kind]
+	if not spec then return false end
+	if SOUND_BY_NAME[preset] then
+		spec.Preset = preset
+		if custom ~= nil then spec.Custom = tostring(custom) end
+	elseif preset ~= nil then
+		spec.Preset, spec.Custom = "Personnalisé", tostring(preset)
+	end
+	return true
+end
+function Library:SetNotifSoundEnabled(v) Library.NotifSound = v and true or false end
+function Library:SetNotifVolume(v) Library.NotifVolume = math.clamp(tonumber(v) or 0.6, 0, 1) end
+
+-- ───────────── Pastille « +N » (notifications masquées au-delà du maximum) ─────────────
+local pillHost, pillBtn, pillScale, pillGrad
+local pillCount = 0
+
+local function pillAlign()
+	local _, left, center = notifSide()
+	return center and 0.5 or (left and 0 or 1)
+end
+
+local function ensurePill()
+	if pillHost and pillHost.Parent then return end
+	ensureNotif()
+	pillHost = new("Frame", { Name = "OverflowPill", Size = UDim2.fromOffset(112, 30), BackgroundTransparency = 1,
+		BorderSizePixel = 0, Visible = false }, notifHolder)
+	pillBtn = new("TextButton", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(64, 26), BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.04,
+		Text = "+1", TextColor3 = T.Text, TextSize = 12, Font = F_BOLD, AutoButtonColor = false,
+		BorderSizePixel = 0 }, pillHost)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, pillBtn)
+	local st = new("UIStroke", { Color = T.Accent, Thickness = 1.5, Transparency = 0.25, ApplyStrokeMode = BORDER }, pillBtn)
+	pillGrad = new("UIGradient", { Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(70, 70, 78)),
+		Transparency = ringSeq() }, st)
+	TweenService:Create(pillGrad, TweenInfo.new(3.5, LINEAR, OUT, -1), { Rotation = 360 }):Play()
+	pillScale = new("UIScale", { Scale = 1 }, pillBtn)
+	local function txt(hover) pillBtn.Text = "+" .. pillCount .. (hover and "  ·  vider" or "") end
+	pillBtn.MouseEnter:Connect(function()
+		txt(true)
+		tween(pillBtn, { Size = UDim2.fromOffset(108, 26) }, 0.25)
+	end)
+	pillBtn.MouseLeave:Connect(function()
+		txt(false)
+		tween(pillBtn, { Size = UDim2.fromOffset(64, 26) }, 0.25)
+	end)
+	pillBtn.MouseButton1Click:Connect(function()
+		for _, e in ipairs(table.clone(notifEntries)) do
+			if e.hidden and not e.dead then pcall(e.handle.Dismiss) end
+		end
+	end)
+end
+
+local function updatePill(n)
+	if n <= 0 then
+		if pillHost and pillHost.Visible and pillCount > 0 then
+			pillCount = 0
+			-- la pastille est « aspirée » à son tour
+			tween(pillScale, { Scale = 0 }, 0.3, BACK, Enum.EasingDirection.In)
+			local host = pillHost
+			task.delay(0.32 / math.max(Library.AnimSpeed or 1, 0.05), function()
+				if pillCount == 0 and host.Parent then host.Visible = false end
+			end)
+		end
+		return
+	end
+	ensurePill()
+	local top = notifSide()
+	local ax = pillAlign()
+	pillHost.LayoutOrder = top and 1000000000 or -1000000000
+	pillBtn.AnchorPoint = Vector2.new(ax, 0.5)
+	pillBtn.Position = UDim2.new(ax, 0, 0.5, 0)
+	local grew = n ~= pillCount
+	local first = not pillHost.Visible
+	pillCount = n
+	pillBtn.Text = "+" .. n
+	pillHost.Visible = true
+	if first then
+		pillScale.Scale = 0
+		tween(pillScale, { Scale = 1 }, 0.45, BACK)
+	elseif grew then
+		pillScale.Scale = 1.3
+		tween(pillScale, { Scale = 1 }, 0.45, BACK)
+	end
+end
+
+-- Cache les plus anciennes au-delà du max (leur minuteur est mis en pause) et met la pastille à jour
+local function refreshStack()
+	if not notifHolder then return end
+	local max = math.max(math.floor(tonumber(Library.NotifMax) or 5), 1)
+	local live = {}
+	for _, e in ipairs(notifEntries) do
+		if not e.dead then live[#live + 1] = e end
+	end
+	local nHidden = (Library.NotifOverflow == "Pill") and math.max(#live - max, 0) or 0
+	for idx, e in ipairs(live) do
+		if e.setHidden then e.setHidden(idx <= nHidden) end
+	end
+	updatePill(nHidden)
+end
+
+function Library:SetNotifMax(n)
+	Library.NotifMax = math.clamp(math.floor(tonumber(n) or 5), 1, 12)
+	if Library.NotifOverflow == "Pill" then
+		refreshStack()
+	else
+		while #activeNotifs > Library.NotifMax do activeNotifs[1]() end
+	end
+end
+
+function Library:SetNotifOverflow(m)
+	Library.NotifOverflow = (m == "Close" or m == false) and "Close" or "Pill"
+	refreshStack()
+	if Library.NotifOverflow == "Close" then
+		while #activeNotifs > math.max(tonumber(Library.NotifMax) or 5, 1) do activeNotifs[1]() end
+	end
+end
+
+function Library:SetNotifBlackHole(v) Library.NotifBlackHole = v and true or false end
+
+-- ───────────── Effet « aspiré par le trou noir » ─────────────
+-- Un petit trou noir apparaît sur la carte, qui se tord, tourne sur elle-même et s'engouffre dedans ;
+-- quelques étincelles spiralent vers le centre, puis une onde de choc referme tout.
+local function blackHoleOut(slot, card, cardScale, h, accent)
+	local k = 1 / math.max(Library.AnimSpeed or 1, 0.05)
+	local cw = card.AbsoluteSize.X / math.max(cardScale.Scale, 0.01)
+	if cw < 10 then cw = Library.NotifWidth or 300 end
+	local cy = h / 2
+	local dirSpin = (math.random() < 0.5) and -1 or 1
+	local IN = Enum.EasingDirection.In
+
+	-- on fige la carte et on la recentre pour qu'elle tourne autour de son milieu
+	card.AutomaticSize = AN
+	card.Size = UDim2.new(1, 0, 0, h)
+	card.AnchorPoint = Vector2.new(0.5, 0.5)
+	card.Position = UDim2.new(0.5, 0, 0, cy)
+
+	local sing = new("Frame", { Name = "Singularity", AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0, cy), Size = UDim2.fromOffset(0, 0),
+		BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0, ZIndex = 30 }, slot)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, sing)
+	local sst = new("UIStroke", { Color = accent, Thickness = 2, Transparency = 0.05 }, sing)
+	local sgr = new("UIGradient", { Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(70, 70, 78)),
+		Transparency = ringSeq() }, sst)
+	TweenService:Create(sgr, TweenInfo.new(0.8 * k, LINEAR, OUT), { Rotation = 360 * dirSpin }):Play()
+
+	local halo = new("Frame", { Name = "Halo", AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0, cy), Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1,
+		BorderSizePixel = 0, ZIndex = 29 }, slot)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, halo)
+	local hst = new("UIStroke", { Color = accent, Thickness = 1.5, Transparency = 0.35 }, halo)
+
+	-- 1) le trou noir s'ouvre, la carte frémit
+	tween(sing, { Size = UDim2.fromOffset(30, 30) }, 0.25, BACK)
+	tween(halo, { Size = UDim2.fromOffset(84, 84) }, 0.45)
+	tween(hst, { Transparency = 1 }, 0.5)
+	tween(card, { Rotation = -4 * dirSpin }, 0.12)
+	tween(cardScale, { Scale = 1.03 }, 0.12)
+
+	-- 2) la carte est étirée, tourne et disparaît dans le trou
+	task.delay(0.12 * k, function()
+		if not card.Parent then return end
+		tween(card, { Rotation = 220 * dirSpin, Size = UDim2.new(0.3, 0, 0, h * 1.15) }, 0.5, QUINT, IN)
+		tween(cardScale, { Scale = 0.02 }, 0.5, QUINT, IN)
+		task.delay(0.08 * k, function()
+			if not card.Parent then return end
+			if canvasSupported then tween(card, { GroupTransparency = 1 }, 0.4)
+			else tween(card, { BackgroundTransparency = 1 }, 0.4) end
+		end)
+	end)
+
+	-- 3) étincelles en spirale
+	local parts = {}
+	for i = 1, 10 do
+		local sz = (i % 3 == 0) and 4 or 3
+		local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(sz, sz),
+			BackgroundColor3 = (i % 2 == 0) and accent or Color3.new(1, 1, 1), BackgroundTransparency = 1,
+			BorderSizePixel = 0, ZIndex = 28 }, slot)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
+		parts[i] = { f = f, a = math.random() * math.pi * 2, r = 40 + math.random() * math.max(cw / 2 - 50, 20),
+			d = 0.08 + math.random() * 0.3, s = 3 + math.random() * 3 }
+	end
+	task.spawn(function()
+		local t0 = os.clock()
+		while slot.Parent do
+			local t = (os.clock() - t0) / k
+			if t > 1.05 then break end
+			for _, p in ipairs(parts) do
+				local u = math.clamp((t - p.d) / 0.5, 0, 1)
+				if u > 0 then
+					local ease = u * u
+					local rad = p.r * (1 - ease)
+					local ang = p.a + p.s * ease
+					p.f.Position = UDim2.new(0.5, math.cos(ang) * rad, 0, cy + math.sin(ang) * rad * 0.55)
+					local tr = 1 - math.min(u * 6, 1) * 0.9
+					if u > 0.8 then tr = math.min(1, 0.1 + (u - 0.8) * 4.5) end
+					p.f.BackgroundTransparency = tr
+				end
+			end
+			RunService.Heartbeat:Wait()
+		end
+		for _, p in ipairs(parts) do p.f:Destroy() end
+	end)
+
+	-- 4) le trou noir se referme dans une onde de choc, la place se résorbe
+	task.delay(0.55 * k, function()
+		if not sing.Parent then return end
+		tween(sing, { Size = UDim2.fromOffset(0, 0) }, 0.22, QUINT, IN)
+		tween(sst, { Transparency = 1 }, 0.22)
+		halo.Size = UDim2.fromOffset(24, 24)
+		hst.Transparency = 0.15
+		tween(halo, { Size = UDim2.fromOffset(64, 64) }, 0.4)
+		tween(hst, { Transparency = 1 }, 0.4)
+	end)
+	task.delay(0.5 * k, function()
+		if slot.Parent then tween(slot, { Size = UDim2.new(1, 0, 0, 0) }, 0.3) end
+	end)
+end
+
+	V6.play, V6.refresh, V6.hole = playNotifSound, refreshStack, blackHoleOut
+end
+
 function Library:Notify(o)
 	if type(o) ~= "table" then o = { Content = tostring(o) } end
 	local kind = NOTIF_ICON[o.Type] and o.Type or "Info"
@@ -792,12 +1119,14 @@ function Library:Notify(o)
 		for _, e in ipairs(notifEntries) do
 			if not e.dead and e.stackable and e.key == key then
 				e.bump()
+				V6.play(kind)
 				return e.handle
 			end
 		end
 	end
 
 	ensureNotif()
+	V6.play(kind)
 	notifCount = notifCount + 1
 	local top, left, center = notifSide()
 	local width = Library.NotifWidth or 300
@@ -1001,6 +1330,13 @@ function Library:Notify(o)
 	-- ---------------------------------------------------------------- minuteur
 	runTimer = function()
 		if mode ~= "timer" or dead then return end
+		if entry and entry.hidden then
+			-- masquée derrière la pastille +N : le minuteur démarre quand elle redevient visible
+			paused = true
+			startedAt = os.clock()
+			fill.Size = UDim2.new(math.clamp(remaining / dur, 0, 1), 0, 1, 0)
+			return
+		end
 		token += 1
 		local my = token
 		stopBar()
@@ -1071,10 +1407,32 @@ function Library:Notify(o)
 		end
 		if o.OnDismiss then fire(o.OnDismiss, reason or "api") end
 
+		local function dropCorner()
+			for idx, c in ipairs(Library.CornerObjects) do
+				if c.Corner == cardCorner then table.remove(Library.CornerObjects, idx) break end
+			end
+		end
+		task.defer(V6.refresh)   -- une notification masquée peut reprendre sa place, la pastille se met à jour
+		if entry.hidden then
+			dropCorner()
+			slot:Destroy()
+			return
+		end
 		local h = slot.AbsoluteSize.Y
 		slot.AutomaticSize = AN
 		slot.Size = UDim2.new(1, 0, 0, h)
 		local sign = (type(dir) == "number" and dir ~= 0) and dir or nil
+
+		-- effet « trou noir » (sauf swipe : là, la carte suit le doigt / la souris)
+		if Library.NotifBlackHole ~= false and Library.Animations and not sign and h > 4 then
+			V6.hole(slot, card, cardScale, h, notifKindColor(kind) or T.Accent)
+			task.delay(1.0 / math.max(Library.AnimSpeed or 1, 0.05), function()
+				dropCorner()
+				slot:Destroy()
+			end)
+			return
+		end
+
 		if canvasSupported then tween(card, { GroupTransparency = 1 }, 0.35) end
 		tween(card, { Position = farOffset(sign) }, 0.42)
 		tween(cardScale, { Scale = 0.94 }, 0.3)
@@ -1082,9 +1440,7 @@ function Library:Notify(o)
 			if slot.Parent then tween(slot, { Size = UDim2.new(1, 0, 0, 0) }, 0.3) end
 		end)
 		task.delay(0.6, function()
-			for idx, c in ipairs(Library.CornerObjects) do
-				if c.Corner == cardCorner then table.remove(Library.CornerObjects, idx) break end
-			end
+			dropCorner()
 			slot:Destroy()
 		end)
 	end
@@ -1183,6 +1539,7 @@ function Library:Notify(o)
 				if kind == "Loading" then
 					applyKind("Success")
 					playIcon()
+					V6.play("Success")
 				end
 				shinePlay()
 				mode = "timer"
@@ -1209,6 +1566,7 @@ function Library:Notify(o)
 		if d.Type and NOTIF_ICON[d.Type] and d.Type ~= kind then
 			applyKind(d.Type)
 			playIcon()
+			V6.play(d.Type)
 			typeChanged = true
 		end
 		if d.Duration ~= nil then
@@ -1244,6 +1602,23 @@ function Library:Notify(o)
 
 	entry = { key = key, handle = handle, stackable = stackable, dead = false }
 	entry.overflow = function() dismiss(nil, "overflow") end
+	entry.hidden = false
+	-- masquée (au-delà du max, derrière la pastille +N) / de nouveau visible
+	entry.setHidden = function(hide)
+		if dead or entry.hidden == hide then return end
+		entry.hidden = hide
+		if hide then
+			slot.Visible = false
+			if startedAt > 0 and not paused then pauseTimer() end
+		else
+			slot.Visible = true
+			cardScale.Scale = 0.88
+			if canvasSupported then card.GroupTransparency = 0.6 end
+			tween(cardScale, { Scale = 1 }, 0.45, BACK)
+			if canvasSupported then tween(card, { GroupTransparency = 0 }, 0.3) end
+			if hov == 0 then resumeTimer() end
+		end
+	end
 	entry.bump = function()
 		if dead then return end
 		count += 1
@@ -1264,7 +1639,11 @@ function Library:Notify(o)
 	buildActions(o.Actions)
 	notifEntries[#notifEntries + 1] = entry
 	activeNotifs[#activeNotifs + 1] = entry.overflow
-	while #activeNotifs > math.max(tonumber(Library.NotifMax) or 5, 1) do activeNotifs[1]() end
+	if Library.NotifOverflow == "Pill" then
+		V6.refresh()
+	else
+		while #activeNotifs > math.max(tonumber(Library.NotifMax) or 5, 1) do activeNotifs[1]() end
+	end
 
 	-- ---------------------------------------------------------------- animation d'entrée
 	task.spawn(function()
@@ -1851,6 +2230,7 @@ end
 -- Configs : export / import / reset / dupliquer / renommer
 -- ---------------------------------------------------------------------------
 function Library:_applyFlags(data)
+	Library._silentSound = (Library._silentSound or 0) + 1
 	-- les réglages d'interface d'abord, pour que le reste s'affiche déjà avec le bon thème
 	local later = {}
 	do
@@ -1873,6 +2253,7 @@ function Library:_applyFlags(data)
 		local it = Library.Items[flag]
 		if it and it.Set then pcall(it.Set, it, value) end
 	end
+	Library._silentSound = math.max((Library._silentSound or 1) - 1, 0)
 end
 
 function Library:ExportConfig()
@@ -2823,6 +3204,7 @@ local function registerFavItem()
 end
 
 -- On enrobe chaque élément interactif : tooltip (o.Tooltip) + étoile de favori (o.Favorite = false pour la retirer)
+local paletteSeq = 0
 local WRAP_KINDS = { "Button", "Toggle", "Slider", "Dropdown", "Input", "Keybind", "ColorPicker" }
 for _, kind in ipairs(WRAP_KINDS) do
 	local base = Block["Create" .. kind]
@@ -2832,6 +3214,14 @@ for _, kind in ipairs(WRAP_KINDS) do
 		local e = self.Entries[#self.Entries]
 		if e and e.Frame then
 			if opts.Tooltip then attachTip(e.Frame, opts.Tooltip) end
+			-- palette de commandes (Ctrl+K) : { Palette = false } pour exclure un élément
+			if not self._noFav and opts.Palette ~= false then
+				local ptab = self.Tab and self.Tab.Name or ""
+				local pkey = tostring(ptab) .. "/" .. tostring(self.Name) .. "/" .. kind .. "/" .. tostring(opts.Name or "")
+				paletteSeq = paletteSeq + 1
+				Library.CmdEntries[pkey] = { Kind = kind, Opts = opts, Item = item, Key = pkey, Tab = ptab,
+					Block = self.Name, Frame = e.Frame, Seq = paletteSeq, Name = tostring(opts.Name or kind) }
+			end
 			if not self._noFav and opts.Favorite ~= false then
 				local tabName = self.Tab and self.Tab.Name or ""
 				local key = tostring(tabName) .. "/" .. tostring(self.Name) .. "/" .. kind .. "/" .. tostring(opts.Name or "")
@@ -3411,7 +3801,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	C:CreateSlider({ Name = "Largeur", Flag = "ui.notifwidth", Min = 240, Max = 420, Step = 10, Suffix = " px",
 		Default = Library.NotifWidth, Callback = function(v) Library:SetNotifWidth(v) end })
 	C:CreateSlider({ Name = "Maximum affichées", Flag = "ui.notifmax", Min = 1, Max = 8, Step = 1,
-		Default = Library.NotifMax, Callback = function(v) Library.NotifMax = v end })
+		Default = Library.NotifMax, Callback = function(v) Library:SetNotifMax(v) end })
 	C:CreateSection("Comportement")
 	C:CreateToggle({ Name = "Couleurs par type", Flag = "ui.notifcolored", Default = Library.NotifColored,
 		Tooltip = "Vert / orange / rouge selon le type. Désactivé : tout en noir et blanc.",
@@ -3422,6 +3812,12 @@ function Window:CreateSettingsTab(name, icon, docked)
 	C:CreateToggle({ Name = "Regrouper les doublons", Flag = "ui.notifstack", Default = Library.NotifStack,
 		Tooltip = "Une notification identique incrémente un badge (x2, x3...) au lieu de se répéter.",
 		Callback = function(v) Library.NotifStack = v end })
+	C:CreateToggle({ Name = "Pastille +N au-delà du max", Flag = "ui.notifpill", Default = Library.NotifOverflow == "Pill",
+		Tooltip = "Au-delà du maximum, les plus anciennes sont masquées derrière une pastille « +3 » au lieu d'être fermées. Clic sur la pastille = tout vider.",
+		Callback = function(v) Library:SetNotifOverflow(v and "Pill" or "Close") end })
+	C:CreateToggle({ Name = "Effet trou noir à la fermeture", Flag = "ui.notifhole", Default = Library.NotifBlackHole,
+		Tooltip = "La notification est aspirée par un mini trou noir quand elle se ferme.",
+		Callback = function(v) Library:SetNotifBlackHole(v) end })
 	C:CreateToggle({ Name = "Ne pas déranger", Flag = "ui.notifmute", Default = Library.NotifMuted,
 		Tooltip = "Masque les notifications (les erreurs passent quand même). Elles restent dans l'historique.",
 		Callback = function(v) Library:SetNotifMuted(v) end })
@@ -3455,7 +3851,67 @@ function Window:CreateSettingsTab(name, icon, docked)
 				{ Text = "Plus tard" },
 			} })
 	end })
+	C:CreateButton({ Name = "Tester la pile (12)", Favorite = false,
+		Tooltip = "Envoie 12 notifications : au-delà du maximum, la pastille +N apparaît.",
+		Callback = function()
+			local kinds = { "Info", "Success", "Warning", "Error" }
+			for i = 1, 12 do
+				task.delay((i - 1) * 0.12, function()
+					Library:Notify({ Title = "Notification " .. i, Content = "Test de la pastille +N", Duration = 10,
+						Type = kinds[(i - 1) % 4 + 1], Stack = false })
+				end)
+			end
+		end })
 	C:CreateButton({ Name = "Tout fermer", Favorite = false, Callback = function() Library:ClearNotifications() end })
+
+	-- ───────────── Sons des notifications ─────────────
+	local SN = tab:CreateBlock({ Name = "Sons des notifications", Side = "Right", Collapsed = true })
+	SN:CreateToggle({ Name = "Sons activés", Flag = "ui.sndon", Default = Library.NotifSound,
+		Callback = function(v) Library:SetNotifSoundEnabled(v) end })
+	SN:CreateSlider({ Name = "Volume des notifications", Flag = "ui.sndvol", Min = 0, Max = 100, Step = 5, Suffix = "%",
+		Default = pct(Library.NotifVolume), Callback = function(v) Library:SetNotifVolume(v / 100) end })
+	SN:CreateParagraph({ Title = "Choisir le bruit",
+		Content = "Un son par type de notification. Choisis dans la liste (aperçu immédiat) ou tape un ID perso : un nombre, un rbxassetid://..., ou le nom d'un fichier du workspace (ex. son.mp3). Un ID perso sélectionne « Personnalisé » tout seul." })
+	for _, tl in ipairs({ { "Info", "Information" }, { "Success", "Succès" }, { "Warning", "Alerte" }, { "Error", "Erreur" } }) do
+		local kind, lab = tl[1], tl[2]
+		SN:CreateSection(lab)
+		local dd
+		dd = SN:CreateDropdown({ Name = "Son · " .. lab, Flag = "ui.snd." .. string.lower(kind), Items = Library.SoundPresetNames,
+			Search = false, Favorite = false, Default = Library.NotifSounds[kind].Preset,
+			Callback = function(v)
+				Library.NotifSounds[kind].Preset = v
+				if (Library._silentSound or 0) == 0 then Library:PlayNotifSound(kind) end
+			end })
+		SN:CreateInput({ Name = "ID perso · " .. lab, Flag = "ui.snd." .. string.lower(kind) .. ".custom", Favorite = false,
+			Default = "", Placeholder = "ID, rbxassetid://... ou fichier",
+			Callback = function(txt)
+				Library.NotifSounds[kind].Custom = txt
+				if txt ~= "" and Library.NotifSounds[kind].Preset ~= "Personnalisé" then
+					pcall(dd.Set, dd, "Personnalisé")   -- relance l'aperçu via le dropdown
+				elseif (Library._silentSound or 0) == 0 then
+					Library:PlayNotifSound(kind)
+				end
+			end })
+	end
+	SN:CreateSection("Tests")
+	SN:CreateButton({ Name = "Écouter les 4 sons", Favorite = false, Callback = function()
+		for i, k in ipairs({ "Info", "Success", "Warning", "Error" }) do
+			task.delay((i - 1) * 0.6, function() Library:PlayNotifSound(k) end)
+		end
+	end })
+
+	-- ───────────── Palette de commandes ─────────────
+	local PL = tab:CreateBlock({ Name = "Palette de commandes", Side = "Right", Collapsed = true })
+	PL:CreateToggle({ Name = "Palette activée", Flag = "ui.paletteon", Default = Library.PaletteEnabled,
+		Callback = function(v) Library:SetPaletteEnabled(v) end })
+	PL:CreateToggle({ Name = "Exiger Ctrl", Flag = "ui.palettectrl", Default = Library.PaletteNeedCtrl,
+		Tooltip = "Désactivé : la touche seule ouvre la palette (déconseillé si tu tapes du texte).",
+		Callback = function(v) Library.PaletteNeedCtrl = v and true or false end })
+	PL:CreateKeybind({ Name = "Touche d'ouverture", Flag = "ui.palettekey", Default = Library.PaletteKey, Favorite = false,
+		Callback = function(k) Library.PaletteKey = k end })
+	PL:CreateButton({ Name = "Ouvrir la palette", Favorite = false, Callback = function() Library:OpenPalette() end })
+	PL:CreateParagraph({ Title = "Utilisation",
+		Content = "Ctrl+K ouvre la roue au milieu de l'écran (curseur libre).\n1 à 0 ou clic : choisir.   Tab : filtre (Tout / Favoris / Boutons / Toggles / Réglages).\nMolette ou ← → : page.   / : rechercher.   Échap ou Retour : retour / fermer.\nMaj + bouton : la palette reste ouverte.   Les éléments ★ passent en premier." })
 
 	-- ───────────── Fenêtre ─────────────
 	local D = tab:CreateBlock({ Name = "Fenêtre", Side = "Right", Collapsed = true })
@@ -3469,7 +3925,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 			if Library.DefaultTheme then Library:ApplyTheme(Library.DefaultTheme) end
 		end })
 	D:CreateParagraph({ Title = "Raccourcis",
-		Content = "Double-clic sur la barre de titre : réduire / restaurer.\nCtrl+R : recentrer la fenêtre.\nBouton = dans la barre de titre : tout replier / déplier.\nLa position et la taille de la fenêtre sont retenues automatiquement." })
+		Content = "Double-clic sur la barre de titre : réduire / restaurer.\nCtrl+R : recentrer la fenêtre.\nBouton = dans la barre de titre : tout replier / déplier.\nLa position et la taille de la fenêtre sont retenues automatiquement.\nCtrl+K : palette de commandes (roue au centre de l'écran, choix de 1 à 0)." })
 
 	-- ───────────── Configurations ─────────────
 	local CF = tab:CreateBlock({ Name = "Configurations", Side = "Left", Collapsed = true })
@@ -3490,6 +3946,873 @@ function Window:CreateSettingsTab(name, icon, docked)
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
 	end
 	return tab
+end
+
+-- ============================================================================
+-- V6 : PALETTE DE COMMANDES  (Ctrl+K)
+--   Roue circulaire au milieu de l'écran, curseur libéré. Lance n'importe quel bouton, bascule n'importe quel
+--   interrupteur ou règle n'importe quel curseur / liste / champ / couleur / touche sans ouvrir les onglets.
+--     1 à 0 : choisir   ·  clic : choisir   ·  Tab : changer de filtre (Tout / Favoris / Boutons / Toggles / Réglages)
+--     molette ou ← → : page suivante / précédente   ·  / ou clic au centre : rechercher   ·  Échap / Retour : retour
+--     Maj + choix d'un bouton : la palette reste ouverte
+--   API : Library:OpenPalette() / ClosePalette() / TogglePalette() / SetPaletteEnabled(v) / SetPaletteKey(KeyCode, needCtrl)
+--         Option { Palette = false } sur un élément pour l'exclure de la palette.
+-- ============================================================================
+do
+	local CAS = game:GetService("ContextActionService")
+
+	Library.PaletteEnabled  = true
+	Library.PaletteNeedCtrl = true
+	Library.PaletteKey      = Enum.KeyCode.K
+
+	local RING_R, PER = 215, 10
+	local FILTERS = { "Tout", "Favoris", "Boutons", "Toggles", "Réglages" }
+	local KC = Enum.KeyCode
+	local DIGIT = {
+		[KC.One] = 1, [KC.Two] = 2, [KC.Three] = 3, [KC.Four] = 4, [KC.Five] = 5,
+		[KC.Six] = 6, [KC.Seven] = 7, [KC.Eight] = 8, [KC.Nine] = 9, [KC.Zero] = 10,
+		[KC.KeypadOne] = 1, [KC.KeypadTwo] = 2, [KC.KeypadThree] = 3, [KC.KeypadFour] = 4, [KC.KeypadFive] = 5,
+		[KC.KeypadSix] = 6, [KC.KeypadSeven] = 7, [KC.KeypadEight] = 8, [KC.KeypadNine] = 9, [KC.KeypadZero] = 10,
+	}
+	local CAS_KEYS = { Enum.UserInputType.MouseWheel, KC.Tab, KC.Left, KC.Right, KC.Backspace, KC.Slash, KC.Escape }
+	for k in pairs(DIGIT) do CAS_KEYS[#CAS_KEYS + 1] = k end
+	local SINK, PASS = Enum.ContextActionResult.Sink, Enum.ContextActionResult.Pass
+	local IN = Enum.EasingDirection.In
+
+	local P = { open = false, filter = 1, page = 1, pages = 1, query = "", stack = {}, shown = {}, slots = {} }
+	local seqSpin = {}
+
+	-- fonctions déclarées à l'avance (elles s'appellent entre elles)
+	local render, pushView, popView, pick, flash, setHint, changePage, cycleFilter, focusSearch, escape
+
+	local function shiftDown() return UIS:IsKeyDown(KC.LeftShift) or UIS:IsKeyDown(KC.RightShift) end
+	local function ctrlDown() return UIS:IsKeyDown(KC.LeftControl) or UIS:IsKeyDown(KC.RightControl) end
+	local function safeGet(it)
+		if type(it) ~= "table" or type(it.Get) ~= "function" then return nil end
+		local ok, v = pcall(it.Get)
+		if ok then return v end
+		return nil
+	end
+
+	-- ───────────── Contenu ─────────────
+	local function entryList()
+		local list = {}
+		for _, e in pairs(Library.CmdEntries) do
+			if e.Frame and e.Frame.Parent then list[#list + 1] = e end
+		end
+		table.sort(list, function(a, b) return a.Seq < b.Seq end)
+		return list
+	end
+
+	local function stateOf(e)
+		local k, v = e.Kind, safeGet(e.Item)
+		if k == "Toggle" then
+			return v and "ON" or "OFF", (v and true or false), nil
+		elseif k == "Slider" then
+			return tostring(v == nil and "" or v) .. (e.Opts.Suffix or ""), nil, nil
+		elseif k == "Dropdown" then
+			if type(v) == "table" then return #v .. " choisi(s)", nil, nil end
+			return tostring(v or "—"), nil, nil
+		elseif k == "Input" then
+			local s = tostring(v or "")
+			return (s == "") and "(vide)" or s, nil, nil
+		elseif k == "Keybind" then
+			return (typeof(v) == "EnumItem") and v.Name or "—", nil, nil
+		elseif k == "ColorPicker" then
+			return "couleur", nil, (typeof(v) == "Color3") and v or nil
+		end
+		return tostring(e.Tab or ""), nil, nil
+	end
+
+	local function textInputView(e, initial, placeholder, submit)
+		return {
+			title = e.Name, hint = "Entrée valide · Échap annule", build = function() return {} end,
+			input = { text = initial or "", placeholder = placeholder or "Valeur...", submit = submit },
+		}
+	end
+
+	local function sliderView(e)
+		local o, it = e.Opts, e.Item
+		local min, max = o.Min or 0, o.Max or 100
+		local step = o.Step or o.Increment
+		local suffix = o.Suffix or ""
+		return {
+			title = e.Name,
+			build = function()
+				local cur = tonumber(safeGet(it)) or min
+				local out, seen = {}, {}
+				for i = 0, 8 do
+					local v = min + (max - min) * i / 8
+					if step and step > 0 then v = min + math.floor((v - min) / step + 0.5) * step end
+					v = math.clamp(math.floor(v * 100 + 0.5) / 100, min, max)
+					if not seen[v] then
+						seen[v] = true
+						out[#out + 1] = {
+							Name = tostring(v) .. suffix, Sub = (i == 0 and "min") or (i == 8 and "max") or "",
+							Value = v, Tab = e.Tab, Block = e.Block,
+							Run = function()
+								pcall(function() it.Set(v) end)
+								flash(e.Name .. " : " .. tostring(v) .. suffix)
+								render(false)
+							end,
+						}
+					end
+				end
+				local best, bd
+				for _, x in ipairs(out) do
+					local d = math.abs(x.Value - cur)
+					if not bd or d < bd then best, bd = x, d end
+				end
+				if best then best.On = true end
+				if #out < PER then
+					out[#out + 1] = {
+						Name = "Saisir...", Sub = "valeur exacte", Tab = e.Tab, Block = e.Block,
+						Run = function()
+							pushView(textInputView(e, tostring(safeGet(it) or ""), "Nombre", function(txt)
+								local n = tonumber(string.match(txt, "-?%d+%.?%d*"))
+								if n then
+									pcall(function() it.Set(n) end)
+									flash(e.Name .. " : " .. tostring(safeGet(it)) .. suffix)
+								end
+							end))
+						end,
+					}
+				end
+				return out
+			end,
+		}
+	end
+
+	local function dropView(e)
+		local o, it = e.Opts, e.Item
+		local multi = (o.Multi == true) or (o.MultiSelect == true) or (o.MultipleOptions == true)
+		local names = {}
+		for _, v in ipairs(o.Items or o.Options or {}) do names[#names + 1] = tostring(v) end
+		return {
+			title = e.Name,
+			build = function()
+				local cur = safeGet(it)
+				local set = {}
+				if type(cur) == "table" then
+					for _, x in ipairs(cur) do set[tostring(x)] = true end
+				elseif cur ~= nil then
+					set[tostring(cur)] = true
+				end
+				local out = {}
+				for _, n in ipairs(names) do
+					out[#out + 1] = {
+						Name = n, Sub = set[n] and "choisi" or "", On = set[n] and true or nil,
+						Tab = e.Tab, Block = e.Block,
+						Run = function()
+							if multi then
+								local list = {}
+								for _, m in ipairs(names) do
+									if (m == n and not set[m]) or (m ~= n and set[m]) then list[#list + 1] = m end
+								end
+								pcall(function() it.Set(list) end)
+								render(false)
+							else
+								pcall(function() it.Set(n) end)
+								flash(e.Name .. " : " .. n)
+								popView()
+							end
+						end,
+					}
+				end
+				if #out == 0 then
+					out[1] = { Name = "(liste vide)", Sub = "", Run = function() end }
+				end
+				return out
+			end,
+		}
+	end
+
+	local COLOR_PRESETS = {
+		{ "Blanc", Color3.fromRGB(255, 255, 255) }, { "Rouge", Color3.fromRGB(255, 77, 94) },
+		{ "Orange", Color3.fromRGB(255, 150, 60) }, { "Jaune", Color3.fromRGB(255, 214, 80) },
+		{ "Vert", Color3.fromRGB(61, 220, 151) }, { "Cyan", Color3.fromRGB(80, 220, 235) },
+		{ "Bleu", Color3.fromRGB(80, 130, 255) }, { "Violet", Color3.fromRGB(160, 100, 255) },
+		{ "Rose", Color3.fromRGB(255, 110, 200) },
+	}
+	local function colorView(e)
+		local it = e.Item
+		return {
+			title = e.Name,
+			build = function()
+				local cur = safeGet(it)
+				local out = {}
+				for _, p in ipairs(COLOR_PRESETS) do
+					local c = p[2]
+					local same = typeof(cur) == "Color3"
+						and math.abs(cur.R - c.R) + math.abs(cur.G - c.G) + math.abs(cur.B - c.B) < 0.02
+					out[#out + 1] = {
+						Name = p[1], Sub = "", Color = c, On = same and true or nil, Tab = e.Tab, Block = e.Block,
+						Run = function()
+							pcall(function() it.Set(c) end)
+							flash(e.Name .. " : " .. p[1])
+							popView()
+						end,
+					}
+				end
+				out[#out + 1] = {
+					Name = "Hex...", Sub = "#RRGGBB", Tab = e.Tab, Block = e.Block,
+					Run = function()
+						local hex = typeof(cur) == "Color3" and cur:ToHex() or ""
+						pushView(textInputView(e, hex, "RRGGBB", function(txt)
+							local ok, c = pcall(Color3.fromHex, (string.gsub(txt, "#", "")))
+							if ok and typeof(c) == "Color3" then
+								pcall(function() it.Set(c) end)
+								flash(e.Name .. " : #" .. c:ToHex())
+							end
+						end))
+					end,
+				}
+				return out
+			end,
+		}
+	end
+
+	local function keyView(e)
+		return {
+			title = e.Name, hint = "Appuie sur une touche...\nÉchap : annuler", build = function() return {} end,
+			capture = function(kc)
+				pcall(function() e.Item.Set(kc) end)
+				flash(e.Name .. " : " .. kc.Name)
+			end,
+		}
+	end
+
+	local function makeItem(e)
+		local sub, on, col = stateOf(e)
+		local armed = (P.armedKey == e.Key)
+		local it = {
+			Name = e.Name, Sub = armed and "Confirmer ?" or sub, On = on, Color = col, Armed = armed,
+			Tab = e.Tab, Block = e.Block, Key = e.Key,
+		}
+		local k = e.Kind
+		it.Run = function(keep)
+			if k == "Button" then
+				if e.Opts.Confirm and P.armedKey ~= e.Key then
+					P.armedKey = e.Key
+					flash("Rappuie pour confirmer")
+					render(false)
+					task.delay(3, function()
+						if P.armedKey == e.Key then
+							P.armedKey = nil
+							if P.open then render(false) end
+						end
+					end)
+					return
+				end
+				P.armedKey = nil
+				fire(e.Opts.Callback)
+				flash(e.Name .. " : lancé")
+				if keep then render(false) else Library:ClosePalette() end
+			elseif k == "Toggle" then
+				local cur = safeGet(e.Item) and true or false
+				pcall(function() e.Item.Set(not cur) end)
+				flash(e.Name .. " : " .. ((not cur) and "ON" or "OFF"))
+				render(false)
+			elseif k == "Slider" then
+				pushView(sliderView(e))
+			elseif k == "Dropdown" then
+				pushView(dropView(e))
+			elseif k == "ColorPicker" then
+				pushView(colorView(e))
+			elseif k == "Keybind" then
+				pushView(keyView(e))
+			elseif k == "Input" then
+				pushView(textInputView(e, tostring(safeGet(e.Item) or ""), e.Opts.Placeholder or "Texte", function(txt)
+					pcall(function() e.Item.Set(txt) end)
+					flash(e.Name .. " : " .. txt)
+				end))
+			end
+		end
+		return it
+	end
+
+	local function builtins()
+		local function win() return Library.Window end
+		return {
+			{ Name = "Fenêtre : afficher / masquer", Sub = "Interface", Tab = "Palette", Block = "Interface",
+				Run = function()
+					local w = win()
+					Library:ClosePalette()
+					if w and w.Toggle then w:Toggle() end
+				end },
+			{ Name = "Fenêtre : recentrer", Sub = "Interface", Tab = "Palette", Block = "Interface",
+				Run = function()
+					local w = win()
+					if w and w.Reset then w:Reset() end
+					Library:ClosePalette()
+				end },
+			{ Name = "Notifications : tout fermer", Sub = "Notifications", Tab = "Palette", Block = "Notifications",
+				Run = function() Library:ClosePalette() Library:ClearNotifications() end },
+			{ Name = "Ne pas déranger", Sub = Library.NotifMuted and "ON" or "OFF", On = Library.NotifMuted and true or false,
+				Tab = "Palette", Block = "Notifications",
+				Run = function()
+					local v = not Library.NotifMuted
+					local it = Library.Items["ui.notifmute"]
+					if it and it.Set then pcall(it.Set, v) else Library:SetNotifMuted(v) end
+					flash("Ne pas déranger : " .. (v and "ON" or "OFF"))
+					render(false)
+				end },
+		}
+	end
+
+	local function rootView()
+		return {
+			root = true,
+			build = function()
+				local f = P.filter
+				local favs, rest, out = {}, {}, {}
+				for _, e in ipairs(entryList()) do
+					local k = e.Kind
+					local pass = (f == 1)
+						or (f == 2 and Library.Favorites[e.Key])
+						or (f == 3 and k == "Button")
+						or (f == 4 and k == "Toggle")
+						or (f == 5 and k ~= "Button" and k ~= "Toggle")
+					if pass then
+						local it = makeItem(e)
+						if Library.Favorites[e.Key] then favs[#favs + 1] = it else rest[#rest + 1] = it end
+					end
+				end
+				for _, it in ipairs(favs) do out[#out + 1] = it end
+				if f == 1 or f == 3 then
+					for _, b in ipairs(builtins()) do out[#out + 1] = b end
+				end
+				for _, it in ipairs(rest) do out[#out + 1] = it end
+				return out
+			end,
+		}
+	end
+
+	local function matchScore(it, q)
+		local n = string.lower(it.Name)
+		local at = string.find(n, q, 1, true)
+		if at == 1 then return 3 end
+		if at then return 2 end
+		local p = string.lower(tostring(it.Tab or "") .. " " .. tostring(it.Block or ""))
+		if string.find(p, q, 1, true) then return 1 end
+		return 0
+	end
+
+	local function visibleItems(v)
+		if v.input or v.capture then return {} end
+		local items = v.build()
+		local q = string.lower(string.match(P.query, "^%s*(.-)%s*$") or "")
+		if q == "" then return items end
+		local scored = {}
+		for idx, it in ipairs(items) do
+			local s = matchScore(it, q)
+			if s > 0 then scored[#scored + 1] = { it = it, s = s, i = idx } end
+		end
+		table.sort(scored, function(a, b)
+			if a.s ~= b.s then return a.s > b.s end
+			return a.i < b.i
+		end)
+		local out = {}
+		for _, x in ipairs(scored) do out[#out + 1] = x.it end
+		return out
+	end
+
+	-- ───────────── Interface ─────────────
+	local function buildGui()
+		if P.gui and P.gui.Parent then return end
+		local gui = new("ScreenGui", { Name = "SolarisPalette", ResetOnSpawn = false, DisplayOrder = 1001,
+			ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true, Enabled = false })
+		mount(gui)
+		P.gui = gui
+
+		-- voile (bouton « Modal » : libère aussi le curseur en vue à la première personne)
+		P.dim = new("TextButton", { Name = "Dim", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
+			BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Modal = true, BorderSizePixel = 0 }, gui)
+		P.dim.MouseButton1Click:Connect(function() Library:ClosePalette() end)
+
+		P.root = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1, BorderSizePixel = 0 }, gui)
+		P.rootScale = new("UIScale", { Scale = 1 }, P.root)
+
+		-- cœur : disque sombre, anneaux d'accrétion et moyeu (le tout s'ouvre / s'effondre d'un bloc)
+		P.core = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1, BorderSizePixel = 0 }, P.root)
+		P.coreScale = new("UIScale", { Scale = 1 }, P.core)
+
+		local function circle(size, parent, props)
+			local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(0, 0),
+				Size = UDim2.fromOffset(size, size), BackgroundTransparency = 1, BorderSizePixel = 0 }, parent)
+			for k, v in pairs(props or {}) do f[k] = v end
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
+			return f
+		end
+		local function ringStroke(f, th, tr)
+			local st = new("UIStroke", { Color = T.Accent, Thickness = th, Transparency = tr, ApplyStrokeMode = BORDER }, f)
+			local g = new("UIGradient", { Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(60, 60, 68)),
+				Transparency = ringSeq() }, st)
+			return st, g
+		end
+
+		P.disc = circle(RING_R * 2 - 56, P.core, { BackgroundColor3 = T.Main, BackgroundTransparency = 0.3, ZIndex = 1 })
+		P.ring1 = circle(RING_R * 2 - 58, P.core, { ZIndex = 2 })
+		P.ring1St, P.g1 = ringStroke(P.ring1, 2, 0.1)
+		P.ring2 = circle(RING_R * 2 - 96, P.core, { ZIndex = 2 })
+		P.ring2St, P.g2 = ringStroke(P.ring2, 1, 0.45)
+		P.hub = circle(148, P.core, { BackgroundColor3 = T.Main, BackgroundTransparency = 0.02, ZIndex = 3 })
+		P.hubSt, P.g3 = ringStroke(P.hub, 2, 0.05)
+
+		P.title = new("TextButton", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, 30),
+			Size = UDim2.fromOffset(112, 18), BackgroundTransparency = 1, Text = "Palette", TextColor3 = T.Text,
+			TextSize = 11, Font = F_BOLD, AutoButtonColor = false, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 4 }, P.hub)
+		P.title.MouseButton1Click:Connect(function() cycleFilter(1) end)
+
+		P.search = new("TextBox", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, 70),
+			Size = UDim2.fromOffset(112, 26), BackgroundColor3 = T.Off, BackgroundTransparency = 0.35, BorderSizePixel = 0,
+			Text = "", PlaceholderText = "Rechercher...", PlaceholderColor3 = Color3.fromRGB(125, 125, 132),
+			TextColor3 = T.Text, TextSize = 12, Font = F_REG, ClearTextOnFocus = false, TextXAlignment = CENTER,
+			TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 4 }, P.hub)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, P.search)
+		P.searchSt = new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.85, ApplyStrokeMode = BORDER }, P.search)
+
+		P.hint = new("TextLabel", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, 108),
+			Size = UDim2.fromOffset(118, 30), BackgroundTransparency = 1, Text = "", TextColor3 = T.ElementAccent,
+			TextSize = 10, Font = F_MED, TextWrapped = true, TextXAlignment = CENTER,
+			TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 4 }, P.hub)
+
+		-- boutons page précédente / suivante (utiles sans molette, sur mobile)
+		local function navBtn(txt, x, delta)
+			local b = new("TextButton", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(x, 112),
+				Size = UDim2.fromOffset(26, 26), BackgroundColor3 = T.Main, BackgroundTransparency = 0.05, Text = txt,
+				TextColor3 = T.Text, TextSize = 14, Font = F_BOLD, AutoButtonColor = false, BorderSizePixel = 0, ZIndex = 4 }, P.core)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, b)
+			new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.6, ApplyStrokeMode = BORDER }, b)
+			b.MouseButton1Click:Connect(function() changePage(delta) end)
+			return b
+		end
+		P.prev = navBtn("<", -44, -1)
+		P.next = navBtn(">", 44, 1)
+
+		P.search:GetPropertyChangedSignal("Text"):Connect(function()
+			if P.settingText then return end
+			local txt = P.search.Text
+			if os.clock() - (P.focusAt or 0) < 0.12 and string.find(txt, "/", 1, true) then
+				P.settingText = true
+				P.search.Text = (string.gsub(txt, "/", ""))
+				P.settingText = false
+				txt = P.search.Text
+			end
+			if not P.view or P.view.input then return end
+			P.query = txt
+			P.page = 1
+			render(false)
+		end)
+		P.search.Focused:Connect(function()
+			P.typing = true
+			P.focusAt = os.clock()
+			tween(P.searchSt, { Transparency = 0.35 }, 0.2)
+		end)
+		P.search.FocusLost:Connect(function(enter)
+			P.typing = false
+			tween(P.searchSt, { Transparency = 0.85 }, 0.25)
+			local v = P.view
+			if not P.open or not v then return end
+			if v.input then
+				if enter then
+					local txt = P.search.Text
+					pcall(v.input.submit, txt)
+					popView()
+				end
+				return
+			end
+			if enter then pick(1) end
+		end)
+
+		-- les 10 cases, réparties en cercle (1 en haut, sens horaire)
+		for i = 1, PER do
+			local ang = math.rad(-90 + (i - 1) * 36)
+			local pos = UDim2.fromOffset(math.cos(ang) * RING_R, math.sin(ang) * RING_R)
+			local btn = new("TextButton", { AnchorPoint = Vector2.new(0.5, 0.5), Position = pos,
+				Size = UDim2.fromOffset(120, 38), BackgroundColor3 = T.Second, BackgroundTransparency = 0.06, Text = "",
+				AutoButtonColor = false, BorderSizePixel = 0, Visible = false, ZIndex = 5 }, P.root)
+			corner(btn, 10)
+			local st = new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.7, ApplyStrokeMode = BORDER }, btn)
+			local sc = new("UIScale", { Scale = 1 }, btn)
+			local badge = new("Frame", { Position = UDim2.fromOffset(7, 9), Size = UDim2.fromOffset(20, 20),
+				BackgroundColor3 = T.Accent, BackgroundTransparency = 0.88, BorderSizePixel = 0, ZIndex = 6 }, btn)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, badge)
+			local num = new("TextLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = tostring(i % 10),
+				TextColor3 = T.Text, TextSize = 11, Font = F_BOLD, TextXAlignment = CENTER, ZIndex = 7 }, badge)
+			local name = new("TextLabel", { Position = UDim2.fromOffset(34, 4), Size = UDim2.fromOffset(78, 16),
+				BackgroundTransparency = 1, Text = "", TextColor3 = T.Text, TextSize = 12, Font = F_BOLD,
+				TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 6 }, btn)
+			local sub = new("TextLabel", { Position = UDim2.fromOffset(34, 20), Size = UDim2.fromOffset(78, 14),
+				BackgroundTransparency = 1, Text = "", TextColor3 = T.ElementAccent, TextSize = 10, Font = F_MED,
+				TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 6 }, btn)
+			local dot = new("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -6, 0, 6),
+				Size = UDim2.fromOffset(6, 6), BackgroundColor3 = T.Accent, BorderSizePixel = 0, Visible = false,
+				ZIndex = 6 }, btn)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+
+			local slot = { btn = btn, st = st, sc = sc, badge = badge, num = num, name = name, sub = sub, dot = dot, pos = pos }
+			P.slots[i] = slot
+			btn.MouseEnter:Connect(function()
+				tween(st, { Transparency = 0.08 }, 0.15)
+				tween(sc, { Scale = 1.07 }, 0.2, BACK)
+				local it = P.shown[i]
+				if it then
+					setHint(tostring(it.Tab or "") .. " · " .. tostring(it.Block or "") .. " · " .. it.Name)
+				end
+			end)
+			btn.MouseLeave:Connect(function()
+				local it = P.shown[i]
+				tween(st, { Transparency = (it and it.On) and 0.3 or 0.7 }, 0.2)
+				tween(sc, { Scale = 1 }, 0.2)
+				setHint(nil)
+			end)
+			btn.MouseButton1Click:Connect(function() pick(i) end)
+		end
+	end
+
+	local function applyColors()
+		P.disc.BackgroundColor3 = T.Main
+		P.hub.BackgroundColor3 = T.Main
+		P.ring1St.Color, P.ring2St.Color, P.hubSt.Color, P.searchSt.Color = T.Accent, T.Accent, T.Accent, T.Accent
+		P.title.TextColor3, P.search.TextColor3, P.hint.TextColor3 = T.Text, T.Text, T.ElementAccent
+		P.search.BackgroundColor3 = T.Off
+		P.prev.TextColor3, P.next.TextColor3 = T.Text, T.Text
+		P.prev.BackgroundColor3, P.next.BackgroundColor3 = T.Main, T.Main
+	end
+
+	local function defaultHint()
+		local v = P.view
+		if not v then return "" end
+		if v.hint then return v.hint end
+		if P.emptyNow then return "Aucun résultat" end
+		if v.root then return "1-0 choisir · Tab filtre · / chercher" end
+		return "1-0 choisir · Échap retour"
+	end
+
+	setHint = function(txt)
+		if P.hint then P.hint.Text = txt or P.flashText or defaultHint() end
+	end
+
+	flash = function(text)
+		P.flashText = text
+		P.flashToken = (P.flashToken or 0) + 1
+		local my = P.flashToken
+		setHint(nil)
+		task.delay(1.6, function()
+			if P.flashToken == my then
+				P.flashText = nil
+				if P.open then setHint(nil) end
+			end
+		end)
+	end
+
+	local function resetQuery()
+		P.query = ""
+		P.settingText = true
+		P.search.Text = ""
+		P.settingText = false
+	end
+
+	render = function(anim, fly)
+		local v = P.view
+		if not (v and P.slots[1]) then return end
+		local items = visibleItems(v)
+		local pages = math.max(1, math.ceil(#items / PER))
+		P.page = math.clamp(P.page, 1, pages)
+		P.pages = pages
+		P.emptyNow = (#items == 0) and not (v.input or v.capture)
+		local base = (P.page - 1) * PER
+		local animOn = Library.Animations
+		for i = 1, PER do
+			local it = items[base + i]
+			local s = P.slots[i]
+			P.shown[i] = it
+			if it then
+				local was = s.btn.Visible
+				s.btn.Visible = true
+				s.name.Text = it.Name
+				s.sub.Text = it.Sub or ""
+				s.name.TextColor3, s.sub.TextColor3 = T.Text, T.ElementAccent
+				s.btn.BackgroundColor3 = it.Armed and Color3.fromRGB(110, 32, 38) or T.Second
+				s.st.Color = it.Armed and Color3.fromRGB(255, 77, 94) or T.Accent
+				s.st.Transparency = it.On and 0.3 or 0.7
+				s.dot.Visible = it.On ~= nil
+				s.dot.BackgroundColor3 = it.On and T.Accent or T.Off
+				if it.Color then
+					local c = it.Color
+					s.badge.BackgroundColor3 = c
+					s.badge.BackgroundTransparency = 0.05
+					s.num.TextColor3 = ((c.R * 0.3 + c.G * 0.59 + c.B * 0.11) > 0.55) and Color3.new(0, 0, 0) or Color3.new(1, 1, 1)
+				else
+					s.badge.BackgroundColor3 = T.Accent
+					s.badge.BackgroundTransparency = 0.88
+					s.num.TextColor3 = T.Text
+				end
+				if anim then
+					local d = animOn and (i - 1) * 0.018 or 0
+					s.btn.Position = fly and UDim2.fromOffset(0, 0) or s.pos
+					s.sc.Scale = 0.01
+					task.delay(d, function()
+						if not P.open then return end
+						tween(s.sc, { Scale = 1 }, 0.4, BACK)
+						if fly then tween(s.btn, { Position = s.pos }, 0.5, QUINT) end
+					end)
+				elseif not was then
+					s.btn.Position = s.pos
+					s.sc.Scale = 1
+				end
+			else
+				s.btn.Visible = false
+			end
+		end
+		local title = v.title or FILTERS[P.filter]
+		if pages > 1 then title = title .. "  " .. P.page .. "/" .. pages end
+		P.title.Text = title
+		P.search.Visible = not v.capture
+		P.search.PlaceholderText = v.input and v.input.placeholder or "Rechercher..."
+		P.prev.Visible, P.next.Visible = pages > 1, pages > 1
+		setHint(nil)
+	end
+
+	-- ───────────── Navigation ─────────────
+	pushView = function(v)
+		P.stack[#P.stack + 1] = P.view
+		P.view = v
+		P.page = 1
+		resetQuery()
+		if v.capture then Library._listening = true end
+		render(true)
+		if v.input then
+			P.settingText = true
+			P.search.Text = v.input.text or ""
+			P.settingText = false
+			task.delay(0.06, function()
+				if P.open and P.view == v then P.search:CaptureFocus() end
+			end)
+		end
+	end
+
+	popView = function()
+		if P.view and P.view.capture then Library._listening = false end
+		if #P.stack == 0 then return end
+		P.search:ReleaseFocus()
+		P.view = table.remove(P.stack)
+		P.page = 1
+		resetQuery()
+		render(true)
+	end
+
+	pick = function(i)
+		local it = P.shown[i]
+		if not (it and it.Run) then return end
+		local ok, err = pcall(it.Run, shiftDown())
+		if not ok then warn("[Ui-Lib] Palette : " .. tostring(err)) end
+	end
+
+	changePage = function(d)
+		local v = P.view
+		if not v or v.input or v.capture or P.pages <= 1 then return end
+		P.page = ((P.page - 1 + d) % P.pages) + 1
+		render(true)
+	end
+
+	cycleFilter = function(d)
+		local v = P.view
+		if not v or not v.root then return end
+		P.filter = ((P.filter - 1 + d) % #FILTERS) + 1
+		P.page = 1
+		render(true)
+	end
+
+	focusSearch = function()
+		local v = P.view
+		if not v or v.input or v.capture then return end
+		P.focusAt = os.clock()
+		task.defer(function()
+			if P.open then P.search:CaptureFocus() end
+		end)
+	end
+
+	escape = function()
+		if os.clock() - (P.lastEsc or 0) < 0.15 then return end
+		P.lastEsc = os.clock()
+		local v = P.view
+		if v and (v.input or v.capture or #P.stack > 0) then
+			popView()
+		elseif P.query ~= "" then
+			P.search:ReleaseFocus()
+			resetQuery()
+			P.page = 1
+			render(false)
+		else
+			Library:ClosePalette()
+		end
+	end
+
+	local function casHandler(_, state, input)
+		if not P.open then return PASS end
+		local ut, kc = input.UserInputType, input.KeyCode
+		if ut == Enum.UserInputType.MouseWheel then
+			changePage(input.Position.Z > 0 and -1 or 1)
+			return SINK
+		end
+		if state ~= Enum.UserInputState.Begin then return SINK end
+		if P.view and P.view.capture then
+			if kc == KC.Escape then escape() return SINK end
+			return PASS
+		end
+		local n = DIGIT[kc]
+		if n then
+			pick(n)
+		elseif kc == KC.Tab then
+			cycleFilter(shiftDown() and -1 or 1)
+		elseif kc == KC.Left then
+			changePage(-1)
+		elseif kc == KC.Right then
+			changePage(1)
+		elseif kc == KC.Backspace then
+			if #P.stack > 0 then popView() end
+		elseif kc == KC.Slash then
+			focusSearch()
+		elseif kc == KC.Escape then
+			escape()
+		end
+		return SINK
+	end
+
+	-- ───────────── Ouverture / fermeture ─────────────
+	local function stopSpin()
+		for _, tw in ipairs(seqSpin) do pcall(function() tw:Cancel() end) end
+		table.clear(seqSpin)
+	end
+
+	function Library:OpenPalette()
+		if P.open or not Library.PaletteEnabled then return end
+		buildGui()
+		P.open = true
+		P.stack = {}
+		P.filter = P.filter or 1
+		P.view = rootView()
+		P.page = 1
+		P.armedKey = nil
+		P.flashText = nil
+		P.gui.Enabled = true
+		applyColors()
+		resetQuery()
+
+		local vp = viewport()
+		P.rootScale.Scale = math.clamp(math.min((vp.Y - 30) / 480, (vp.X - 30) / 560), 0.5, 1.15)
+
+		P.dim.BackgroundTransparency = 1
+		tween(P.dim, { BackgroundTransparency = 0.45 }, 0.3)
+		if (Library.BlurSize or 0) > 0 then pcall(setBlurTarget, Library.BlurSize * 0.7) end
+
+		P.coreScale.Scale = 0
+		tween(P.coreScale, { Scale = 1 }, 0.55, BACK)
+
+		stopSpin()
+		P.g1.Rotation, P.g2.Rotation, P.g3.Rotation = 0, 0, 0
+		seqSpin[1] = TweenService:Create(P.g1, TweenInfo.new(7, LINEAR, OUT, -1), { Rotation = 360 })
+		seqSpin[2] = TweenService:Create(P.g2, TweenInfo.new(11, LINEAR, OUT, -1), { Rotation = -360 })
+		seqSpin[3] = TweenService:Create(P.g3, TweenInfo.new(4.5, LINEAR, OUT, -1), { Rotation = 360 })
+		for _, tw in ipairs(seqSpin) do tw:Play() end
+
+		-- on bloque les touches du jeu (chiffres, Tab, flèches, molette...) et on garde le curseur libre
+		pcall(function() CAS:BindActionAtPriority("UiLibPalette", casHandler, false, 3000, table.unpack(CAS_KEYS)) end)
+		pcall(function()
+			RunService:BindToRenderStep("UiLibPaletteMouse", Enum.RenderPriority.Camera.Value + 10, function()
+				UIS.MouseBehavior = Enum.MouseBehavior.Default
+				UIS.MouseIconEnabled = true
+			end)
+		end)
+
+		render(true, true)
+	end
+
+	function Library:ClosePalette()
+		if not P.open then return end
+		P.open = false
+		pcall(function() CAS:UnbindAction("UiLibPalette") end)
+		pcall(function() RunService:UnbindFromRenderStep("UiLibPaletteMouse") end)
+		if P.view and P.view.capture then Library._listening = false end
+		P.typing = false
+		if P.search then P.search:ReleaseFocus() end
+		stopSpin()
+
+		-- tout est aspiré vers le centre
+		for i, s in ipairs(P.slots) do
+			if s.btn.Visible then
+				local d = Library.Animations and (i - 1) * 0.012 or 0
+				task.delay(d, function()
+					if P.open then return end
+					tween(s.btn, { Position = UDim2.fromOffset(0, 0) }, 0.3, QUINT, IN)
+					tween(s.sc, { Scale = 0 }, 0.3, QUINT, IN)
+				end)
+			end
+		end
+		task.delay(0.12, function()
+			if not P.open then tween(P.coreScale, { Scale = 0 }, 0.3, QUINT, IN) end
+		end)
+		tween(P.dim, { BackgroundTransparency = 1 }, 0.35)
+		local w = Library.Window
+		pcall(setBlurTarget, (w and w.Open) and Library.BlurSize or 0)
+		task.delay(0.5 / math.max(Library.AnimSpeed or 1, 0.05), function()
+			if not P.open and P.gui then P.gui.Enabled = false end
+		end)
+	end
+
+	function Library:TogglePalette()
+		if P.open then Library:ClosePalette() else Library:OpenPalette() end
+	end
+	function Library:IsPaletteOpen() return P.open end
+	function Library:SetPaletteEnabled(v)
+		Library.PaletteEnabled = v and true or false
+		if not Library.PaletteEnabled then Library:ClosePalette() end
+	end
+	function Library:SetPaletteKey(key, needCtrl)
+		if typeof(key) == "EnumItem" then Library.PaletteKey = key end
+		if needCtrl ~= nil then Library.PaletteNeedCtrl = needCtrl and true or false end
+	end
+
+	track(UIS.InputBegan:Connect(function(i, processed)
+		if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
+		local kc = i.KeyCode
+		if P.open then
+			local capturing = P.view and P.view.capture
+			if kc == Library.PaletteKey and not capturing and (not Library.PaletteNeedCtrl or ctrlDown())
+				and not (P.typing and not ctrlDown()) then
+				Library:ClosePalette()
+				return
+			end
+			if capturing then
+				if kc ~= KC.Escape then
+					local cap = P.view.capture
+					popView()
+					cap(kc)
+				end
+				return
+			end
+			if kc == KC.Escape then escape() end
+			return
+		end
+		if processed or Library._listening or not Library.PaletteEnabled then return end
+		if kc == Library.PaletteKey and (not Library.PaletteNeedCtrl or ctrlDown()) then
+			Library:OpenPalette()
+		end
+	end))
+
+	-- nettoyage complet (Library:Destroy)
+	Library._destroyPalette = function()
+		P.open = false
+		pcall(function() CAS:UnbindAction("UiLibPalette") end)
+		pcall(function() RunService:UnbindFromRenderStep("UiLibPaletteMouse") end)
+		stopSpin()
+		if P.gui then pcall(function() P.gui:Destroy() end) end
+		P.gui, P.slots, P.shown, P.stack, P.view = nil, {}, {}, {}, nil
+	end
 end
 
 -- ============================================================================
@@ -4429,6 +5752,8 @@ function Library:Destroy()
 	table.clear(Library.Items)
 	table.clear(Library.CornerObjects)
 	table.clear(Library.FavEntries)
+	table.clear(Library.CmdEntries)
+	if Library._destroyPalette then pcall(Library._destroyPalette) end
 	table.clear(Library.FavStars)
 	table.clear(Library.Defaults)
 	Library._titleGrad = nil
