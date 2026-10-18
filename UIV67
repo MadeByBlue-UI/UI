@@ -17,6 +17,14 @@
 		Library:Notify({Title, Content, Duration})
 		Library.Flags / Library.Items / Library.CornerObjects / Library.GlobalCornerValue
 
+	COLONNES DE BLOCS  (1 à 4)
+		• Paramètres > Apparence > « Colonnes de blocs » (ou Window:SetColumns(n) / Library:SetColumns(n) /
+		  CreateWindow({ Columns = n })). La fenêtre s'agrandit toute seule si elle est trop étroite
+		  (≈ 676 px pour 2 colonnes, 941 px pour 3, 1206 px pour 4) et ne peut plus être réduite en dessous.
+		• 2 colonnes : Side = \"Left\" / \"Right\" comme avant. 3 et 4 colonnes : les blocs sont répartis à tour de rôle.
+		• Écran trop petit : le nombre de colonnes affichées est réduit automatiquement.
+		• Library.ColumnMinWidth = largeur minimale d'une colonne (255 par défaut).
+
 	NOUVEAUTÉS
 		• Design « trou noir » : anneau d'horizon qui tourne autour de la fenêtre, trou noir
 		  décoratif avec disque d'accrétion, étoiles aspirées en spirale.
@@ -2057,6 +2065,13 @@ Library.Names = {
 }
 
 -- ---------------------------------------------------------------------------
+-- Colonnes de blocs (1 à 4) : agrandit la fenêtre si besoin
+function Library:SetColumns(n)
+	local w = Library.Window
+	if w and w.SetColumns then w:SetColumns(n)
+	else Library.Columns = math.clamp(math.floor(tonumber(n) or 1), 1, 4) end
+end
+
 -- Thèmes : GetTheme / ApplyTheme / presets / fichiers / import-export
 -- ---------------------------------------------------------------------------
 local function hexOf(c) return "#" .. string.upper(c:ToHex()) end
@@ -3301,10 +3316,44 @@ function Tab:ExpandAll() self:CollapseAll(false) end
 -- ============================================================================
 -- ONGLETS & BLOCS
 -- ============================================================================
+-- Colonne (1..n) d'un bloc : 2 colonnes = Side Left/Right comme avant, 3-4 colonnes = répartition à tour de rôle
+function Tab:_columnFor(idx, side, n)
+	n = n or self.NumCols or 1
+	if n <= 1 then return 1 end
+	if n == 2 then return side == "right" and 2 or 1 end
+	return ((idx - 1) % n) + 1
+end
+
+function Tab:_layoutColumns()
+	local n, gap = self.NumCols, 10
+	for i, c in ipairs(self.Cols) do
+		c.Position = UDim2.new((i - 1) / n, (i - 1) * gap / n, 0, 0)
+		c.Size = UDim2.new(1 / n, -gap * (n - 1) / n, 1, 0)
+	end
+end
+
+-- Change le nombre de colonnes (1 à 4) et replace tous les blocs déjà créés
+function Tab:SetColumns(n)
+	n = math.clamp(math.floor(tonumber(n) or 1), 1, 4)
+	if n == self.NumCols then return end
+	self.NumCols = n
+	self.TwoCols = n >= 2
+	while #self.Cols < n do self.Cols[#self.Cols + 1] = self._newColumn() end
+	for _, b in ipairs(self.Blocks) do
+		local col = self.Cols[self:_columnFor(b.Index, b.Side, n)]
+		if b.Frame.Parent ~= col then b.Frame.Parent = col end
+		b.Scroll = col
+	end
+	while #self.Cols > n do table.remove(self.Cols):Destroy() end
+	self:_layoutColumns()
+	self.ColL, self.ColR = self.Cols[1], self.Cols[math.min(2, n)]
+end
+
 function Tab:CreateBlock(o)
 	o = o or {}
-	local right = self.TwoCols and tostring(o.Side):lower() == "right"
-	local col = right and self.ColR or self.ColL
+	local side = tostring(o.Side):lower() == "right" and "right" or "left"
+	local idx = #self.Blocks + 1
+	local col = self.Cols[self:_columnFor(idx, side)]
 	self.Order = (self.Order or 0) + 1
 
 	local frame = new("Frame", {
@@ -3375,7 +3424,7 @@ function Tab:CreateBlock(o)
 	end
 
 	local blk = setmetatable({
-		Frame = frame, Body = body, Scroll = col, Tab = self, Name = o.Name or "Block",
+		Frame = frame, Body = body, Scroll = col, Tab = self, Name = o.Name or "Block", Side = side, Index = idx,
 		Entries = {}, _collapse = setCollapsed, _isCollapsed = function() return collapsed end,
 	}, Block)
 	self.Blocks[#self.Blocks + 1] = blk
@@ -3440,9 +3489,9 @@ function Window:CreateTab(name, _, icon)
 
 	local page = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Visible = false }, self.Content)
 
-	local function column(px, sx, sw)
+	local function newColumn()
 		local sf = new("ScrollingFrame", {
-			Position = UDim2.new(px, sx, 0, 0), Size = UDim2.new(sw, sx == 0 and 0 or -5, 1, 0),
+			Size = UDim2.new(1, 0, 1, 0),
 			BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageColor3 = T.Accent,
 			ScrollBarImageTransparency = 0.5, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY,
 		}, page)
@@ -3451,15 +3500,9 @@ function Window:CreateTab(name, _, icon)
 		return sf
 	end
 
-	local tab = setmetatable({ Name = name, Page = page, Button = btn, TwoCols = self.TwoCols, Blocks = {} }, Tab)
-	if self.TwoCols then
-		tab.ColL = column(0, 0, 0.5)
-		tab.ColL.Size = UDim2.new(0.5, -5, 1, 0)
-		tab.ColR = column(0.5, 5, 0.5)
-	else
-		tab.ColL = column(0, 0, 1)
-		tab.ColR = tab.ColL
-	end
+	local tab = setmetatable({ Name = name, Page = page, Button = btn, Blocks = {}, Cols = {}, NumCols = 0,
+		_newColumn = newColumn }, Tab)
+	tab:SetColumns(self.EffCols or (self.TwoCols and 2 or 1))
 
 	function tab:Select()
 		for _, t in ipairs(win.Tabs) do
@@ -3753,6 +3796,19 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Default = pct(Library.WinRound or 1), Callback = optPct("WinRound") })
 	A:CreateSlider({ Name = "Échelle de l'interface", Flag = "ui.scale", Min = 0.6, Max = 1.6, Step = 0.05,
 		Default = Library.Scale, Callback = function(v) win:SetScale(v) end })
+	local colItems, colKeys = { "1 colonne", "2 colonnes", "3 colonnes", "4 colonnes" }, {}
+	for i, label_ in ipairs(colItems) do colKeys[label_] = i end
+	A:CreateDropdown({ Name = "Colonnes de blocs", Flag = "ui.columns", Items = colItems, Search = false,
+		Default = colItems[win.Columns or 1] or colItems[1],
+		Tooltip = "Nombre de colonnes de blocs (1 à 4). La fenêtre s'agrandit toute seule si elle est trop étroite.",
+		Callback = function(v)
+			local n = colKeys[v] or 1
+			local eff = win:SetColumns(n)
+			if eff and eff < n then
+				Library:Notify({ Title = "Colonnes", Type = "Warning", Duration = 3,
+					Content = "Écran trop étroit : " .. eff .. " colonne" .. (eff > 1 and "s" or "") .. " affichée" .. (eff > 1 and "s" or "") .. "." })
+			end
+		end })
 	A:CreateSlider({ Name = "Taille du texte", Flag = "ui.fontscale", Min = 70, Max = 150, Step = 2, Suffix = "%",
 		Default = pct(Library.FontScale), Callback = function(v) Library:SetFontScale(v / 100) end })
 	A:CreateDropdown({ Name = "Police", Flag = "ui.fontfamily", Items = Library.FontFamilies, Search = false,
@@ -6187,10 +6243,81 @@ function Library:CreateWindow(cfg)
 		curSize = Vector2.new(main.Size.X.Offset, main.Size.Y.Offset)
 		lastSize = curSize
 		rsDir, rsSmooth = Vector2.new(0, 0), true
-		tgtSize = Vector2.new(math.min(W0, v.X / scaleBase - 16), math.min(H0, v.Y / scaleBase - 16))
+		tgtSize = Vector2.new(math.max(minW, math.min(W0, v.X / scaleBase - 16)), math.min(H0, v.Y / scaleBase - 16))
 		tgtPos = clampCenter(v / 2)
 		Library._busyUntil = os.clock() + 0.8
 		task.delay(0.9, saveWin)
+	end
+
+	-- ------------------------------------------------------------------
+	-- Colonnes de blocs (1 à 4) : la fenêtre s'agrandit toute seule si elle est trop étroite
+	-- ------------------------------------------------------------------
+	local COL_GAP, SIDE_PAD = 10, 156
+	local baseMinW = minW
+	local function reqWidth(n) return n * (Library.ColumnMinWidth or 255) + (n - 1) * COL_GAP + SIDE_PAD end
+	local function fitCols(n)   -- réduit si l'écran est trop petit pour n colonnes
+		local avail = viewport().X / scaleBase - 10
+		while n > 1 and reqWidth(n) > avail do n = n - 1 end
+		return n
+	end
+
+	function win:SetColumns(n)
+		n = math.clamp(math.floor(tonumber(n) or 1), 1, 4)
+		local oldEff = win.EffCols
+		win.Columns, Library.Columns = n, n
+		local eff = fitCols(n)
+		win.EffCols, win.TwoCols = eff, eff >= 2
+		minW = math.max(baseMinW, reqWidth(eff))
+
+		local curW = (collapsed and preSize) and preSize.X or main.Size.X.Offset
+		if curW < minW then
+			local nw = evenSize(minW)
+			if collapsed and preSize then
+				preSize = Vector2.new(nw, preSize.Y)
+			else
+				local h = main.Size.Y.Offset
+				curSize = Vector2.new(main.Size.X.Offset, h)
+				lastSize = curSize
+				rsDir, rsSmooth = Vector2.new(0, 0), true
+				tgtSize = Vector2.new(nw, h)
+				local v = viewport()
+				local half = nw * scaleBase / 2
+				local lo = half + 8
+				tgtPos = Vector2.new(math.clamp(curPos.X, lo, math.max(lo, v.X - half - 8)), curPos.Y)
+				Library._busyUntil = os.clock() + 0.8
+				task.delay(0.9, saveWin)
+			end
+		end
+
+		for _, t in ipairs(win.Tabs) do t:SetColumns(eff) end
+
+		if oldEff and oldEff ~= eff and win.Veil and not collapsed then
+			win.VeilToken = (win.VeilToken or 0) + 1
+			local my = win.VeilToken
+			win.Veil.Visible = true
+			win.Veil.BackgroundTransparency = Sty.VeilTr
+			local tw = tween(win.Veil, { BackgroundTransparency = 1 }, 0.42)
+			tw.Completed:Connect(function()
+				if win.VeilToken == my then win.Veil.Visible = false end
+			end)
+		end
+		return eff
+	end
+	function win:GetColumns() return win.Columns, win.EffCols end
+
+	-- état initial (même comportement qu'avant par défaut : 2 colonnes si la fenêtre est assez large)
+	win.Columns = math.clamp(math.floor(tonumber(cfg.Columns or Library.Columns) or (contentW >= 520 and 2 or 1)), 1, 4)
+	Library.Columns = win.Columns
+	win.EffCols = fitCols(win.Columns)
+	win.TwoCols = win.EffCols >= 2
+	minW = math.max(baseMinW, reqWidth(win.EffCols))
+	if main.Size.X.Offset < minW then
+		local nw, h = evenSize(minW), main.Size.Y.Offset
+		main.Size = UDim2.fromOffset(nw, h)
+		curSize, lastSize = Vector2.new(nw, h), Vector2.new(nw, h)
+		W0 = math.max(W0, nw)
+		local c2 = clampCenter(curPos)
+		if c2 ~= curPos then curPos = c2; setMainPos() end
 	end
 
 	function win:SetOpacity(o)
@@ -6342,6 +6469,7 @@ function Library:CreateWindow(cfg)
 		scaleBase = s
 		Library.Scale = s
 		tween(uiScale, { Scale = s }, 0.3)
+		if win.SetColumns then win:SetColumns(win.Columns) end
 		tgtPos = clampCenter(tgtPos or curPos)
 		task.delay(0.5, saveWin)
 	end
