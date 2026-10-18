@@ -39,6 +39,18 @@
 		  Window:SetBackground(mode) / Library:SetBackground(mode) à tout moment.
 		  Le fond se met en pause tout seul pendant les déplacements, redimensionnements et animations lourdes.
 
+	─────────────  V3 : THÈMES, VAGUES, ANIMATIONS  ─────────────
+	THÈMES (onglet Paramètres > Thèmes / Couleurs)
+		Library:GetTheme() / ApplyTheme(t) / ApplyPreset(nom) / SaveTheme / LoadTheme / DeleteTheme / ListThemes
+		Library:ExportTheme() -> "UILIB-THEME:{json}" (copié dans le presse-papiers) / ImportTheme(texte)
+		Library:SetColors({ Main, Second, Accent, Text, ElementAccent })  (Color3 ou "#RRGGBB"), en direct
+		Library:SetFont(nom)  Gotham / Builder Sans / Source Sans / Ubuntu / Nunito / Arimo / Code
+	CONFIGS : ExportConfig / ImportConfig / ResetConfig(includeUi) / DuplicateConfig / RenameConfig
+	FORME : Library:SetShape("Vague" | "Douce" | "Classique"), contour ondulant autour de la fenêtre,
+		vagues intérieures, Library:SetOption("WaveAmp" | "WaveSpeed" | "SpinSpeed" | "Breathing" | "Ripple" |
+		"OutlineWaves" | "InnerWaves" | "WinRound" | "HoleVisible" | "HolePos" | "HoleScale", valeur), Library:SetStars(n)
+	ANIMATIONS : onde au clic, bouton qui s'étire, onglets qui glissent, bordure qui respire, titre qui brille.
+
 	─────────────  NOUVEAUTÉS DE CETTE VERSION  ─────────────
 	FLUIDITÉ
 		• Le fond animé (anneaux + étoiles) n'est plus recalculé à chaque frame : boucle Heartbeat à ~30 Hz
@@ -91,6 +103,20 @@ local Library = {
 	Favorites         = {},
 	FavEntries        = {},
 	FavStars          = {},
+	Shape             = "Vague",   -- "Vague" | "Douce" | "Classique"
+	WinRound          = 1,         -- multiplicateur de rondeur de la fenêtre
+	OutlineWaves      = true,      -- contour ondulant
+	InnerWaves        = true,      -- vagues au fond de la fenêtre
+	WaveAmp           = 1,
+	WaveSpeed         = 1,
+	Breathing         = true,      -- le contour « respire »
+	Ripple            = true,      -- onde au clic
+	SpinSpeed         = 1,
+	HoleVisible       = true,
+	HolePos           = "TopRight",
+	HoleScale         = 1,
+	FontFamily        = "Gotham",
+	Defaults          = {},
 }
 
 -- Relance du script : on détruit proprement l'ancienne instance (UI + connexions)
@@ -192,6 +218,9 @@ local function new(class, props, parent)
 	if TEXTCLASS[class] then
 		-- taille de base mémorisée : permet la « taille de police globale »
 		o:SetAttribute("BaseSize", o.TextSize)
+		local role = (o.Font == F_BOLD and 3) or (o.Font == F_MED and 2) or 1
+		o:SetAttribute("FontRole", role)
+		if Library.Fonts then o.Font = Library.Fonts[role] end
 		if Library.FontScale ~= 1 then
 			o.TextSize = math.max(8, math.floor(o.TextSize * Library.FontScale + 0.5))
 		end
@@ -263,10 +292,18 @@ local function unself(self, ...)
 	return ...
 end
 
+local function copyVal(v)
+	if type(v) ~= "table" then return v end
+	local c = {}
+	for k, x in pairs(v) do c[k] = copyVal(x) end
+	return c
+end
+
 local function register(flag, item, value)
 	if flag then
 		Library.Flags[flag] = value
 		Library.Items[flag] = item
+		Library.Defaults[flag] = copyVal(value)
 	end
 end
 
@@ -348,6 +385,23 @@ local function hover(f, st, hit)
 		tween(f, { BackgroundTransparency = 0.4 }, 0.3)
 		if st then tween(st, { Transparency = 0.93 }, 0.3) end
 	end)
+end
+
+-- Onde qui s'étend depuis le point de clic (le cadre hôte doit avoir ClipsDescendants = true)
+local function ripple(host, tint)
+	if not (Library.Ripple and Library.Animations) then return end
+	local sc = pxScale()
+	local m = UIS:GetMouseLocation()
+	local ax, ay = host.AbsoluteSize.X / sc, host.AbsoluteSize.Y / sc
+	local rx = math.clamp((m.X - host.AbsolutePosition.X) / sc, 0, ax)
+	local ry = math.clamp((m.Y - host.AbsolutePosition.Y) / sc, 0, ay)
+	local d = math.max(ax, ay) * 2.3
+	local r = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(rx, ry),
+		Size = UDim2.fromOffset(0, 0), BackgroundColor3 = tint or T.Accent, BackgroundTransparency = 0.8,
+		BorderSizePixel = 0, ZIndex = 4 }, host)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, r)
+	tween(r, { Size = UDim2.fromOffset(d, d), BackgroundTransparency = 1 }, 0.6)
+	task.delay(0.65 / math.max(Library.AnimSpeed or 1, 0.05) + 0.05, function() r:Destroy() end)
 end
 
 -- Tiroir animé (utilisé par le dropdown et le color picker)
@@ -576,10 +630,7 @@ function Library:LoadConfig(name)
 	if not isfile(path) then return false, "introuvable" end
 	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
 	if not ok or type(data) ~= "table" then return false, "fichier invalide" end
-	for flag, value in pairs(data) do
-		local it = Library.Items[flag]
-		if it and it.Set then pcall(it.Set, it, value) end
-	end
+	Library:_applyFlags(data)
 	return true
 end
 
@@ -672,25 +723,403 @@ local function noAccent(d, root)
 	return false
 end
 
--- Applique une nouvelle couleur d'accent en direct sur tout ce qui utilisait l'ancienne
-function Library:SetAccent(c)
-	if typeof(c) ~= "Color3" then return end
-	local old = T.Accent
-	if nearColor(old, c) then return end
-	T.Accent = c
-	for _, root in ipairs(guiRoots()) do
-		for _, d in ipairs(root:GetDescendants()) do
-			local props = ACC_PROPS[d.ClassName]
-			if props then
-				for _, p in ipairs(props) do
-					local ok, cur = pcall(function() return d[p] end)
-					if ok and typeof(cur) == "Color3" and nearColor(cur, old) and not noAccent(d, root) then
-						d[p] = c
+-- Couleurs réellement appliquées sur les instances (permet de les remplacer en direct, une seule passe)
+local COLOR_KEYS = { "Main", "Second", "Accent", "Text", "ElementAccent", "Element", "Off", "Panel" }
+local appliedC = {}
+local function snapshotColors()
+	for _, k in ipairs(COLOR_KEYS) do appliedC[k] = T[k] end
+end
+snapshotColors()
+
+local function applyColorsNow()
+	local list = {}
+	for _, k in ipairs(COLOR_KEYS) do
+		local o, n = appliedC[k], T[k]
+		if o and n and not nearColor(o, n) then list[#list + 1] = { o, n } end
+	end
+	if #list > 0 then
+		for _, root in ipairs(guiRoots()) do
+			for _, d in ipairs(root:GetDescendants()) do
+				local props = ACC_PROPS[d.ClassName]
+				if props then
+					for _, p in ipairs(props) do
+						local ok, cur = pcall(function() return d[p] end)
+						if ok and typeof(cur) == "Color3" then
+							for _, pr in ipairs(list) do
+								if nearColor(cur, pr[1]) then
+									if not noAccent(d, root) then d[p] = pr[2] end
+									break
+								end
+							end
+						end
 					end
 				end
 			end
 		end
 	end
+	snapshotColors()
+	-- dégradés (anneaux du trou noir, bordure, logo, titre) : suivent la couleur d'accent
+	local a = T.Accent
+	local dim = a:Lerp(Color3.new(0, 0, 0), 0.55)
+	for _, sp in ipairs(spinners) do
+		if sp.g and sp.g.Parent then sp.g.Color = ColorSequence.new(a, dim) end
+	end
+	if Library._titleGrad and Library._titleGrad.Parent then
+		Library._titleGrad.Color = ColorSequence.new(a, a:Lerp(Color3.new(0, 0, 0), 0.45))
+	end
+end
+
+local colorToken = 0
+local function scheduleColors(immediate)
+	colorToken += 1
+	local my = colorToken
+	if immediate then applyColorsNow() return end
+	task.delay(0.06, function()
+		if my == colorToken then applyColorsNow() end
+	end)
+end
+
+local function toColor3(v)
+	if typeof(v) == "Color3" then return v end
+	if type(v) == "string" then
+		local ok, c = pcall(Color3.fromHex, (string.gsub(v, "#", "")))
+		if ok and typeof(c) == "Color3" then return c end
+	end
+	return nil
+end
+
+-- Library:SetColors({ Main=, Second=, Accent=, Text=, ElementAccent= })  (Color3 ou "#RRGGBB"), appliqué en direct
+function Library:SetColors(tbl, immediate)
+	if type(tbl) ~= "table" then return end
+	for k, v in pairs(tbl) do
+		local c = toColor3(v)
+		if c and (k == "Main" or k == "Second" or k == "Accent" or k == "Text" or k == "ElementAccent") then
+			T[k] = c
+		end
+	end
+	refreshTheme()
+	scheduleColors(immediate)
+end
+function Library:SetColor(k, c) Library:SetColors({ [k] = c }) end
+function Library:SetAccent(c) Library:SetColor("Accent", c) end
+
+-- ---------------------------------------------------------------------------
+-- Polices
+-- ---------------------------------------------------------------------------
+local FONT_FAMILIES = {
+	["Gotham"]       = { "Gotham", "GothamMedium", "GothamBold" },
+	["Builder Sans"] = { "BuilderSans", "BuilderSansMedium", "BuilderSansBold" },
+	["Source Sans"]  = { "SourceSans", "SourceSansSemibold", "SourceSansBold" },
+	["Ubuntu"]       = { "Ubuntu", "Ubuntu", "Ubuntu" },
+	["Nunito"]       = { "Nunito", "Nunito", "Nunito" },
+	["Arimo"]        = { "Arimo", "Arimo", "ArimoBold" },
+	["Code"]         = { "Code", "Code", "Code" },
+}
+Library.FontFamilies = { "Gotham", "Builder Sans", "Source Sans", "Ubuntu", "Nunito", "Arimo", "Code" }
+
+function Library:SetFont(name)
+	local fam = FONT_FAMILIES[name]
+	if not fam then return end
+	local base = { F_REG, F_MED, F_BOLD }
+	local fonts = {}
+	for i = 1, 3 do
+		local ok, f = pcall(function() return Enum.Font[fam[i]] end)
+		fonts[i] = (ok and f) or base[i]
+	end
+	Library.FontFamily = name
+	Library.Fonts = (name ~= "Gotham") and fonts or nil
+	local use = Library.Fonts or base
+	for _, root in ipairs(guiRoots()) do
+		for _, d in ipairs(root:GetDescendants()) do
+			if TEXTCLASS[d.ClassName] then
+				local r = d:GetAttribute("FontRole")
+				if r then d.Font = use[r] end
+			end
+		end
+	end
+end
+
+-- ---------------------------------------------------------------------------
+-- Réglages d'apparence accessibles par nom (utilisés par l'onglet Paramètres et les thèmes)
+-- ---------------------------------------------------------------------------
+function Library:SetOption(name, v)
+	Library[name] = v
+	local w = Library.Window
+	if not w then return end
+	if string.sub(name, 1, 4) == "Hole" then w:RefreshHole() else w:RefreshShape() end
+end
+function Library:SetShape(n)
+	if n == "Vague" or n == "Douce" or n == "Classique" then Library:SetOption("Shape", n) end
+end
+function Library:SetStars(n)
+	Library.StarCount = n
+	if Library.Window then Library.Window:SetStars(n) end
+end
+
+Library.PresetOrder = { "Trou noir", "Océan", "Violet", "Rouge sang", "Émeraude", "Or", "Sakura", "Clair" }
+Library.Presets = {
+	["Trou noir"] = { Main = "#000000", Second = "#070709", Accent = "#FFFFFF", Text = "#F5F5F7", ElementAccent = "#A5A5AC" },
+	["Océan"]     = { Main = "#020B14", Second = "#061A2B", Accent = "#4CC9F0", Text = "#E8F6FF", ElementAccent = "#7FA7BD" },
+	["Violet"]    = { Main = "#0A0612", Second = "#130B22", Accent = "#B388FF", Text = "#F3ECFF", ElementAccent = "#A394BD" },
+	["Rouge sang"] = { Main = "#0C0204", Second = "#190609", Accent = "#FF4D5E", Text = "#FFEDEF", ElementAccent = "#BE9096" },
+	["Émeraude"]  = { Main = "#010A07", Second = "#06150F", Accent = "#3DDC97", Text = "#E8FFF4", ElementAccent = "#86B5A0" },
+	["Or"]        = { Main = "#0B0802", Second = "#171105", Accent = "#FFC857", Text = "#FFF6E0", ElementAccent = "#BFAE85" },
+	["Sakura"]    = { Main = "#0D0609", Second = "#1A0B12", Accent = "#FF8FB8", Text = "#FFF0F5", ElementAccent = "#C29AAB" },
+	["Clair"]     = { Main = "#F4F4F7", Second = "#E6E6EC", Accent = "#1A1A22", Text = "#14141A", ElementAccent = "#5E5E6B" },
+}
+Library.Names = {
+	Background = { full = "Complet", light = "Léger", off = "Désactivé" },
+	NotifPos   = { TopLeft = "Haut gauche", TopRight = "Haut droite", BottomLeft = "Bas gauche", BottomRight = "Bas droite" },
+	HolePos    = { TopRight = "Haut droite", TopLeft = "Haut gauche", BottomRight = "Bas droite", BottomLeft = "Bas gauche", Center = "Centre" },
+}
+
+-- ---------------------------------------------------------------------------
+-- Thèmes : GetTheme / ApplyTheme / presets / fichiers / import-export
+-- ---------------------------------------------------------------------------
+local function hexOf(c) return "#" .. string.upper(c:ToHex()) end
+
+function Library:GetTheme()
+	local w = Library.Window
+	return {
+		Version = 2,
+		Colors = { Main = hexOf(T.Main), Second = hexOf(T.Second), Accent = hexOf(T.Accent),
+			Text = hexOf(T.Text), ElementAccent = hexOf(T.ElementAccent) },
+		Opacity = w and w.Opacity or 0.96,
+		Radius = Library.GlobalCornerValue,
+		WinRound = Library.WinRound,
+		Scale = Library.Scale,
+		FontScale = Library.FontScale,
+		Font = Library.FontFamily,
+		Shape = Library.Shape,
+		OutlineWaves = Library.OutlineWaves,
+		InnerWaves = Library.InnerWaves,
+		WaveAmp = Library.WaveAmp,
+		WaveSpeed = Library.WaveSpeed,
+		Breathing = Library.Breathing,
+		Ripple = Library.Ripple,
+		SpinSpeed = Library.SpinSpeed,
+		HoleVisible = Library.HoleVisible,
+		HolePos = Library.HolePos,
+		HoleScale = Library.HoleScale,
+		Stars = w and w:GetStars() or Library.StarCount,
+		Background = w and w:GetBackground() or "full",
+		Animations = Library.Animations,
+		AnimSpeed = Library.AnimSpeed,
+		NotifPos = Library.NotifPos,
+		NotifDuration = Library.NotifDuration,
+	}
+end
+
+-- passe par les contrôles de l'onglet Paramètres s'ils existent (ils se mettent à jour), sinon applique directement
+local function setSetting(flag, uiValue, direct, raw)
+	local it = Library.Items[flag]
+	if it and it.Set then
+		local ok = pcall(it.Set, it, uiValue)
+		if ok then return end
+	end
+	pcall(direct, raw)
+end
+
+function Library:ApplyTheme(t)
+	if type(t) ~= "table" then return false end
+	local N = Library.Names
+	local function pct(v) return math.floor(v * 100 + 0.5) end
+	local w = Library.Window
+	local colorFlags = { Main = "ui.c.main", Second = "ui.c.second", Accent = "ui.accent",
+		Text = "ui.c.text", ElementAccent = "ui.c.text2" }
+	if type(t.Colors) == "table" then
+		local cs = {}
+		for k, flag in pairs(colorFlags) do
+			local c = toColor3(t.Colors[k])
+			if c then
+				cs[k] = c
+				setSetting(flag, c, function(x) Library:SetColor(k, x) end, c)
+			end
+		end
+		Library:SetColors(cs)
+	end
+	local function opt(name) return function(v) Library:SetOption(name, v) end end
+	local S = {
+		{ "Opacity", "ui.opacity", pct, function(v) if w then w:SetOpacity(v) end end },
+		{ "Radius", "ui.radius", nil, function(v) Library:SetCornerRadius(v) end },
+		{ "WinRound", "ui.winround", pct, opt("WinRound") },
+		{ "Scale", "ui.scale", nil, function(v) if w then w:SetScale(v) end end },
+		{ "FontScale", "ui.fontscale", pct, function(v) Library:SetFontScale(v) end },
+		{ "Font", "ui.fontfamily", nil, function(v) Library:SetFont(v) end },
+		{ "Shape", "ui.shape", nil, function(v) Library:SetShape(v) end },
+		{ "OutlineWaves", "ui.outline", nil, opt("OutlineWaves") },
+		{ "InnerWaves", "ui.innerwaves", nil, opt("InnerWaves") },
+		{ "WaveAmp", "ui.waveamp", pct, opt("WaveAmp") },
+		{ "WaveSpeed", "ui.wavespeed", pct, opt("WaveSpeed") },
+		{ "Breathing", "ui.breath", nil, opt("Breathing") },
+		{ "Ripple", "ui.ripple", nil, opt("Ripple") },
+		{ "SpinSpeed", "ui.spin", pct, opt("SpinSpeed") },
+		{ "HoleVisible", "ui.hole", nil, opt("HoleVisible") },
+		{ "HolePos", "ui.holepos", function(v) return N.HolePos[v] or v end, opt("HolePos") },
+		{ "HoleScale", "ui.holescale", pct, opt("HoleScale") },
+		{ "Stars", "ui.stars", nil, function(v) Library:SetStars(v) end },
+		{ "Background", "ui.bg", function(v) return N.Background[v] or v end, function(v) Library:SetBackground(v) end },
+		{ "Animations", "ui.anim", nil, function(v) Library:SetAnimations(v) end },
+		{ "AnimSpeed", "ui.animspeed", function(v) return tostring(v) .. "x" end, function(v) Library:SetAnimSpeed(v) end },
+		{ "NotifPos", "ui.notifpos", function(v) return N.NotifPos[v] or v end, function(v) Library:SetNotifPosition(v) end },
+		{ "NotifDuration", "ui.notifdur", nil, function(v) Library:SetNotifDuration(v) end },
+	}
+	for _, e in ipairs(S) do
+		local v = t[e[1]]
+		if v ~= nil then
+			local uv = v
+			if e[3] then
+				local ok, r = pcall(e[3], v)
+				if ok then uv = r end
+			end
+			setSetting(e[2], uv, e[4], v)
+		end
+	end
+	return true
+end
+
+function Library:ApplyPreset(name)
+	local p = Library.Presets[name]
+	if not p then return false end
+	return Library:ApplyTheme({ Colors = p })
+end
+
+function Library:CopyText(s)
+	local f = (type(setclipboard) == "function" and setclipboard) or (type(toclipboard) == "function" and toclipboard)
+	if f then return (pcall(f, s)) end
+	return false
+end
+
+local function themeDir() return Library.ConfigFolder .. "/Themes" end
+
+function Library:ListThemes()
+	local out = {}
+	pcall(function()
+		if listfiles and isfolder and isfolder(themeDir()) then
+			for _, p in ipairs(listfiles(themeDir())) do
+				local n = tostring(p):match("([^/\\]+)%.json$")
+				if n then out[#out + 1] = n end
+			end
+		end
+	end)
+	table.sort(out)
+	return out
+end
+
+function Library:SaveTheme(name)
+	name = safeName(name)
+	if name == "" then return false, "nom vide" end
+	if not writefile then return false, "writefile indisponible" end
+	pcall(function()
+		if makefolder and isfolder then
+			if not isfolder(Library.ConfigFolder) then makefolder(Library.ConfigFolder) end
+			if not isfolder(themeDir()) then makefolder(themeDir()) end
+		end
+	end)
+	local ok, err = pcall(function()
+		writefile(themeDir() .. "/" .. name .. ".json", HttpService:JSONEncode(Library:GetTheme()))
+	end)
+	return ok, err
+end
+
+function Library:LoadTheme(name)
+	name = safeName(name)
+	if name == "" then return false, "nom vide" end
+	if not (readfile and isfile) then return false, "readfile indisponible" end
+	local path = themeDir() .. "/" .. name .. ".json"
+	if not isfile(path) then return false, "introuvable" end
+	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+	if not ok or type(data) ~= "table" then return false, "fichier invalide" end
+	return Library:ApplyTheme(data)
+end
+
+function Library:DeleteTheme(name)
+	name = safeName(name)
+	if name == "" or not delfile then return false end
+	return (pcall(function() delfile(themeDir() .. "/" .. name .. ".json") end))
+end
+
+function Library:ExportTheme()
+	return "UILIB-THEME:" .. HttpService:JSONEncode(Library:GetTheme())
+end
+
+function Library:ImportTheme(str)
+	str = tostring(str or "")
+	str = string.gsub(str, "^%s+", "")
+	str = string.gsub(str, "^UILIB%-THEME:", "")
+	str = string.gsub(str, "%s+$", "")
+	local ok, data = pcall(function() return HttpService:JSONDecode(str) end)
+	if not ok or type(data) ~= "table" then return false, "code invalide" end
+	if type(data.Colors) ~= "table" then return false, "ce n'est pas un thème" end
+	return Library:ApplyTheme(data)
+end
+
+-- ---------------------------------------------------------------------------
+-- Configs : export / import / reset / dupliquer / renommer
+-- ---------------------------------------------------------------------------
+function Library:_applyFlags(data)
+	-- les réglages d'interface d'abord, pour que le reste s'affiche déjà avec le bon thème
+	local later = {}
+	for flag, value in pairs(data) do
+		if string.sub(flag, 1, 3) == "ui." then
+			local it = Library.Items[flag]
+			if it and it.Set then pcall(it.Set, it, value) end
+		else
+			later[flag] = value
+		end
+	end
+	for flag, value in pairs(later) do
+		local it = Library.Items[flag]
+		if it and it.Set then pcall(it.Set, it, value) end
+	end
+end
+
+function Library:ExportConfig()
+	return "UILIB-CONFIG:" .. HttpService:JSONEncode(Library.Flags)
+end
+
+function Library:ImportConfig(str)
+	str = tostring(str or "")
+	str = string.gsub(str, "^%s+", "")
+	str = string.gsub(str, "^UILIB%-CONFIG:", "")
+	str = string.gsub(str, "%s+$", "")
+	local ok, data = pcall(function() return HttpService:JSONDecode(str) end)
+	if not ok or type(data) ~= "table" then return false, "code invalide" end
+	Library:_applyFlags(data)
+	return true
+end
+
+function Library:ResetConfig(includeUi)
+	local n = 0
+	for flag, def in pairs(Library.Defaults) do
+		local internal = string.sub(flag, 1, 2) == "__"
+		local isUi = string.sub(flag, 1, 3) == "ui."
+		if not internal and (includeUi or not isUi) then
+			local it = Library.Items[flag]
+			if it and it.Set then
+				pcall(it.Set, it, copyVal(def))
+				n += 1
+			end
+		end
+	end
+	return n
+end
+
+function Library:DuplicateConfig(a, b)
+	a, b = safeName(a), safeName(b)
+	if a == "" or b == "" then return false, "nom vide" end
+	if not (readfile and writefile and isfile) then return false, "fichiers indisponibles" end
+	local pa = Library.ConfigFolder .. "/" .. a .. ".json"
+	local pb = Library.ConfigFolder .. "/" .. b .. ".json"
+	if not isfile(pa) then return false, "introuvable" end
+	local ok, err = pcall(function() writefile(pb, readfile(pa)) end)
+	return ok, err
+end
+
+function Library:RenameConfig(a, b)
+	local ok, err = Library:DuplicateConfig(a, b)
+	if ok and safeName(a) ~= safeName(b) then Library:DeleteConfig(a) end
+	return ok, err
 end
 
 function Library:SetBackground(m)
@@ -825,7 +1254,7 @@ function Block:CreateButton(o)
 	o = o or {}
 	local b = new("TextButton", {
 		Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = T.Element, BackgroundTransparency = 0.4,
-		Text = o.Name or "Button", TextColor3 = T.Text, TextSize = 13, Font = F_MED,
+		Text = o.Name or "Button", TextColor3 = T.Text, TextSize = 13, Font = F_MED, ClipsDescendants = true,
 		AutoButtonColor = false, BorderSizePixel = 0, TextTruncate = Enum.TextTruncate.AtEnd,
 	}, self.Body)
 	corner(b, 8)
@@ -854,6 +1283,7 @@ function Block:CreateButton(o)
 			armed = false
 			b.Text = baseText
 		end
+		ripple(b)
 		-- flash blanc qui s'estompe
 		b.BackgroundColor3 = T.Accent
 		b.BackgroundTransparency = 0
@@ -888,6 +1318,10 @@ function Block:CreateToggle(o)
 	local state = o.Default and true or false
 	local function paint(v, instant)
 		local t = instant and 0 or 0.35
+		if not instant and Library.Animations then
+			knob.Size = UDim2.new(0, 19, 0, 14)
+			tween(knob, { Size = UDim2.new(0, 14, 0, 14) }, 0.45, BACK)
+		end
 		tween(sw, { BackgroundColor3 = v and T.Accent or T.Off }, instant and 0 or 0.25)
 		tween(knob, {
 			Position = v and UDim2.new(1, -17, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
@@ -903,7 +1337,8 @@ function Block:CreateToggle(o)
 	local item = {}
 	item.Set = function(...) apply((unself(item, ...)) and true or false) end
 	item.Get = function() return state end
-	btn.MouseButton1Click:Connect(function() apply(not state) end)
+	f.ClipsDescendants = true
+	btn.MouseButton1Click:Connect(function() ripple(f) apply(not state) end)
 
 	paint(state, true)
 	register(o.Flag, item, state)
@@ -1758,7 +2193,7 @@ function Window:CreateTab(name, _, icon)
 	local win = self
 	local btn = new("TextButton", {
 		Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
-		Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = #self.Tabs + 1,
+		Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = #self.Tabs + 1, ClipsDescendants = true,
 	}, self.Sidebar)
 	new("UICorner", { CornerRadius = UDim.new(0, 8) }, btn)
 	local bar = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
@@ -1834,52 +2269,108 @@ function Window:CreateTab(name, _, icon)
 	tab.Bar, tab.Label, tab.Dot = bar, txt, dot
 	btn.MouseEnter:Connect(function()
 		if win.Current ~= tab then tween(btn, { BackgroundTransparency = 0.95 }, 0.2) end
+		if not txt:GetAttribute("BaseX") then txt:SetAttribute("BaseX", txt.Position.X.Offset) end
+		tween(txt, { Position = UDim2.new(0, txt:GetAttribute("BaseX") + 4, 0, 0) }, 0.25)
 	end)
 	btn.MouseLeave:Connect(function()
 		if win.Current ~= tab then tween(btn, { BackgroundTransparency = 1 }, 0.25) end
+		local bx = txt:GetAttribute("BaseX")
+		if bx then tween(txt, { Position = UDim2.new(0, bx, 0, 0) }, 0.3) end
 	end)
-	btn.MouseButton1Click:Connect(function() tab:Select() end)
+	btn.MouseButton1Click:Connect(function()
+		ripple(btn)
+		tab:Select()
+	end)
 
 	table.insert(self.Tabs, tab)
 	if not self.Current and not self._noSelect then tab:Select() end
 	return tab
 end
 
--- Onglet de configuration prêt à l'emploi (sauvegarde / chargement des Flags)
-function Window:CreateConfigTab(name, icon)
-	local tab = self:CreateTab(name or "Config", nil, icon)
-	local blk = tab:CreateBlock({ Name = "Configurations", Side = "Left" })
+-- Interface de gestion des configs (utilisée par l'onglet Config et par l'onglet Paramètres)
+local function buildConfigUI(blk)
+	local function toast(ok, okMsg, errMsg)
+		Library:Notify({ Title = "Config", Content = ok and okMsg or errMsg,
+			Type = ok and "Success" or "Error", Duration = 3 })
+	end
 	blk:CreateSection("Fichier")
-	local nameBox = blk:CreateInput({ Name = "Nom", Placeholder = "ma-config" })
-	local dd = blk:CreateDropdown({
-		Name = "Existantes", Items = Library:ListConfigs(),
-		UpdateList = function() return Library:ListConfigs() end,
-	})
+	local nameBox = blk:CreateInput({ Name = "Nom", Placeholder = "ma-config", Favorite = false })
+	local dd = blk:CreateDropdown({ Name = "Existantes", Items = Library:ListConfigs(), Favorite = false,
+		UpdateList = function() return Library:ListConfigs() end })
 	local function currentName()
 		local n = nameBox.Get()
 		if n == nil or n == "" then n = dd.Get() end
 		return n
 	end
-	blk:CreateButton({ Name = "Sauvegarder", Callback = function()
+	blk:CreateButton({ Name = "Sauvegarder", Favorite = false, Callback = function()
 		local n = currentName()
 		local ok, err = Library:SaveConfig(n)
-		Library:Notify({ Title = "Config", Content = ok and ("Sauvegardée : " .. tostring(n)) or ("Échec : " .. tostring(err)),
-			Type = ok and "Success" or "Error", Duration = 3 })
+		toast(ok, "Sauvegardée : " .. tostring(n), "Échec : " .. tostring(err))
 		dd.Refresh(Library:ListConfigs())
 	end })
-	blk:CreateButton({ Name = "Charger", Callback = function()
+	blk:CreateButton({ Name = "Charger", Favorite = false, Callback = function()
 		local n = currentName()
 		local ok, err = Library:LoadConfig(n)
-		Library:Notify({ Title = "Config", Content = ok and ("Chargée : " .. tostring(n)) or ("Échec : " .. tostring(err)),
-			Type = ok and "Success" or "Error", Duration = 3 })
+		toast(ok, "Chargée : " .. tostring(n), "Échec : " .. tostring(err))
 	end })
-	blk:CreateButton({ Name = "Supprimer", Callback = function()
+	local target = blk:CreateInput({ Name = "Vers (nouveau nom)", Placeholder = "autre-nom", Favorite = false })
+	blk:CreateButton({ Name = "Dupliquer vers ce nom", Favorite = false, Callback = function()
+		local ok, err = Library:DuplicateConfig(currentName(), target.Get())
+		toast(ok, "Dupliquée", "Échec : " .. tostring(err))
+		dd.Refresh(Library:ListConfigs())
+	end })
+	blk:CreateButton({ Name = "Renommer vers ce nom", Favorite = false, Callback = function()
+		local ok, err = Library:RenameConfig(currentName(), target.Get())
+		toast(ok, "Renommée", "Échec : " .. tostring(err))
+		dd.Refresh(Library:ListConfigs(), true)
+	end })
+	blk:CreateButton({ Name = "Supprimer", Confirm = true, Favorite = false, Callback = function()
 		local n = currentName()
 		local ok = Library:DeleteConfig(n)
 		Library:Notify({ Title = "Config", Content = ok and ("Supprimée : " .. tostring(n)) or "Suppression impossible",
 			Type = ok and "Warning" or "Error", Duration = 3 })
 		dd.Refresh(Library:ListConfigs(), true)
 	end })
+
+	blk:CreateSection("Démarrage")
+	blk:CreateButton({ Name = "Charger automatiquement cette config", Favorite = false, Callback = function()
+		local n = currentName()
+		if n == nil or safeName(n) == "" then toast(false, "", "Choisis d'abord une config.") return end
+		Library:SetAutoLoad(n)
+		toast(true, "Auto-chargement : " .. tostring(n), "")
+	end })
+	blk:CreateButton({ Name = "Désactiver l'auto-chargement", Favorite = false, Callback = function()
+		Library:SetAutoLoad("")
+		toast(true, "Auto-chargement désactivé", "")
+	end })
+
+	blk:CreateSection("Valeurs")
+	blk:CreateButton({ Name = "Réinitialiser les options du script", Confirm = true, Favorite = false,
+		Tooltip = "Remet chaque option du script à sa valeur de départ (l'apparence n'est pas touchée).",
+		Callback = function()
+			local n = Library:ResetConfig(false)
+			toast(true, n .. " options réinitialisées", "")
+		end })
+
+	blk:CreateSection("Partage")
+	local code = blk:CreateInput({ Name = "Code", Placeholder = "colle un code de config ici", Favorite = false })
+	blk:CreateButton({ Name = "Exporter (copie le code)", Favorite = false, Callback = function()
+		local s = Library:ExportConfig()
+		code.Set(s)
+		local ok = Library:CopyText(s)
+		toast(true, ok and "Code copié dans le presse-papiers." or "Presse-papiers indisponible : copie le code du champ.", "")
+	end })
+	blk:CreateButton({ Name = "Importer depuis le champ", Favorite = false, Callback = function()
+		local ok, err = Library:ImportConfig(code.Get())
+		toast(ok, "Config importée", "Échec : " .. tostring(err))
+	end })
+end
+
+-- Onglet de configuration prêt à l'emploi (sauvegarde / chargement / import-export des Flags)
+function Window:CreateConfigTab(name, icon)
+	local tab = self:CreateTab(name or "Config", nil, icon)
+	local blk = tab:CreateBlock({ Name = "Configurations", Side = "Left" })
+	buildConfigUI(blk)
 	return tab
 end
 
@@ -1934,47 +2425,151 @@ end
 function Window:CreateSettingsTab(name, icon, docked)
 	local win = self
 	local tab = self:CreateTab(name or "Paramètres", nil, icon)
+	local N = Library.Names
+	local function pct(v) return math.floor(v * 100 + 0.5) end
+	local function toast(ok, okMsg, errMsg)
+		Library:Notify({ Title = "Thème", Content = ok and okMsg or errMsg,
+			Type = ok and "Success" or "Error", Duration = 3 })
+	end
+	local function opt(n) return function(v) Library:SetOption(n, v) end end
+	local function optPct(n) return function(v) Library:SetOption(n, v / 100) end end
 
+	-- ───────────── Thèmes ─────────────
+	local TH = tab:CreateBlock({ Name = "Thèmes", Side = "Left" })
+	TH:CreateSection("Préréglages")
+	TH:CreateDropdown({ Name = "Préréglage", Items = Library.PresetOrder, Search = false, Favorite = false,
+		Tooltip = "Applique d'un coup les couleurs d'un thème prêt à l'emploi.",
+		Callback = function(v) Library:ApplyPreset(v) end })
+	TH:CreateSection("Mes thèmes")
+	local nameBox = TH:CreateInput({ Name = "Nom", Placeholder = "mon-theme", Favorite = false })
+	local saved = TH:CreateDropdown({ Name = "Enregistrés", Items = Library:ListThemes(), Favorite = false,
+		UpdateList = function() return Library:ListThemes() end })
+	local function themeName()
+		local n = nameBox.Get()
+		if n == nil or n == "" then n = saved.Get() end
+		return n
+	end
+	TH:CreateButton({ Name = "Enregistrer le thème actuel", Favorite = false, Callback = function()
+		local n = themeName()
+		local ok, err = Library:SaveTheme(n)
+		toast(ok, "Thème enregistré : " .. tostring(n), "Échec : " .. tostring(err))
+		saved.Refresh(Library:ListThemes())
+	end })
+	TH:CreateButton({ Name = "Charger le thème", Favorite = false, Callback = function()
+		local n = themeName()
+		local ok, err = Library:LoadTheme(n)
+		toast(ok, "Thème chargé : " .. tostring(n), "Échec : " .. tostring(err))
+	end })
+	TH:CreateButton({ Name = "Supprimer le thème", Confirm = true, Favorite = false, Callback = function()
+		local n = themeName()
+		local ok = Library:DeleteTheme(n)
+		toast(ok, "Thème supprimé : " .. tostring(n), "Suppression impossible")
+		saved.Refresh(Library:ListThemes(), true)
+	end })
+	TH:CreateSection("Partage")
+	local code = TH:CreateInput({ Name = "Code", Placeholder = "colle un code de thème ici", Favorite = false })
+	TH:CreateButton({ Name = "Exporter (copie le code)", Favorite = false, Callback = function()
+		local s = Library:ExportTheme()
+		code.Set(s)
+		local ok = Library:CopyText(s)
+		toast(true, ok and "Code copié dans le presse-papiers." or "Presse-papiers indisponible : copie le code du champ.", "")
+	end })
+	TH:CreateButton({ Name = "Importer depuis le champ", Favorite = false, Callback = function()
+		local ok, err = Library:ImportTheme(code.Get())
+		toast(ok, "Thème importé", "Échec : " .. tostring(err))
+	end })
+	TH:CreateButton({ Name = "Revenir au thème d'origine", Confirm = true, Favorite = false, Callback = function()
+		if Library.DefaultTheme then Library:ApplyTheme(Library.DefaultTheme) end
+		toast(true, "Thème d'origine restauré", "")
+	end })
+
+	-- ───────────── Couleurs ─────────────
+	local CO = tab:CreateBlock({ Name = "Couleurs", Side = "Right" })
+	CO:CreateColorPicker({ Name = "Accent", Flag = "ui.accent", Default = T.Accent, Favorite = false,
+		Tooltip = "Boutons, curseurs, anneaux, vagues : appliqué en direct.",
+		Callback = function(c) Library:SetColor("Accent", c) end })
+	CO:CreateColorPicker({ Name = "Fond", Flag = "ui.c.main", Default = T.Main, Favorite = false,
+		Callback = function(c) Library:SetColor("Main", c) end })
+	CO:CreateColorPicker({ Name = "Panneaux", Flag = "ui.c.second", Default = T.Second, Favorite = false,
+		Callback = function(c) Library:SetColor("Second", c) end })
+	CO:CreateColorPicker({ Name = "Texte", Flag = "ui.c.text", Default = T.Text, Favorite = false,
+		Callback = function(c) Library:SetColor("Text", c) end })
+	CO:CreateColorPicker({ Name = "Texte secondaire", Flag = "ui.c.text2", Default = T.ElementAccent, Favorite = false,
+		Callback = function(c) Library:SetColor("ElementAccent", c) end })
+
+	-- ───────────── Apparence ─────────────
 	local A = tab:CreateBlock({ Name = "Apparence", Side = "Left" })
 	A:CreateSlider({ Name = "Opacité de la fenêtre", Flag = "ui.opacity", Min = 20, Max = 100, Step = 1, Suffix = "%",
-		Default = math.floor((win.Opacity or 0.96) * 100 + 0.5), Tooltip = "Rend la fenêtre transparente pour voir le jeu derrière.",
+		Default = pct(win.Opacity or 0.96), Tooltip = "Rend la fenêtre transparente pour voir le jeu derrière.",
 		Callback = function(v) win:SetOpacity(v / 100) end })
-	A:CreateColorPicker({ Name = "Couleur d'accent", Flag = "ui.accent", Default = T.Accent,
-		Tooltip = "Appliquée en direct sur toute l'interface.",
-		Callback = function(c) Library:SetAccent(c) end })
-	A:CreateSlider({ Name = "Arrondi", Flag = "ui.radius", Min = 0, Max = 20, Step = 1,
+	A:CreateSlider({ Name = "Arrondi général", Flag = "ui.radius", Min = 0, Max = 20, Step = 1,
 		Default = Library.GlobalCornerValue, Callback = function(v) Library:SetCornerRadius(v) end })
+	A:CreateSlider({ Name = "Rondeur de la fenêtre", Flag = "ui.winround", Min = 40, Max = 160, Step = 5, Suffix = "%",
+		Default = pct(Library.WinRound or 1), Callback = optPct("WinRound") })
 	A:CreateSlider({ Name = "Échelle de l'interface", Flag = "ui.scale", Min = 0.6, Max = 1.6, Step = 0.05,
 		Default = Library.Scale, Callback = function(v) win:SetScale(v) end })
-	local fonts = { Petite = 0.88, Normale = 1, Grande = 1.14 }
-	local fontName = "Normale"
-	for k, v in pairs(fonts) do if math.abs(v - Library.FontScale) < 0.01 then fontName = k end end
-	A:CreateDropdown({ Name = "Taille de police", Flag = "ui.font", Items = { "Petite", "Normale", "Grande" },
-		Default = fontName, Callback = function(v) Library:SetFontScale(fonts[v] or 1) end })
+	A:CreateSlider({ Name = "Taille du texte", Flag = "ui.fontscale", Min = 70, Max = 150, Step = 2, Suffix = "%",
+		Default = pct(Library.FontScale), Callback = function(v) Library:SetFontScale(v / 100) end })
+	A:CreateDropdown({ Name = "Police", Flag = "ui.fontfamily", Items = Library.FontFamilies, Search = false,
+		Default = Library.FontFamily, Callback = function(v) Library:SetFont(v) end })
 
-	local B = tab:CreateBlock({ Name = "Performances", Side = "Left" })
+	-- ───────────── Forme & vagues ─────────────
+	local F = tab:CreateBlock({ Name = "Forme & vagues", Side = "Right" })
+	F:CreateDropdown({ Name = "Forme", Flag = "ui.shape", Items = { "Vague", "Douce", "Classique" }, Search = false,
+		Default = Library.Shape, Tooltip = "Vague : contour ondulant + vagues. Douce : très arrondie. Classique : rectangle arrondi.",
+		Callback = function(v) Library:SetShape(v) end })
+	F:CreateToggle({ Name = "Contour ondulant", Flag = "ui.outline", Default = Library.OutlineWaves,
+		Tooltip = "Des vagues voyagent autour de la fenêtre (forme Vague).", Callback = opt("OutlineWaves") })
+	F:CreateToggle({ Name = "Vagues intérieures", Flag = "ui.innerwaves", Default = Library.InnerWaves,
+		Tooltip = "Deux vagues douces au fond de la fenêtre (fond animé « Complet »).", Callback = opt("InnerWaves") })
+	F:CreateSlider({ Name = "Amplitude des vagues", Flag = "ui.waveamp", Min = 0, Max = 200, Step = 5, Suffix = "%",
+		Default = pct(Library.WaveAmp), Callback = optPct("WaveAmp") })
+	F:CreateSlider({ Name = "Vitesse des vagues", Flag = "ui.wavespeed", Min = 0, Max = 300, Step = 10, Suffix = "%",
+		Default = pct(Library.WaveSpeed), Callback = optPct("WaveSpeed") })
+	F:CreateToggle({ Name = "Respiration du contour", Flag = "ui.breath", Default = Library.Breathing,
+		Callback = opt("Breathing") })
+
+	-- ───────────── Trou noir & fond ─────────────
+	local H = tab:CreateBlock({ Name = "Trou noir & fond", Side = "Left", Collapsed = true })
+	H:CreateToggle({ Name = "Trou noir", Flag = "ui.hole", Default = Library.HoleVisible, Callback = opt("HoleVisible") })
+	local holeItems, holeKeys = { "Haut droite", "Haut gauche", "Bas droite", "Bas gauche", "Centre" }, {}
+	for k, v in pairs(N.HolePos) do holeKeys[v] = k end
+	H:CreateDropdown({ Name = "Position", Flag = "ui.holepos", Items = holeItems, Search = false,
+		Default = N.HolePos[Library.HolePos] or "Haut droite",
+		Callback = function(v) Library:SetOption("HolePos", holeKeys[v] or "TopRight") end })
+	H:CreateSlider({ Name = "Taille du trou noir", Flag = "ui.holescale", Min = 50, Max = 160, Step = 5, Suffix = "%",
+		Default = pct(Library.HoleScale), Callback = optPct("HoleScale") })
+	H:CreateSlider({ Name = "Vitesse de rotation", Flag = "ui.spin", Min = 0, Max = 300, Step = 10, Suffix = "%",
+		Default = pct(Library.SpinSpeed), Callback = optPct("SpinSpeed") })
+	H:CreateSlider({ Name = "Nombre d'étoiles", Flag = "ui.stars", Min = 0, Max = 80, Step = 1,
+		Default = win:GetStars(), Callback = function(v) Library:SetStars(v) end })
+	local bgKeys = {}
+	for k, v in pairs(N.Background) do bgKeys[v] = k end
+	H:CreateDropdown({ Name = "Fond animé", Flag = "ui.bg", Items = { "Complet", "Léger", "Désactivé" }, Search = false,
+		Default = N.Background[win:GetBackground()] or "Complet",
+		Tooltip = "Désactiver le trou noir, les vagues et les étoiles réduit la charge.",
+		Callback = function(v) win:SetBackground(bgKeys[v] or "full") end })
+
+	-- ───────────── Animations & performances ─────────────
+	local B = tab:CreateBlock({ Name = "Animations & performances", Side = "Right", Collapsed = true })
 	B:CreateToggle({ Name = "Animations", Flag = "ui.anim", Default = Library.Animations,
 		Tooltip = "Désactive toutes les transitions (utile sur les PC faibles).",
 		Callback = function(v) Library:SetAnimations(v) end })
 	local speeds = { ["0.5x"] = 0.5, ["1x"] = 1, ["2x"] = 2 }
 	B:CreateDropdown({ Name = "Vitesse des animations", Flag = "ui.animspeed", Items = { "0.5x", "1x", "2x" },
-		Default = "1x", Search = false, Callback = function(v) Library:SetAnimSpeed(speeds[v] or 1) end })
-	local bgNames = { full = "Complet", light = "Léger", off = "Désactivé" }
-	local bgModes = { Complet = "full", ["Léger"] = "light", ["Désactivé"] = "off" }
-	B:CreateDropdown({ Name = "Fond animé", Flag = "ui.bg", Items = { "Complet", "Léger", "Désactivé" },
-		Default = bgNames[win:GetBackground()] or "Complet", Search = false,
-		Tooltip = "Désactiver le trou noir et les étoiles réduit la charge.",
-		Callback = function(v) win:SetBackground(bgModes[v] or "full") end })
+		Default = tostring(Library.AnimSpeed) .. "x", Search = false,
+		Callback = function(v) Library:SetAnimSpeed(speeds[v] or 1) end })
+	B:CreateToggle({ Name = "Onde au clic", Flag = "ui.ripple", Default = Library.Ripple,
+		Tooltip = "Une onde part du point de clic sur les boutons, interrupteurs et onglets.", Callback = opt("Ripple") })
 	B:CreateToggle({ Name = "Indicateur FPS / ping", Flag = "ui.fps", Default = win.StatsVisible,
 		Callback = function(v) win:SetStats(v) end })
 
-	local C = tab:CreateBlock({ Name = "Notifications", Side = "Right" })
-	local posNames = { TopLeft = "Haut gauche", TopRight = "Haut droite", BottomLeft = "Bas gauche", BottomRight = "Bas droite" }
-	local posKeys = {}
-	for k, v in pairs(posNames) do posKeys[v] = k end
-	C:CreateDropdown({ Name = "Position", Flag = "ui.notifpos",
-		Items = { "Haut gauche", "Haut droite", "Bas gauche", "Bas droite" },
-		Default = posNames[Library.NotifPos] or "Bas droite", Search = false,
+	-- ───────────── Notifications ─────────────
+	local C = tab:CreateBlock({ Name = "Notifications", Side = "Left", Collapsed = true })
+	local posItems, posKeys = { "Haut gauche", "Haut droite", "Bas gauche", "Bas droite" }, {}
+	for k, v in pairs(N.NotifPos) do posKeys[v] = k end
+	C:CreateDropdown({ Name = "Position", Flag = "ui.notifpos", Items = posItems,
+		Default = N.NotifPos[Library.NotifPos] or "Bas droite", Search = false,
 		Callback = function(v) Library:SetNotifPosition(posKeys[v] or "BottomRight") end })
 	C:CreateSlider({ Name = "Durée par défaut", Flag = "ui.notifdur", Min = 1, Max = 15, Step = 0.5, Suffix = " s",
 		Default = Library.NotifDuration, Callback = function(v) Library:SetNotifDuration(v) end })
@@ -1982,22 +2577,23 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Library:Notify({ Title = "Test", Content = "Voilà à quoi ressemblent les notifications.", Type = "Info" })
 	end })
 
-	local D = tab:CreateBlock({ Name = "Fenêtre", Side = "Right" })
+	-- ───────────── Fenêtre ─────────────
+	local D = tab:CreateBlock({ Name = "Fenêtre", Side = "Right", Collapsed = true })
 	D:CreateButton({ Name = "Réinitialiser la fenêtre", Favorite = false,
 		Tooltip = "Recentre la fenêtre et remet sa taille d'origine (Ctrl+R).",
 		Callback = function() win:Reset() end })
-	local NONE = "(aucune)"
-	local function autoItems()
-		local t = { NONE }
-		for _, n in ipairs(Library:ListConfigs()) do t[#t + 1] = n end
-		return t
-	end
-	D:CreateDropdown({ Name = "Config auto-chargée", Items = autoItems(), Default = Library:GetAutoLoad() or NONE,
-		UpdateList = autoItems, Favorite = false,
-		Tooltip = "Cette config est chargée toute seule au démarrage.",
-		Callback = function(v) Library:SetAutoLoad(v ~= NONE and v or "") end })
+	D:CreateButton({ Name = "Tout remettre par défaut", Confirm = true, Favorite = false,
+		Tooltip = "Remet les options du script ET l'apparence à leurs valeurs de départ.",
+		Callback = function()
+			Library:ResetConfig(true)
+			if Library.DefaultTheme then Library:ApplyTheme(Library.DefaultTheme) end
+		end })
 	D:CreateParagraph({ Title = "Raccourcis",
 		Content = "Double-clic sur la barre de titre : réduire / restaurer.\nCtrl+R : recentrer la fenêtre.\nBouton = dans la barre de titre : tout replier / déplier.\nLa position et la taille de la fenêtre sont retenues automatiquement." })
+
+	-- ───────────── Configurations ─────────────
+	local CF = tab:CreateBlock({ Name = "Configurations", Side = "Left", Collapsed = true })
+	buildConfigUI(CF)
 
 	-- Docké en bas de la barre latérale, avec une petite icône
 	if docked and self.Footer then
@@ -2025,6 +2621,8 @@ function Library:CreateWindow(cfg)
 		for k, v in pairs(cfg.Theme) do T[k] = v end
 	end
 	refreshTheme()
+	snapshotColors()
+	if cfg.Shape then Library.Shape = cfg.Shape end
 	local transp = tonumber(cfg.Transparency) or 0.04
 	Library.ConfigFolder = cfg.ConfigFolder or Library.ConfigFolder or "Ui-Lib"
 	if cfg.Animations ~= nil then Library.Animations = cfg.Animations and true or false end
@@ -2080,6 +2678,82 @@ function Library:CreateWindow(cfg)
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
 	mount(gui)
 
+	-- ------------------------------------------------------------------
+	-- Aura : contour ondulant (des vagues voyagent autour de la fenêtre).
+	-- Créée AVANT la fenêtre = dessinée derrière. Chaque côté est un cadre qui coupe ce qui dépasse :
+	-- seules les bosses extérieures (calottes de cercles) restent visibles.
+	-- ------------------------------------------------------------------
+	local waveT, waveIntro = 0, 0
+	local auraFillTr = math.min(transp, 0.3)
+	local aura = new("Frame", { Name = "Aura", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(W, H),
+		Position = UDim2.fromOffset(center.X, center.Y), BackgroundTransparency = 1, BorderSizePixel = 0 }, gui)
+	local auraScale = new("UIScale", { Scale = 1 }, aura)
+	local STRIP, PILL, SPACING, WAVELEN = 22, 44, 22, 130
+	local auraEdges = {}
+	for ei = 1, 4 do
+		auraEdges[ei] = { fill = {}, line = {},
+			strip = new("Frame", { BackgroundTransparency = 1, ClipsDescendants = true, BorderSizePixel = 0 }, aura) }
+	end
+	local function addAuraPill(e)
+		local line = new("Frame", { BackgroundColor3 = T.Accent, BackgroundTransparency = 0.5, BorderSizePixel = 0,
+			Size = UDim2.fromOffset(PILL + 3, PILL + 3), ZIndex = 1, Visible = false }, e.strip)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, line)
+		local fill = new("Frame", { BackgroundColor3 = T.Main, BackgroundTransparency = auraFillTr, BorderSizePixel = 0,
+			Size = UDim2.fromOffset(PILL, PILL), ZIndex = 2, Visible = false }, e.strip)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
+		e.line[#e.line + 1] = line
+		e.fill[#e.fill + 1] = fill
+	end
+	local auraGeom = ""
+	local function updateAura(w, h, r, amp)
+		local lenH, lenV = math.max(w - 2 * r, 0), math.max(h - 2 * r, 0)
+		local geom = w .. "x" .. h .. "x" .. r
+		if geom ~= auraGeom then
+			auraGeom = geom
+			auraEdges[1].strip.Position = UDim2.fromOffset(r, -STRIP)
+			auraEdges[1].strip.Size = UDim2.fromOffset(lenH, STRIP)
+			auraEdges[2].strip.Position = UDim2.fromOffset(w, r)
+			auraEdges[2].strip.Size = UDim2.fromOffset(STRIP, lenV)
+			auraEdges[3].strip.Position = UDim2.fromOffset(r, h)
+			auraEdges[3].strip.Size = UDim2.fromOffset(lenH, STRIP)
+			auraEdges[4].strip.Position = UDim2.fromOffset(-STRIP, r)
+			auraEdges[4].strip.Size = UDim2.fromOffset(STRIP, lenV)
+		end
+		local k = 2 * math.pi / WAVELEN
+		for ei = 1, 4 do
+			local e = auraEdges[ei]
+			local len = (ei == 1 or ei == 3) and lenH or lenV
+			local n = 0
+			if len >= PILL then n = math.min(math.floor((len - PILL) / SPACING) + 1, 80) end
+			while #e.fill < n do addAuraPill(e) end
+			local step = (n > 1) and (len - PILL) / (n - 1) or 0
+			for i = 1, #e.fill do
+				local f, l = e.fill[i], e.line[i]
+				local vis = i <= n
+				if f.Visible ~= vis then
+					f.Visible = vis
+					l.Visible = vis
+				end
+				if vis then
+					local c = (n == 1) and len / 2 or (PILL / 2 + (i - 1) * step)
+					local s
+					if ei == 1 then s = r + c
+					elseif ei == 2 then s = w + r + c
+					elseif ei == 3 then s = w + h + (w - r - c)
+					else s = 2 * w + h + (h - r - c) end
+					local out = math.min(amp * (2 + 7 * (0.5 + 0.5 * math.sin(k * s - waveT * 2.2))), STRIP - 3)
+					local fx, fy
+					if ei == 1 then fx, fy = c - PILL / 2, STRIP - out
+					elseif ei == 2 then fx, fy = out - PILL, c - PILL / 2
+					elseif ei == 3 then fx, fy = c - PILL / 2, out - PILL
+					else fx, fy = STRIP - out, c - PILL / 2 end
+					f.Position = UDim2.fromOffset(fx, fy)
+					l.Position = UDim2.fromOffset(fx - 1.5, fy - 1.5)
+				end
+			end
+		end
+	end
+
 	-- CanvasGroup = fondu d'ouverture, mais coûteux. NoCanvasGroup = true -> simple Frame, beaucoup plus fluide.
 	local useCanvas = canvasSupported and not cfg.NoCanvasGroup and not Library.NoCanvasGroup
 	local main = new(useCanvas and "CanvasGroup" or "Frame", {
@@ -2087,9 +2761,14 @@ function Library:CreateWindow(cfg)
 		Position = UDim2.fromOffset(center.X, center.Y), BackgroundColor3 = T.Main,
 		BackgroundTransparency = transp, BorderSizePixel = 0, ClipsDescendants = true,
 	}, gui)
-	corner(main, 14)
+	local mainCorner = corner(main, 26)
+	local mainEntry = Library.CornerObjects[#Library.CornerObjects]
 	local uiScale = new("UIScale", { Scale = 1 }, main)
 	local scaleBase = 1
+	-- l'aura suit la fenêtre (position, taille, échelle)
+	main:GetPropertyChangedSignal("Position"):Connect(function() aura.Position = main.Position end)
+	main:GetPropertyChangedSignal("Size"):Connect(function() aura.Size = main.Size end)
+	uiScale:GetPropertyChangedSignal("Scale"):Connect(function() auraScale.Scale = uiScale.Scale end)
 
 	-- ------------------------------------------------------------------
 	-- Etat de la fenêtre : position / taille lissées
@@ -2148,8 +2827,50 @@ function Library:CreateWindow(cfg)
 	-- ------------------------------------------------------------------
 	local space = new("Frame", { Name = "Space", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
 		ClipsDescendants = true, BorderSizePixel = 0 }, main)
-	local hole = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -66, 0, 54),
-		Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1 }, space)
+	-- Vagues intérieures : deux nappes de petites bosses qui ondulent au fond de la fenêtre
+	local wavesHolder = new("Frame", { Name = "Waves", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+		BorderSizePixel = 0 }, space)
+	local INNER_W = 14
+	local innerLayers = {
+		{ pills = {}, tr = 0.95, base = 34, A = 9, k = 0.028, spd = 1.0, ph = 0 },
+		{ pills = {}, tr = 0.93, base = 22, A = 7, k = 0.043, spd = -1.5, ph = 2 },
+	}
+	local function updateInner(w, h, amp)
+		local n = math.ceil(w / INNER_W) + 1
+		for _, ly in ipairs(innerLayers) do
+			while #ly.pills < n do
+				local p = new("Frame", { BackgroundColor3 = T.Accent, BackgroundTransparency = ly.tr, BorderSizePixel = 0,
+					Size = UDim2.fromOffset(INNER_W, 160), Visible = false }, wavesHolder)
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, p)
+				ly.pills[#ly.pills + 1] = p
+			end
+			for i = 1, #ly.pills do
+				local p = ly.pills[i]
+				local vis = i <= n
+				if p.Visible ~= vis then p.Visible = vis end
+				if vis then
+					local x = (i - 1) * INNER_W
+					p.Position = UDim2.fromOffset(x, h - ly.base - ly.A * amp * math.sin(ly.k * x + waveT * ly.spd + ly.ph))
+				end
+			end
+		end
+	end
+
+	local HOLE_POS = {
+		TopRight = { 1, -66, 0, 54 }, TopLeft = { 0, 66, 0, 54 }, BottomRight = { 1, -66, 1, -54 },
+		BottomLeft = { 0, 66, 1, -54 }, Center = { 0.5, 0, 0.5, 0 },
+	}
+	local function holePos()
+		local p = HOLE_POS[Library.HolePos] or HOLE_POS.TopRight
+		return UDim2.new(p[1], p[2], p[3], p[4])
+	end
+	local function holeCenter(w, h)
+		local p = HOLE_POS[Library.HolePos] or HOLE_POS.TopRight
+		return p[1] * w + p[2], p[3] * h + p[4]
+	end
+	local hole = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = holePos(),
+		Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1, Visible = Library.HoleVisible ~= false }, space)
+	local holeScaleObj = new("UIScale", { Scale = Library.HoleScale or 1 }, hole)
 
 	local function ring(parent, w, h, thick, tr, speed, rot)
 		local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0, 0),
@@ -2189,15 +2910,16 @@ function Library:CreateWindow(cfg)
 		s.a = rng:NextNumber(0.3, 0.95)
 		s.v = rng:NextNumber(4, 12)
 	end
-	for n = 1, starCount do
+	local function addStar()
 		local sz = rng:NextInteger(1, 2)
 		local f = new("Frame", { Size = UDim2.fromOffset(sz, sz), BackgroundColor3 = T.Accent, BorderSizePixel = 0,
 			BackgroundTransparency = 1 }, space)
 		local s = { f = f }
 		respawn(s, W, H, W - 66, 54)
 		s.born = os.clock() - rng:NextNumber(0, 1)
-		stars[n] = s
+		stars[#stars + 1] = s
 	end
+	for _ = 1, starCount do addStar() end
 
 	-- Fond animé : "full" (tout), "light" (moitié d'étoiles), "off" (aucun fond, le plus fluide)
 	local bgMode = cfg.Background or "full"
@@ -2205,6 +2927,7 @@ function Library:CreateWindow(cfg)
 	local function applyBg()
 		space.Visible = bgMode ~= "off"
 		starLim = (bgMode == "light") and math.ceil(#stars / 2) or #stars
+		if Library.HoleVisible == false then starLim = 0 end
 		for n, st in ipairs(stars) do st.f.Visible = n <= starLim end
 	end
 	applyBg()
@@ -2231,7 +2954,7 @@ function Library:CreateWindow(cfg)
 	end
 	local title = label(titleBar, cfg.Title or "UI", 15, { Position = UDim2.new(0, tx, 0, 0),
 		Size = UDim2.new(1, -tx - 190, 1, 0), Font = F_BOLD })
-	new("UIGradient", { Color = ColorSequence.new(T.GradientStart, T.GradientEnd) }, title)
+	Library._titleGrad = spin(new("UIGradient", { Color = ColorSequence.new(T.GradientStart, T.GradientEnd) }, title), 26)
 
 	local hideBtn = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
 		Size = UDim2.new(0, 28, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.93,
@@ -2334,7 +3057,8 @@ function Library:CreateWindow(cfg)
 	-- ------------------------------------------------------------------
 	local horizon = new("Frame", { Name = "Horizon", Position = UDim2.new(0, 1, 0, 1), Size = UDim2.new(1, -2, 1, -2),
 		BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 50 }, main)
-	corner(horizon, 13)
+	corner(horizon, 25)
+	local horizonEntry = Library.CornerObjects[#Library.CornerObjects]
 	local hst = new("UIStroke", { Color = T.Accent, Thickness = 1.5, Transparency = 0.3, ApplyStrokeMode = BORDER }, horizon)
 	spin(new("UIGradient", {
 		Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(110, 110, 118)),
@@ -2456,6 +3180,10 @@ function Library:CreateWindow(cfg)
 		o = math.clamp(tonumber(o) or 1, 0.1, 1)
 		win.Opacity = o
 		main.BackgroundTransparency = 1 - o
+		auraFillTr = math.min(1 - o, 0.3)
+		for _, e in ipairs(auraEdges) do
+			for _, f in ipairs(e.fill) do f.BackgroundTransparency = auraFillTr end
+		end
 	end
 	function win:SetStats(v)
 		statsOn = v and true or false
@@ -2477,6 +3205,53 @@ function Library:CreateWindow(cfg)
 	-- ------------------------------------------------------------------
 	-- Ouverture / fermeture animées, échelle
 	-- ------------------------------------------------------------------
+	-- ------------------------------------------------------------------
+	-- Forme de la fenêtre (rayon, contour ondulant, vagues), trou noir, étoiles
+	-- ------------------------------------------------------------------
+	local SHAPE_RADIUS = { Vague = 26, Douce = 34, Classique = 12 }
+	local lastHolePos = Library.HolePos
+	function win:RefreshShape()
+		local base = (SHAPE_RADIUS[Library.Shape] or 26) * (Library.WinRound or 1)
+		mainEntry.BaseRadius = base
+		horizonEntry.BaseRadius = math.max(base - 1, 0)
+		for _, e in ipairs({ mainEntry, horizonEntry }) do
+			e.Corner.CornerRadius = UDim.new(0, math.floor(e.BaseRadius * Library.GlobalCornerValue / 10))
+		end
+		local alive = main.Visible and win.Open and bgMode ~= "off"
+		aura.Visible = alive and Library.Shape == "Vague" and Library.OutlineWaves ~= false
+		wavesHolder.Visible = Library.Shape ~= "Classique" and Library.InnerWaves ~= false and bgMode == "full"
+	end
+	function win:RefreshHole()
+		holeScaleObj.Scale = Library.HoleScale or 1
+		hole.Visible = Library.HoleVisible ~= false
+		if lastHolePos ~= Library.HolePos then
+			lastHolePos = Library.HolePos
+			tween(hole, { Position = holePos() }, 0.6)
+		end
+		applyBg()
+	end
+	function win:SetStars(n)
+		n = math.clamp(math.floor(tonumber(n) or 0), 0, 80)
+		while #stars < n do addStar() end
+		while #stars > n do
+			local s = table.remove(stars)
+			s.f:Destroy()
+		end
+		applyBg()
+	end
+	function win:GetStars() return #stars end
+	main:GetPropertyChangedSignal("Visible"):Connect(function() win:RefreshShape() end)
+
+	local function stepWaves(w, h)
+		local e = math.min(waveIntro, 1)
+		local amp = (Library.WaveAmp or 1) * (1 - (1 - e) ^ 3)
+		if aura.Visible then
+			local r = math.min(mainCorner.CornerRadius.Offset, h / 2, w / 2)
+			updateAura(w, h, r, amp)
+		end
+		if wavesHolder.Visible and not collapsed then updateInner(w, h, amp) end
+	end
+
 	local toggleToken = 0
 	local hintShown = false
 	local toggleKey = cfg.ToggleKey or Enum.KeyCode.RightShift
@@ -2488,11 +3263,13 @@ function Library:CreateWindow(cfg)
 		toggleToken = toggleToken + 1
 		local my = toggleToken
 		if v then
+			waveIntro = 0
 			main.Visible = true
 			tween(uiScale, { Scale = scaleBase }, 0.55, BACK)
 			if useCanvas then tween(main, { GroupTransparency = 0 }, 0.35) end
 		else
 			if Library._openDD then Library._openDD(false) end
+			self:RefreshShape()
 			tween(uiScale, { Scale = scaleBase * 0.94 }, 0.3)
 			if useCanvas then tween(main, { GroupTransparency = 1 }, 0.28) end
 			task.delay(0.32 / math.max(Library.AnimSpeed or 1, 0.05) + 0.02, function()
@@ -2514,6 +3291,7 @@ function Library:CreateWindow(cfg)
 		if m == "full" or m == "light" or m == "off" then
 			bgMode = m
 			applyBg()
+			win:RefreshShape()
 		end
 	end
 	function win:GetBackground() return bgMode end
@@ -2644,13 +3422,16 @@ function Library:CreateWindow(cfg)
 		bgAcc = 0
 
 		for _, sp in ipairs(spinners) do
-			sp.a = ((sp.a or 0) + step * sp.speed) % 360
+			sp.a = ((sp.a or 0) + step * sp.speed * (Library.SpinSpeed or 1)) % 360
 			sp.g.Rotation = sp.a
 		end
-		if collapsed then return end
-
+		hst.Transparency = Library.Breathing and (0.34 + 0.16 * math.sin(now * 1.7)) or 0.3
+		waveT = waveT + step * (Library.WaveSpeed or 1)
+		waveIntro = waveIntro + step * 1.1
 		local w, h = main.Size.X.Offset, main.Size.Y.Offset
-		local cx, cy = w - 66, 54
+		stepWaves(w, h)
+		if collapsed then return end
+		local cx, cy = holeCenter(w, h)
 		for n = 1, starLim do
 			local s = stars[n]
 			local dx, dy = cx - s.x, cy - s.y
@@ -2695,6 +3476,9 @@ function Library:CreateWindow(cfg)
 	persistReady = true
 
 	Library.Window = win
+	win:RefreshShape()
+	win:RefreshHole()
+	Library.DefaultTheme = Library:GetTheme()
 	Library._autoDone = false
 	if cfg.AutoLoad ~= false then
 		task.delay(tonumber(cfg.AutoLoadDelay) or 1.2, function()
@@ -2719,6 +3503,8 @@ function Library:Destroy()
 	table.clear(Library.CornerObjects)
 	table.clear(Library.FavEntries)
 	table.clear(Library.FavStars)
+	table.clear(Library.Defaults)
+	Library._titleGrad = nil
 	tipLabel, tipShown = nil, false
 	Library._autoDone = false
 end
