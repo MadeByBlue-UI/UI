@@ -33,17 +33,36 @@ local Library = {
 }
 
 local Block, Tab, Window = {}, {}, {}
-Block.__index  = Block
 Window.__index = Window
-Tab.__index = function(t, k)
+
+-- Méthode Create* inconnue : on l'ignore (avec un avertissement) au lieu de faire planter le script
+local warned = {}
+local function fallbackMethod(k)
+	return function()
+		if not warned[k] then
+			warned[k] = true
+			warn("[Ui-Lib] Méthode non gérée, ignorée : " .. k)
+		end
+		return setmetatable({}, { __index = function() return function() end end })
+	end
+end
+
+Block.__index = function(_, k)
+	local v = Block[k]
+	if v ~= nil then return v end
+	if type(k) == "string" and k:sub(1, 6) == "Create" then return fallbackMethod(k) end
+	return nil
+end
+
+Tab.__index = function(_, k)
 	if Tab[k] then return Tab[k] end
 	-- Permet Tab:CreateToggle(...) / Tab:CreateSlider(...) directement sur un onglet
-	if type(k) == "string" and k:sub(1, 6) == "Create" and Block[k] then
+	if type(k) == "string" and k:sub(1, 6) == "Create" then
 		return function(self, ...)
 			if not self.DefaultBlock then
 				self.DefaultBlock = Tab.CreateBlock(self, { Name = self.Name, Side = "Left" })
 			end
-			return Block[k](self.DefaultBlock, ...)
+			return self.DefaultBlock[k](self.DefaultBlock, ...)
 		end
 	end
 	return nil
@@ -264,6 +283,51 @@ function Block:CreateLabel(o)
 	item.Set = item.SetText
 	item.Instance = l
 	return item
+end
+
+-- Paragraphe : titre + texte (accepte Title/Name et Content/Text)
+function Block:CreateParagraph(o)
+	if type(o) ~= "table" then o = { Content = tostring(o) } end
+	local holder = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = T.Element,
+		BackgroundTransparency = 0.25, BorderSizePixel = 0,
+	}, self.Body)
+	corner(holder, 6)
+	new("UIPadding", { PaddingTop = UDim.new(0, 7), PaddingBottom = UDim.new(0, 7),
+		PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, holder)
+	new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, holder)
+	local titleL = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+		Text = tostring(o.Title or o.Name or ""), TextColor3 = T.Text, TextSize = 13, Font = Enum.Font.GothamBold,
+		TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 1,
+	}, holder)
+	local bodyL = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+		Text = tostring(o.Content or o.Text or ""), TextColor3 = T.ElementAccent, TextSize = 12,
+		Font = Enum.Font.Gotham, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 2,
+	}, holder)
+	titleL.Visible = titleL.Text ~= ""
+	local item = {}
+	item.Set = function(...)
+		local d = unself(item, ...)
+		if type(d) == "table" then
+			if d.Title or d.Name then titleL.Text = tostring(d.Title or d.Name) titleL.Visible = titleL.Text ~= "" end
+			if d.Content or d.Text then bodyL.Text = tostring(d.Content or d.Text) end
+		elseif d ~= nil then
+			bodyL.Text = tostring(d)
+		end
+	end
+	item.SetText = function(...) bodyL.Text = tostring((unself(item, ...))) end
+	item.SetTitle = function(...) titleL.Text = tostring((unself(item, ...))) titleL.Visible = titleL.Text ~= "" end
+	item.Instance = holder
+	return item
+end
+
+function Block:CreateDivider()
+	new("Frame", { Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.88,
+		BorderSizePixel = 0 }, self.Body)
+	return {}
 end
 
 function Block:CreateButton(o)
