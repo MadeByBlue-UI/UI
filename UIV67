@@ -117,6 +117,9 @@ local Library = {
 	HoleScale         = 1,
 	FontFamily        = "Gotham",
 	Defaults          = {},
+	TitleFont         = "Michroma",
+	TitleFonts        = { "Michroma", "Gotham Black", "Fredoka", "Oswald", "Bangers", "Jura", "Sci-Fi", "Arcade", "Normale" },
+	TitleShine        = true,
 }
 
 -- Relance du script : on détruit proprement l'ancienne instance (UI + connexions)
@@ -683,7 +686,14 @@ end
 -- ---------------------------------------------------------------------------
 -- Animations / police / couleur d'accent
 -- ---------------------------------------------------------------------------
-function Library:SetAnimations(v) Library.Animations = v and true or false end
+function Library:SetAnimations(v)
+	Library.Animations = v and true or false
+	local w = Library.Window
+	if w and w.RefreshShape then
+		w:RefreshShape()
+		w:ApplyTitle()
+	end
+end
 function Library:SetAnimSpeed(v) Library.AnimSpeed = math.clamp(tonumber(v) or 1, 0.25, 4) end
 
 local function guiRoots()
@@ -731,6 +741,16 @@ local function snapshotColors()
 end
 snapshotColors()
 
+local function titleSeq(a)
+	local dim = a:Lerp(Color3.new(0, 0, 0), 0.25)
+	return ColorSequence.new({
+		ColorSequenceKeypoint.new(0, dim), ColorSequenceKeypoint.new(0.38, dim),
+		ColorSequenceKeypoint.new(0.5, a), ColorSequenceKeypoint.new(0.62, dim),
+		ColorSequenceKeypoint.new(1, dim),
+	})
+end
+Library._titleSeq = titleSeq
+
 local function applyColorsNow()
 	local list = {}
 	for _, k in ipairs(COLOR_KEYS) do
@@ -765,7 +785,7 @@ local function applyColorsNow()
 		if sp.g and sp.g.Parent then sp.g.Color = ColorSequence.new(a, dim) end
 	end
 	if Library._titleGrad and Library._titleGrad.Parent then
-		Library._titleGrad.Color = ColorSequence.new(a, a:Lerp(Color3.new(0, 0, 0), 0.45))
+		Library._titleGrad.Color = Library._titleSeq(a)
 	end
 end
 
@@ -846,7 +866,10 @@ function Library:SetOption(name, v)
 	Library[name] = v
 	local w = Library.Window
 	if not w then return end
-	if string.sub(name, 1, 4) == "Hole" then w:RefreshHole() else w:RefreshShape() end
+	local p = string.sub(name, 1, 4)
+	if p == "Hole" then w:RefreshHole()
+	elseif p == "Titl" then w:ApplyTitle()
+	else w:RefreshShape() end
 end
 function Library:SetShape(n)
 	if n == "Vague" or n == "Douce" or n == "Classique" then Library:SetOption("Shape", n) end
@@ -896,6 +919,8 @@ function Library:GetTheme()
 		WaveAmp = Library.WaveAmp,
 		WaveSpeed = Library.WaveSpeed,
 		Breathing = Library.Breathing,
+		TitleFont = Library.TitleFont,
+		TitleShine = Library.TitleShine,
 		Ripple = Library.Ripple,
 		SpinSpeed = Library.SpinSpeed,
 		HoleVisible = Library.HoleVisible,
@@ -952,6 +977,8 @@ function Library:ApplyTheme(t)
 		{ "WaveAmp", "ui.waveamp", pct, opt("WaveAmp") },
 		{ "WaveSpeed", "ui.wavespeed", pct, opt("WaveSpeed") },
 		{ "Breathing", "ui.breath", nil, opt("Breathing") },
+		{ "TitleFont", "ui.titlefont", nil, opt("TitleFont") },
+		{ "TitleShine", "ui.titleshine", nil, opt("TitleShine") },
 		{ "Ripple", "ui.ripple", nil, opt("Ripple") },
 		{ "SpinSpeed", "ui.spin", pct, opt("SpinSpeed") },
 		{ "HoleVisible", "ui.hole", nil, opt("HoleVisible") },
@@ -2512,6 +2539,10 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Default = pct(Library.FontScale), Callback = function(v) Library:SetFontScale(v / 100) end })
 	A:CreateDropdown({ Name = "Police", Flag = "ui.fontfamily", Items = Library.FontFamilies, Search = false,
 		Default = Library.FontFamily, Callback = function(v) Library:SetFont(v) end })
+	A:CreateDropdown({ Name = "Police du titre", Flag = "ui.titlefont", Items = Library.TitleFonts, Search = false,
+		Default = Library.TitleFont, Callback = opt("TitleFont") })
+	A:CreateToggle({ Name = "Titre qui brille", Flag = "ui.titleshine", Default = Library.TitleShine,
+		Tooltip = "Un reflet balaie le titre de temps en temps.", Callback = opt("TitleShine") })
 
 	-- ───────────── Forme & vagues ─────────────
 	local F = tab:CreateBlock({ Name = "Forme & vagues", Side = "Right" })
@@ -2679,78 +2710,74 @@ function Library:CreateWindow(cfg)
 	mount(gui)
 
 	-- ------------------------------------------------------------------
-	-- Aura : contour ondulant (des vagues voyagent autour de la fenêtre).
-	-- Créée AVANT la fenêtre = dessinée derrière. Chaque côté est un cadre qui coupe ce qui dépasse :
-	-- seules les bosses extérieures (calottes de cercles) restent visibles.
+	-- Contour ondulant SANS calcul par frame.
+	-- Chaque côté est un cadre qui coupe ce qui dépasse ; dedans, un « rail » de bosses (calottes de cercles) dont les
+	-- hauteurs sont périodiques. Un seul Tween en boucle fait glisser le rail d'une période : la vague voyage et
+	-- c'est le moteur qui travaille, pas le script. Les bosses ne sont recalculées que si l'amplitude change.
+	-- Créé AVANT la fenêtre = dessiné derrière.
 	-- ------------------------------------------------------------------
-	local waveT, waveIntro = 0, 0
 	local auraFillTr = math.min(transp, 0.3)
 	local aura = new("Frame", { Name = "Aura", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(W, H),
 		Position = UDim2.fromOffset(center.X, center.Y), BackgroundTransparency = 1, BorderSizePixel = 0 }, gui)
 	local auraScale = new("UIScale", { Scale = 1 }, aura)
-	local STRIP, PILL, SPACING, WAVELEN = 22, 44, 22, 130
+	local STRIP, PILL, SPACING, NP = 22, 48, 26, 5   -- NP bosses par période -> période = 130 px
+	local PERIOD = SPACING * NP
 	local auraEdges = {}
 	for ei = 1, 4 do
-		auraEdges[ei] = { fill = {}, line = {},
-			strip = new("Frame", { BackgroundTransparency = 1, ClipsDescendants = true, BorderSizePixel = 0 }, aura) }
+		local strip = new("Frame", { BackgroundTransparency = 1, ClipsDescendants = true, BorderSizePixel = 0 }, aura)
+		local rail = new("Frame", { BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.fromOffset(0, 0) }, strip)
+		auraEdges[ei] = { strip = strip, rail = rail, fill = {}, line = {} }
 	end
-	local function addAuraPill(e)
+	local auraAmp = -1
+	local function placeAuraPill(ei, idx, amp)
+		local e = auraEdges[ei]
+		local out = math.min(amp * (2 + 7 * (0.5 + 0.5 * math.sin(2 * math.pi * (idx % NP) / NP))), STRIP - 3)
+		local a = idx * SPACING
+		local fx, fy
+		if ei == 1 then fx, fy = a, STRIP - out
+		elseif ei == 2 then fx, fy = out - PILL, a
+		elseif ei == 3 then fx, fy = a, out - PILL
+		else fx, fy = STRIP - out, a end
+		e.fill[idx + 1].Position = UDim2.fromOffset(fx, fy)
+		e.line[idx + 1].Position = UDim2.fromOffset(fx - 1.5, fy - 1.5)
+	end
+	local function addAuraPill(ei)
+		local e = auraEdges[ei]
+		local idx = #e.fill
 		local line = new("Frame", { BackgroundColor3 = T.Accent, BackgroundTransparency = 0.5, BorderSizePixel = 0,
-			Size = UDim2.fromOffset(PILL + 3, PILL + 3), ZIndex = 1, Visible = false }, e.strip)
+			Size = UDim2.fromOffset(PILL + 3, PILL + 3), ZIndex = 1 }, e.rail)
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, line)
 		local fill = new("Frame", { BackgroundColor3 = T.Main, BackgroundTransparency = auraFillTr, BorderSizePixel = 0,
-			Size = UDim2.fromOffset(PILL, PILL), ZIndex = 2, Visible = false }, e.strip)
+			Size = UDim2.fromOffset(PILL, PILL), ZIndex = 2 }, e.rail)
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
 		e.line[#e.line + 1] = line
 		e.fill[#e.fill + 1] = fill
+		placeAuraPill(ei, idx, math.max(auraAmp, 0))
+	end
+	local function setAuraAmp(amp)
+		auraAmp = amp
+		for ei = 1, 4 do
+			for idx = 0, #auraEdges[ei].fill - 1 do placeAuraPill(ei, idx, amp) end
+		end
 	end
 	local auraGeom = ""
-	local function updateAura(w, h, r, amp)
-		local lenH, lenV = math.max(w - 2 * r, 0), math.max(h - 2 * r, 0)
+	local function layoutAura(w, h, r)
 		local geom = w .. "x" .. h .. "x" .. r
-		if geom ~= auraGeom then
-			auraGeom = geom
-			auraEdges[1].strip.Position = UDim2.fromOffset(r, -STRIP)
-			auraEdges[1].strip.Size = UDim2.fromOffset(lenH, STRIP)
-			auraEdges[2].strip.Position = UDim2.fromOffset(w, r)
-			auraEdges[2].strip.Size = UDim2.fromOffset(STRIP, lenV)
-			auraEdges[3].strip.Position = UDim2.fromOffset(r, h)
-			auraEdges[3].strip.Size = UDim2.fromOffset(lenH, STRIP)
-			auraEdges[4].strip.Position = UDim2.fromOffset(-STRIP, r)
-			auraEdges[4].strip.Size = UDim2.fromOffset(STRIP, lenV)
-		end
-		local k = 2 * math.pi / WAVELEN
+		if geom == auraGeom then return end
+		auraGeom = geom
+		local lenH, lenV = math.max(w - 2 * r, 0), math.max(h - 2 * r, 0)
+		auraEdges[1].strip.Position = UDim2.fromOffset(r, -STRIP)
+		auraEdges[1].strip.Size = UDim2.fromOffset(lenH, STRIP)
+		auraEdges[2].strip.Position = UDim2.fromOffset(w, r)
+		auraEdges[2].strip.Size = UDim2.fromOffset(STRIP, lenV)
+		auraEdges[3].strip.Position = UDim2.fromOffset(r, h)
+		auraEdges[3].strip.Size = UDim2.fromOffset(lenH, STRIP)
+		auraEdges[4].strip.Position = UDim2.fromOffset(-STRIP, r)
+		auraEdges[4].strip.Size = UDim2.fromOffset(STRIP, lenV)
 		for ei = 1, 4 do
-			local e = auraEdges[ei]
 			local len = (ei == 1 or ei == 3) and lenH or lenV
-			local n = 0
-			if len >= PILL then n = math.min(math.floor((len - PILL) / SPACING) + 1, 80) end
-			while #e.fill < n do addAuraPill(e) end
-			local step = (n > 1) and (len - PILL) / (n - 1) or 0
-			for i = 1, #e.fill do
-				local f, l = e.fill[i], e.line[i]
-				local vis = i <= n
-				if f.Visible ~= vis then
-					f.Visible = vis
-					l.Visible = vis
-				end
-				if vis then
-					local c = (n == 1) and len / 2 or (PILL / 2 + (i - 1) * step)
-					local s
-					if ei == 1 then s = r + c
-					elseif ei == 2 then s = w + r + c
-					elseif ei == 3 then s = w + h + (w - r - c)
-					else s = 2 * w + h + (h - r - c) end
-					local out = math.min(amp * (2 + 7 * (0.5 + 0.5 * math.sin(k * s - waveT * 2.2))), STRIP - 3)
-					local fx, fy
-					if ei == 1 then fx, fy = c - PILL / 2, STRIP - out
-					elseif ei == 2 then fx, fy = out - PILL, c - PILL / 2
-					elseif ei == 3 then fx, fy = c - PILL / 2, out - PILL
-					else fx, fy = STRIP - out, c - PILL / 2 end
-					f.Position = UDim2.fromOffset(fx, fy)
-					l.Position = UDim2.fromOffset(fx - 1.5, fy - 1.5)
-				end
-			end
+			local n = math.ceil((len + PERIOD + PILL) / SPACING) + 1
+			while #auraEdges[ei].fill < n do addAuraPill(ei) end
 		end
 	end
 
@@ -2827,31 +2854,38 @@ function Library:CreateWindow(cfg)
 	-- ------------------------------------------------------------------
 	local space = new("Frame", { Name = "Space", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
 		ClipsDescendants = true, BorderSizePixel = 0 }, main)
-	-- Vagues intérieures : deux nappes de petites bosses qui ondulent au fond de la fenêtre
+	-- Vagues intérieures : deux nappes de petites bosses, glissées par un Tween (aucun calcul par frame)
 	local wavesHolder = new("Frame", { Name = "Waves", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
 		BorderSizePixel = 0 }, space)
 	local INNER_W = 14
 	local innerLayers = {
-		{ pills = {}, tr = 0.95, base = 34, A = 9, k = 0.028, spd = 1.0, ph = 0 },
-		{ pills = {}, tr = 0.93, base = 22, A = 7, k = 0.043, spd = -1.5, ph = 2 },
+		{ tr = 0.95, base = 34, A = 9, N = 12, dir = 1, pxs = 52, pills = {} },
+		{ tr = 0.93, base = 22, A = 7, N = 8, dir = -1, pxs = 70, pills = {} },
 	}
-	local function updateInner(w, h, amp)
-		local n = math.ceil(w / INNER_W) + 1
+	for _, ly in ipairs(innerLayers) do
+		ly.period = ly.N * INNER_W
+		ly.rail = new("Frame", { BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.new(0, 1, 1, 0) }, wavesHolder)
+	end
+	local innerAmp = -1
+	local function placeInner(ly, i, amp)
+		ly.pills[i].Position = UDim2.new(0, (i - 1) * INNER_W, 1,
+			-(ly.base + ly.A * amp * math.sin(2 * math.pi * ((i - 1) % ly.N) / ly.N)))
+	end
+	local function setInnerAmp(amp)
+		innerAmp = amp
 		for _, ly in ipairs(innerLayers) do
+			for i = 1, #ly.pills do placeInner(ly, i, amp) end
+		end
+	end
+	local function layoutInner(w)
+		for _, ly in ipairs(innerLayers) do
+			local n = math.ceil((w + ly.period) / INNER_W) + 2
 			while #ly.pills < n do
 				local p = new("Frame", { BackgroundColor3 = T.Accent, BackgroundTransparency = ly.tr, BorderSizePixel = 0,
-					Size = UDim2.fromOffset(INNER_W, 160), Visible = false }, wavesHolder)
+					Size = UDim2.fromOffset(INNER_W, 160) }, ly.rail)
 				new("UICorner", { CornerRadius = UDim.new(1, 0) }, p)
 				ly.pills[#ly.pills + 1] = p
-			end
-			for i = 1, #ly.pills do
-				local p = ly.pills[i]
-				local vis = i <= n
-				if p.Visible ~= vis then p.Visible = vis end
-				if vis then
-					local x = (i - 1) * INNER_W
-					p.Position = UDim2.fromOffset(x, h - ly.base - ly.A * amp * math.sin(ly.k * x + waveT * ly.spd + ly.ph))
-				end
+				placeInner(ly, #ly.pills, math.max(innerAmp, 0))
 			end
 		end
 	end
@@ -2954,7 +2988,9 @@ function Library:CreateWindow(cfg)
 	end
 	local title = label(titleBar, cfg.Title or "UI", 15, { Position = UDim2.new(0, tx, 0, 0),
 		Size = UDim2.new(1, -tx - 190, 1, 0), Font = F_BOLD })
-	Library._titleGrad = spin(new("UIGradient", { Color = ColorSequence.new(T.GradientStart, T.GradientEnd) }, title), 26)
+	local titleGrad = new("UIGradient", { Color = Library._titleSeq(T.Accent), Rotation = 12 }, title)
+	Library._titleGrad = titleGrad
+	title:SetAttribute("FontRole", nil)   -- le titre a sa propre police
 
 	local hideBtn = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
 		Size = UDim2.new(0, 28, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.93,
@@ -3210,6 +3246,47 @@ function Library:CreateWindow(cfg)
 	-- ------------------------------------------------------------------
 	local SHAPE_RADIUS = { Vague = 26, Douce = 34, Classique = 12 }
 	local lastHolePos = Library.HolePos
+	local waveTweens, waveKey = {}, ""
+	local function stopWaveTweens()
+		for _, tw in ipairs(waveTweens) do tw:Cancel() end
+		table.clear(waveTweens)
+	end
+	local function loopTween(obj, from, to, period)
+		obj.Position = from
+		local tw = TweenService:Create(obj, TweenInfo.new(period, LINEAR, OUT, -1), { Position = to })
+		tw:Play()
+		waveTweens[#waveTweens + 1] = tw
+	end
+	local function refreshWaves(auraOn, innerOn)
+		local amp = Library.WaveAmp or 1
+		if amp ~= auraAmp then setAuraAmp(amp) end
+		if amp ~= innerAmp then setInnerAmp(amp) end
+		local speed = Library.WaveSpeed or 1
+		local anim = Library.Animations and speed > 0
+		local key = tostring(auraOn) .. tostring(innerOn) .. tostring(anim) .. tostring(speed)
+		if key == waveKey then return end
+		waveKey = key
+		stopWaveTweens()
+		if not anim then return end
+		if auraOn then
+			local pr = PERIOD / (46 * speed)
+			loopTween(auraEdges[1].rail, UDim2.fromOffset(-PERIOD, 0), UDim2.fromOffset(0, 0), pr)   -- haut : vers la droite
+			loopTween(auraEdges[2].rail, UDim2.fromOffset(0, -PERIOD), UDim2.fromOffset(0, 0), pr)   -- droite : vers le bas
+			loopTween(auraEdges[3].rail, UDim2.fromOffset(0, 0), UDim2.fromOffset(-PERIOD, 0), pr)   -- bas : vers la gauche
+			loopTween(auraEdges[4].rail, UDim2.fromOffset(0, 0), UDim2.fromOffset(0, -PERIOD), pr)   -- gauche : vers le haut
+		end
+		if innerOn then
+			for _, ly in ipairs(innerLayers) do
+				local pr = ly.period / (ly.pxs * speed)
+				if ly.dir > 0 then
+					loopTween(ly.rail, UDim2.fromOffset(-ly.period, 0), UDim2.fromOffset(0, 0), pr)
+				else
+					loopTween(ly.rail, UDim2.fromOffset(0, 0), UDim2.fromOffset(-ly.period, 0), pr)
+				end
+			end
+		end
+	end
+
 	function win:RefreshShape()
 		local base = (SHAPE_RADIUS[Library.Shape] or 26) * (Library.WinRound or 1)
 		mainEntry.BaseRadius = base
@@ -3219,7 +3296,34 @@ function Library:CreateWindow(cfg)
 		end
 		local alive = main.Visible and win.Open and bgMode ~= "off"
 		aura.Visible = alive and Library.Shape == "Vague" and Library.OutlineWaves ~= false
-		wavesHolder.Visible = Library.Shape ~= "Classique" and Library.InnerWaves ~= false and bgMode == "full"
+		wavesHolder.Visible = alive and Library.Shape ~= "Classique" and Library.InnerWaves ~= false and bgMode == "full"
+		refreshWaves(aura.Visible, wavesHolder.Visible)
+	end
+
+	-- Titre : police au choix + reflet qui balaie (un seul Tween en boucle)
+	local TITLE_FONTS = { Michroma = "Michroma", ["Gotham Black"] = "GothamBlack", Fredoka = "FredokaOne",
+		Oswald = "Oswald", Bangers = "Bangers", Jura = "Jura", ["Sci-Fi"] = "SciFi", Arcade = "Arcade" }
+	local shineTw
+	function win:ApplyTitle()
+		local en = TITLE_FONTS[Library.TitleFont]
+		local f
+		if en then
+			local ok, r = pcall(function() return Enum.Font[en] end)
+			if ok then f = r end
+		end
+		title.Font = f or (Library.Fonts and Library.Fonts[3]) or F_BOLD
+		if shineTw then
+			shineTw:Cancel()
+			shineTw = nil
+		end
+		if Library.TitleShine ~= false and Library.Animations and main.Visible then
+			titleGrad.Offset = Vector2.new(-1, 0)
+			shineTw = TweenService:Create(titleGrad,
+				TweenInfo.new(1.8, QUINT, Enum.EasingDirection.InOut, -1, false, 1.6), { Offset = Vector2.new(1, 0) })
+			shineTw:Play()
+		else
+			titleGrad.Offset = Vector2.new(0, 0)
+		end
 	end
 	function win:RefreshHole()
 		holeScaleObj.Scale = Library.HoleScale or 1
@@ -3240,16 +3344,16 @@ function Library:CreateWindow(cfg)
 		applyBg()
 	end
 	function win:GetStars() return #stars end
-	main:GetPropertyChangedSignal("Visible"):Connect(function() win:RefreshShape() end)
+	main:GetPropertyChangedSignal("Visible"):Connect(function()
+		win:RefreshShape()
+		win:ApplyTitle()
+	end)
 
 	local function stepWaves(w, h)
-		local e = math.min(waveIntro, 1)
-		local amp = (Library.WaveAmp or 1) * (1 - (1 - e) ^ 3)
 		if aura.Visible then
-			local r = math.min(mainCorner.CornerRadius.Offset, h / 2, w / 2)
-			updateAura(w, h, r, amp)
+			layoutAura(w, h, math.min(mainCorner.CornerRadius.Offset, h / 2, w / 2))
 		end
-		if wavesHolder.Visible and not collapsed then updateInner(w, h, amp) end
+		if wavesHolder.Visible and not collapsed then layoutInner(w) end
 	end
 
 	local toggleToken = 0
@@ -3263,7 +3367,6 @@ function Library:CreateWindow(cfg)
 		toggleToken = toggleToken + 1
 		local my = toggleToken
 		if v then
-			waveIntro = 0
 			main.Visible = true
 			tween(uiScale, { Scale = scaleBase }, 0.55, BACK)
 			if useCanvas then tween(main, { GroupTransparency = 0 }, 0.35) end
@@ -3426,8 +3529,6 @@ function Library:CreateWindow(cfg)
 			sp.g.Rotation = sp.a
 		end
 		hst.Transparency = Library.Breathing and (0.34 + 0.16 * math.sin(now * 1.7)) or 0.3
-		waveT = waveT + step * (Library.WaveSpeed or 1)
-		waveIntro = waveIntro + step * 1.1
 		local w, h = main.Size.X.Offset, main.Size.Y.Offset
 		stepWaves(w, h)
 		if collapsed then return end
@@ -3478,6 +3579,7 @@ function Library:CreateWindow(cfg)
 	Library.Window = win
 	win:RefreshShape()
 	win:RefreshHole()
+	win:ApplyTitle()
 	Library.DefaultTheme = Library:GetTheme()
 	Library._autoDone = false
 	if cfg.AutoLoad ~= false then
