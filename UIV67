@@ -38,6 +38,30 @@
 		  fluide (pas de fondu d'ouverture) ; Background = "full" | "light" | "off" dans CreateWindow, ou
 		  Window:SetBackground(mode) / Library:SetBackground(mode) à tout moment.
 		  Le fond se met en pause tout seul pendant les déplacements, redimensionnements et animations lourdes.
+
+	─────────────  NOUVEAUTÉS DE CETTE VERSION  ─────────────
+	FLUIDITÉ
+		• Le fond animé (anneaux + étoiles) n'est plus recalculé à chaque frame : boucle Heartbeat à ~30 Hz
+		  (~15 Hz pendant un geste), au lieu de RenderStepped + pause/reprise brutale (c'était la cause de l'effet « 15 fps »).
+		• RenderStepped ne gère plus que le déplacement / redimensionnement (très léger). Le redimensionnement suit
+		  directement le curseur (moins de recalculs de layout), le déplacement reste lissé.
+		• tween() met les TweenInfo en cache ; le slider se met à jour sans tween empilés pendant le glisser ;
+		  le dropdown ne ré-anime que les lignes qui changent. Bug corrigé : l'appel de glisser sans position.
+	PARAMÈTRES  (Window:CreateSettingsTab("Paramètres"))
+		opacité, couleur d'accent en direct, arrondi, échelle, taille de police, animations on/off + vitesse
+		(0.5x / 1x / 2x), fond animé complet/léger/off, indicateur FPS/ping, position et durée des notifications,
+		réinitialiser la fenêtre, config auto-chargée (Library:SetAutoLoad / Library:AutoLoad).
+		Position + taille de la fenêtre et état replié des blocs sont enregistrés dans les configs.
+	INTERFACE
+		• Double-clic sur la barre de titre : réduit à la barre seule / restaure.   • Ctrl+R : recentre.
+		• Bouton « = » dans la barre de titre : tout replier / déplier (Tab:CollapseAll / Tab:ExpandAll).
+		• Poignées de redimensionnement sur tous les bords et coins.
+		• Tooltips : { Tooltip = "texte" } sur Button/Toggle/Slider/Dropdown/Input/Keybind/ColorPicker.
+		• Favoris : étoile ★ sur chaque élément + Window:CreateFavoritesTab("Favoris"). { Favorite = false } pour l'enlever.
+		• Block:CreateConfirmButton({...}) ou CreateButton({ Confirm = true, ConfirmText = "..." }) : double confirmation.
+		• Block:CreateSeparator() (alias de CreateDivider). CreateLabel / CreateParagraph / Dropdown Multi existaient déjà.
+		• Indicateur FPS/ping dans la barre de titre (CreateWindow({ ShowStats = false }) pour le cacher).
+		• Library:SetAccent / SetFontScale / SetAnimSpeed / SetAnimations / SetNotifPosition / SetNotifDuration
 ]]
 
 local Players      = game:GetService("Players")
@@ -48,6 +72,7 @@ local HttpService  = game:GetService("HttpService")
 local GuiService   = game:GetService("GuiService")
 local CoreGui      = game:GetService("CoreGui")
 local LP           = Players.LocalPlayer
+local Stats        = game:GetService("Stats")
 
 local Library = {
 	Flags             = {},
@@ -58,6 +83,14 @@ local Library = {
 	StarCount         = 26,    -- étoiles du fond (0 pour désactiver)
 	ConfigFolder      = "Ui-Lib",
 	Scale             = 1,
+	Animations        = true,  -- false = aucune animation (PC faibles)
+	AnimSpeed         = 1,     -- multiplicateur de vitesse des animations
+	FontScale         = 1,
+	NotifPos          = "BottomRight",
+	NotifDuration     = 4,
+	Favorites         = {},
+	FavEntries        = {},
+	FavStars          = {},
 }
 
 -- Relance du script : on détruit proprement l'ancienne instance (UI + connexions)
@@ -151,15 +184,40 @@ local canvasSupported = pcall(function() Instance.new("CanvasGroup"):Destroy() e
 local Conns = {}
 local function track(c) Conns[#Conns + 1] = c return c end
 
+local TEXTCLASS = { TextLabel = true, TextButton = true, TextBox = true }
+
 local function new(class, props, parent)
 	local o = Instance.new(class)
 	for k, v in pairs(props or {}) do o[k] = v end
+	if TEXTCLASS[class] then
+		-- taille de base mémorisée : permet la « taille de police globale »
+		o:SetAttribute("BaseSize", o.TextSize)
+		if Library.FontScale ~= 1 then
+			o.TextSize = math.max(8, math.floor(o.TextSize * Library.FontScale + 0.5))
+		end
+	end
 	if parent then o.Parent = parent end
 	return o
 end
 
+-- TweenInfo mis en cache (évite d'en recréer des centaines) + multiplicateur de vitesse / mode sans animation
+local tweenInfoCache = {}
 local function tween(o, props, t, style, dir)
-	local tw = TweenService:Create(o, TweenInfo.new(t or 0.25, style or QUINT, dir or OUT), props)
+	t = t or 0.25
+	style = style or QUINT
+	dir = dir or OUT
+	if not Library.Animations then
+		t = 0
+	else
+		t = t / math.max(Library.AnimSpeed or 1, 0.05)
+	end
+	local key = tostring(t) .. "|" .. tostring(style) .. "|" .. tostring(dir)
+	local info = tweenInfoCache[key]
+	if not info then
+		info = TweenInfo.new(t, style, dir)
+		tweenInfoCache[key] = info
+	end
+	local tw = TweenService:Create(o, info, props)
 	tw:Play()
 	return tw
 end
@@ -180,14 +238,13 @@ local function stroke(parent, transparency, thickness)
 end
 
 local function label(parent, text, size, props)
-	local l = new("TextLabel", {
+	local p = {
 		BackgroundTransparency = 1, Text = tostring(text), TextColor3 = T.Text, TextSize = size or 13,
 		Font = F_MED, TextXAlignment = LEFT,
 		TextTruncate = Enum.TextTruncate.AtEnd, Size = UDim2.new(1, 0, 1, 0),
-	})
-	for k, v in pairs(props or {}) do l[k] = v end
-	l.Parent = parent
-	return l
+	}
+	for k, v in pairs(props or {}) do p[k] = v end
+	return new("TextLabel", p, parent)
 end
 
 -- Appelle un callback sans jamais casser l'UI
@@ -353,10 +410,25 @@ end
 -- ============================================================================
 -- NOTIFICATIONS
 -- ============================================================================
-local notifGui, notifHolder
+local notifGui, notifHolder, notifList
 local notifCount = 0
 local activeNotifs = {}
 local NOTIF_ICON = { Info = "i", Success = "+", Warning = "!", Error = "x" }
+
+-- Position : "TopLeft" | "TopRight" | "BottomLeft" | "BottomRight"
+local function notifSide()
+	local p = tostring(Library.NotifPos or "BottomRight")
+	return p:sub(1, 3) == "Top", p:sub(-4) == "Left"
+end
+
+local function applyNotifPos()
+	if not (notifHolder and notifList) then return end
+	local top, left = notifSide()
+	notifHolder.AnchorPoint = Vector2.new(left and 0 or 1, top and 0 or 1)
+	notifHolder.Position = UDim2.new(left and 0 or 1, left and 16 or -16, top and 0 or 1, top and 16 or -16)
+	notifList.VerticalAlignment = top and Enum.VerticalAlignment.Top or Enum.VerticalAlignment.Bottom
+	notifList.HorizontalAlignment = left and Enum.HorizontalAlignment.Left or Enum.HorizontalAlignment.Right
+end
 
 local function ensureNotif()
 	if notifGui and notifGui.Parent then return end
@@ -364,13 +436,21 @@ local function ensureNotif()
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
 	mount(notifGui)
 	notifHolder = new("Frame", {
-		AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -16, 1, -16),
 		Size = UDim2.new(0, 290, 1, -32), BackgroundTransparency = 1,
 	}, notifGui)
-	new("UIListLayout", {
-		VerticalAlignment = Enum.VerticalAlignment.Bottom, HorizontalAlignment = Enum.HorizontalAlignment.Right,
-		Padding = UDim.new(0, 8), SortOrder = BYORDER,
-	}, notifHolder)
+	notifList = new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, notifHolder)
+	applyNotifPos()
+end
+
+function Library:SetNotifPosition(p)
+	if p == "TopLeft" or p == "TopRight" or p == "BottomLeft" or p == "BottomRight" then
+		Library.NotifPos = p
+		applyNotifPos()
+	end
+end
+
+function Library:SetNotifDuration(d)
+	Library.NotifDuration = math.clamp(tonumber(d) or 4, 1, 30)
 end
 
 function Library:Notify(o)
@@ -378,13 +458,16 @@ function Library:Notify(o)
 	ensureNotif()
 	notifCount = notifCount + 1
 	local kind = NOTIF_ICON[o.Type] and o.Type or "Info"
-	local dur = tonumber(o.Duration) or 4
+	local dur = tonumber(o.Duration) or Library.NotifDuration or 4
+	local top, left = notifSide()
+	local off = left and -330 or 330
 
 	local slot = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = notifCount,
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
+		LayoutOrder = top and -notifCount or notifCount,
 	}, notifHolder)
 	local card = new(canvasSupported and "CanvasGroup" or "Frame", {
-		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Position = UDim2.new(0, 330, 0, 0),
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Position = UDim2.new(0, off, 0, 0),
 		BackgroundColor3 = T.Second, BackgroundTransparency = 0.04, BorderSizePixel = 0,
 	}, slot)
 	if canvasSupported then card.GroupTransparency = 1 end
@@ -428,7 +511,7 @@ function Library:Notify(o)
 		slot.AutomaticSize = AN
 		slot.Size = UDim2.new(1, 0, 0, h)
 		if canvasSupported then tween(card, { GroupTransparency = 1 }, 0.35) end
-		tween(card, { Position = UDim2.new(0, 330, 0, 0) }, 0.4)
+		tween(card, { Position = UDim2.new(0, off, 0, 0) }, 0.4)
 		task.delay(0.22, function()
 			if slot.Parent then tween(slot, { Size = UDim2.new(1, 0, 0, 0) }, 0.3) end
 		end)
@@ -440,9 +523,11 @@ function Library:Notify(o)
 
 	tween(card, { Position = UDim2.new(0, 0, 0, 0) }, 0.5)
 	if canvasSupported then tween(card, { GroupTransparency = 0 }, 0.35) end
-	tween(bar, { Size = UDim2.new(0, 0, 0, 2) }, dur, LINEAR)
+	-- la barre de durée suit le temps réel (indépendante du multiplicateur d'animations)
+	TweenService:Create(bar, TweenInfo.new(dur, LINEAR, OUT), { Size = UDim2.new(0, 0, 0, 2) }):Play()
 	task.delay(dur, dismiss)
 end
+
 
 -- ============================================================================
 -- CONFIGURATIONS  (nécessite writefile / readfile)
@@ -503,6 +588,109 @@ function Library:DeleteConfig(name)
 	if name == "" or not delfile then return false end
 	local ok = pcall(function() delfile(Library.ConfigFolder .. "/" .. name .. ".json") end)
 	return ok
+end
+
+-- ---------------------------------------------------------------------------
+-- Auto-load : une config chargée automatiquement au démarrage
+-- ---------------------------------------------------------------------------
+local function autoPath() return Library.ConfigFolder .. "/_autoload.txt" end
+
+function Library:GetAutoLoad()
+	local n
+	pcall(function()
+		if isfile and readfile and isfile(autoPath()) then n = safeName(readfile(autoPath())) end
+	end)
+	if n == "" then n = nil end
+	return n
+end
+
+function Library:SetAutoLoad(name)
+	name = safeName(name)
+	pcall(function()
+		if makefolder and isfolder and not isfolder(Library.ConfigFolder) then makefolder(Library.ConfigFolder) end
+		if name == "" then
+			if delfile and isfile and isfile(autoPath()) then delfile(autoPath()) end
+		elseif writefile then
+			writefile(autoPath(), name)
+		end
+	end)
+	return true
+end
+
+-- À appeler à la fin de ton script (sinon appelé tout seul ~1,2 s après CreateWindow)
+function Library:AutoLoad()
+	if Library._autoDone then return end
+	Library._autoDone = true
+	local n = Library:GetAutoLoad()
+	if not n then return end
+	local ok, err = Library:LoadConfig(n)
+	Library:Notify({ Title = "Config",
+		Content = ok and ("Auto-chargée : " .. n) or ("Auto-load échoué : " .. tostring(err)),
+		Type = ok and "Success" or "Error", Duration = 3 })
+end
+
+-- ---------------------------------------------------------------------------
+-- Animations / police / couleur d'accent
+-- ---------------------------------------------------------------------------
+function Library:SetAnimations(v) Library.Animations = v and true or false end
+function Library:SetAnimSpeed(v) Library.AnimSpeed = math.clamp(tonumber(v) or 1, 0.25, 4) end
+
+local function guiRoots()
+	local r = {}
+	if Library.Window and Library.Window.Gui then r[#r + 1] = Library.Window.Gui end
+	if notifGui then r[#r + 1] = notifGui end
+	return r
+end
+
+function Library:SetFontScale(m)
+	m = math.clamp(tonumber(m) or 1, 0.7, 1.5)
+	Library.FontScale = m
+	for _, root in ipairs(guiRoots()) do
+		for _, d in ipairs(root:GetDescendants()) do
+			if TEXTCLASS[d.ClassName] then
+				local base = d:GetAttribute("BaseSize")
+				if base then d.TextSize = math.max(8, math.floor(base * m + 0.5)) end
+			end
+		end
+	end
+end
+
+local ACC_PROPS = {
+	Frame = { "BackgroundColor3" }, CanvasGroup = { "BackgroundColor3" },
+	TextButton = { "BackgroundColor3", "TextColor3" }, TextLabel = { "BackgroundColor3", "TextColor3" },
+	TextBox = { "BackgroundColor3", "TextColor3" },
+	ImageLabel = { "ImageColor3", "BackgroundColor3" },
+	ScrollingFrame = { "ScrollBarImageColor3" }, UIStroke = { "Color" },
+}
+local function nearColor(a, b) return math.abs(a.R - b.R) + math.abs(a.G - b.G) + math.abs(a.B - b.B) < 0.006 end
+local function noAccent(d, root)
+	local p = d
+	while p and p ~= root do
+		if p:GetAttribute("NoAccent") then return true end
+		p = p.Parent
+	end
+	return false
+end
+
+-- Applique une nouvelle couleur d'accent en direct sur tout ce qui utilisait l'ancienne
+function Library:SetAccent(c)
+	if typeof(c) ~= "Color3" then return end
+	local old = T.Accent
+	if nearColor(old, c) then return end
+	T.Accent = c
+	for _, root in ipairs(guiRoots()) do
+		for _, d in ipairs(root:GetDescendants()) do
+			local props = ACC_PROPS[d.ClassName]
+			if props then
+				for _, p in ipairs(props) do
+					local ok, cur = pcall(function() return d[p] end)
+					if ok and typeof(cur) == "Color3" and nearColor(cur, old) and not noAccent(d, root) then
+						d[p] = c
+					end
+				end
+			end
+		end
+	end
 end
 
 function Library:SetBackground(m)
@@ -644,7 +832,28 @@ function Block:CreateButton(o)
 	local st = stroke(b, 0.93)
 	hover(b, st)
 	self:_reg(b, o.Name)
+	local armed, armToken = false, 0
+	local baseText = o.Name or "Button"
 	b.MouseButton1Click:Connect(function()
+		if o.Confirm then
+			if not armed then
+				armed = true
+				armToken += 1
+				local my = armToken
+				b.Text = o.ConfirmText or "Êtes-vous sûr ?"
+				tween(b, { BackgroundColor3 = Color3.fromRGB(150, 45, 45), BackgroundTransparency = 0.1 }, 0.2)
+				task.delay(3, function()
+					if armed and armToken == my then
+						armed = false
+						b.Text = baseText
+						tween(b, { BackgroundColor3 = T.Element, BackgroundTransparency = 0.4 }, 0.3)
+					end
+				end)
+				return
+			end
+			armed = false
+			b.Text = baseText
+		end
 		-- flash blanc qui s'estompe
 		b.BackgroundColor3 = T.Accent
 		b.BackgroundTransparency = 0
@@ -781,7 +990,7 @@ function Block:CreateSlider(o)
 			tween(knob, { Size = UDim2.new(0, 17, 0, 17) }, 0.2, BACK)
 			startDrag(function(p)
 				local t = math.clamp((p.X - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1)
-				apply(min + t * (max - min))
+				apply(min + t * (max - min), false, true)
 			end, self.Scroll, i.Position, function()
 				tween(knob, { Size = UDim2.new(0, 12, 0, 12) }, 0.25)
 			end)
@@ -912,8 +1121,11 @@ function Block:CreateDropdown(o)
 	restyle = function()
 		for text, b in pairs(btns) do
 			local on = isOn(text)
-			tween(b.Btn, { BackgroundTransparency = on and 0.86 or 1, TextColor3 = on and T.Accent or T.ElementAccent }, 0.18)
-			tween(b.Ind, { BackgroundTransparency = on and 0 or 1 }, 0.18)
+			if b.On ~= on then
+				b.On = on
+				tween(b.Btn, { BackgroundTransparency = on and 0.86 or 1, TextColor3 = on and T.Accent or T.ElementAccent }, 0.18)
+				tween(b.Ind, { BackgroundTransparency = on and 0 or 1 }, 0.18)
+			end
 		end
 	end
 
@@ -1185,6 +1397,7 @@ function Block:CreateColorPicker(o)
 	}, head)
 	corner(swatch, 5)
 	stroke(swatch, 0.55)
+	swatch:SetAttribute("NoAccent", true)
 
 	local dr = drawer(holder, 2)
 	dr:Resize(146)
@@ -1193,6 +1406,7 @@ function Block:CreateColorPicker(o)
 	}, dr.Wrap)
 	corner(panel, 8)
 	stroke(panel, 0.9)
+	panel:SetAttribute("NoAccent", true)
 
 	-- Carré saturation / valeur
 	local sv = new("Frame", { Position = UDim2.new(0, 8, 0, 8), Size = UDim2.new(1, -40, 0, 100),
@@ -1306,6 +1520,123 @@ function Block:CreateColorPicker(o)
 end
 
 -- ============================================================================
+-- OUTILS D'ÉLÉMENTS : tooltips, favoris, alias
+-- ============================================================================
+local tipLabel, tipShown = nil, false   -- créés par CreateWindow
+
+local function attachTip(frame, text)
+	text = tostring(text)
+	local token = 0
+	frame.MouseEnter:Connect(function()
+		token += 1
+		local my = token
+		task.delay(0.4, function()
+			if token ~= my or not tipLabel then return end
+			tipLabel.Text = text
+			tipShown = true
+			tipLabel.Visible = true
+		end)
+	end)
+	frame.MouseLeave:Connect(function()
+		token += 1
+		tipShown = false
+		if tipLabel then tipLabel.Visible = false end
+	end)
+end
+
+local function favList()
+	local out = {}
+	for k, v in pairs(Library.Favorites) do
+		if v then out[#out + 1] = k end
+	end
+	table.sort(out)
+	return out
+end
+
+function Library:SetFavorite(key, on)
+	on = on and true or false
+	Library.Favorites[key] = on or nil
+	local star = Library.FavStars[key]
+	if star and star.Parent then tween(star, { TextTransparency = on and 0.05 or 0.8 }, 0.2) end
+	Library.Flags["__favorites"] = favList()
+	local w = Library.Window
+	if w and w.FavTab and w.Current == w.FavTab and w.FavTab.OnSelect then w.FavTab.OnSelect() end
+end
+
+local function registerFavItem()
+	Library.Flags["__favorites"] = favList()
+	Library.Items["__favorites"] = {
+		Get = function() return favList() end,
+		Set = function(_, list)
+			if type(list) ~= "table" then return end
+			local newSet = {}
+			for _, k in ipairs(list) do newSet[tostring(k)] = true end
+			for k in pairs(Library.Favorites) do
+				if not newSet[k] then Library:SetFavorite(k, false) end
+			end
+			for k in pairs(newSet) do Library:SetFavorite(k, true) end
+		end,
+	}
+end
+
+-- On enrobe chaque élément interactif : tooltip (o.Tooltip) + étoile de favori (o.Favorite = false pour la retirer)
+local WRAP_KINDS = { "Button", "Toggle", "Slider", "Dropdown", "Input", "Keybind", "ColorPicker" }
+for _, kind in ipairs(WRAP_KINDS) do
+	local base = Block["Create" .. kind]
+	Block["Create" .. kind] = function(self, o)
+		local item = base(self, o)
+		local opts = type(o) == "table" and o or {}
+		local e = self.Entries[#self.Entries]
+		if e and e.Frame then
+			if opts.Tooltip then attachTip(e.Frame, opts.Tooltip) end
+			if not self._noFav and opts.Favorite ~= false then
+				local tabName = self.Tab and self.Tab.Name or ""
+				local key = tostring(tabName) .. "/" .. tostring(self.Name) .. "/" .. kind .. "/" .. tostring(opts.Name or "")
+				local host = e.Frame
+				-- dropdown / color picker : le cadre a un UIListLayout, l'étoile va dans la ligne d'en-tête
+				if host:FindFirstChildOfClass("UIListLayout") then
+					host = host:FindFirstChildWhichIsA("TextButton") or host
+				end
+				local star = new("TextButton", {
+					Name = "FavStar", Size = UDim2.fromOffset(12, 12), Position = UDim2.fromOffset(1, 1),
+					BackgroundTransparency = 1, Text = "★", TextSize = 10, Font = F_BOLD, TextColor3 = T.Accent,
+					TextTransparency = Library.Favorites[key] and 0.05 or 0.8, AutoButtonColor = false, ZIndex = 6,
+				}, host)
+				Library.FavStars[key] = star
+				Library.FavEntries[key] = { Kind = kind, Opts = opts, Item = item, Key = key,
+					Tab = tabName, Block = self.Name }
+				star.MouseButton1Click:Connect(function()
+					Library:SetFavorite(key, not Library.Favorites[key])
+				end)
+			end
+		end
+		return item
+	end
+end
+
+-- Bouton à double confirmation : CreateButton({ Confirm = true }) ou CreateConfirmButton(...)
+function Block:CreateConfirmButton(o)
+	o = o or {}
+	o.Confirm = true
+	return self:CreateButton(o)
+end
+Block.CreateSeparator = Block.CreateDivider
+
+-- Aides sur les onglets
+function Tab:ClearBlocks()
+	for _, b in ipairs(self.Blocks) do
+		if b.Frame then b.Frame:Destroy() end
+	end
+	self.Blocks = {}
+	self.DefaultBlock = nil
+	self.Order = 0
+end
+function Tab:CollapseAll(c)
+	for _, b in ipairs(self.Blocks) do b:SetCollapsed(c ~= false) end
+end
+function Tab:ExpandAll() self:CollapseAll(false) end
+
+-- ============================================================================
 -- ONGLETS & BLOCS
 -- ============================================================================
 function Tab:CreateBlock(o)
@@ -1344,10 +1675,12 @@ function Tab:CreateBlock(o)
 	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8),
 		PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 8) }, body)
 
+	local flagKey = "__block:" .. tostring(self.Name or "Tab") .. "/" .. tostring(o.Name or "Block")
 	local collapsed = false
 	local function setCollapsed(c)
 		if c == collapsed then return end
 		collapsed = c
+		Library.Flags[flagKey] = c
 		tween(arrow, { Rotation = c and 0 or 90 }, 0.3)
 		Library._busyUntil = os.clock() + 0.45
 		local sc = pxScale()
@@ -1381,9 +1714,14 @@ function Tab:CreateBlock(o)
 
 	local blk = setmetatable({
 		Frame = frame, Body = body, Scroll = col, Tab = self, Name = o.Name or "Block",
-		Entries = {}, _collapse = setCollapsed,
+		Entries = {}, _collapse = setCollapsed, _isCollapsed = function() return collapsed end,
 	}, Block)
 	self.Blocks[#self.Blocks + 1] = blk
+	Library.Flags[flagKey] = collapsed
+	Library.Items[flagKey] = {
+		Get = function() return collapsed end,
+		Set = function(_, v) setCollapsed(v and true or false) end,
+	}
 	return blk
 end
 
@@ -1491,6 +1829,7 @@ function Window:CreateTab(name, _, icon)
 			end)
 		end
 		win.Current = tab
+		if tab.OnSelect then tab.OnSelect() end
 	end
 	tab.Bar, tab.Label, tab.Dot = bar, txt, dot
 	btn.MouseEnter:Connect(function()
@@ -1544,6 +1883,124 @@ function Window:CreateConfigTab(name, icon)
 	return tab
 end
 
+-- Onglet « Favoris » : regroupe les éléments marqués d'une étoile (copies synchronisées avec les originaux)
+function Window:CreateFavoritesTab(name, icon)
+	local win = self
+	local tab = self:CreateTab(name or "Favoris", nil, icon)
+	win.FavTab = tab
+
+	local function proxy(blk, ent)
+		local o = {}
+		for k, v in pairs(ent.Opts) do o[k] = v end
+		o.Flag = nil
+		o.Favorite = false
+		local item = ent.Item
+		if ent.Kind ~= "Button" then
+			local ok, cur = pcall(function() return item.Get() end)
+			if ok and cur ~= nil then o.Default = cur end
+			o.Callback = function(v) pcall(item.Set, item, v) end
+		end
+		pcall(function() blk["Create" .. ent.Kind](blk, o) end)
+	end
+
+	local function rebuild()
+		tab:ClearBlocks()
+		local keys = {}
+		for k in pairs(Library.Favorites) do
+			if Library.FavEntries[k] then keys[#keys + 1] = k end
+		end
+		table.sort(keys)
+		local blk = tab:CreateBlock({ Name = "Favoris", Side = "Left" })
+		blk._noFav = true
+		if #keys == 0 then
+			blk:CreateParagraph({ Title = "Aucun favori",
+				Content = "Clique sur l'étoile ★ en haut à gauche d'un élément pour l'ajouter ici." })
+			return
+		end
+		local last
+		for _, k in ipairs(keys) do
+			local ent = Library.FavEntries[k]
+			local group = tostring(ent.Tab) .. " · " .. tostring(ent.Block)
+			if group ~= last then blk:CreateSection(group) last = group end
+			proxy(blk, ent)
+		end
+	end
+	tab.OnSelect = rebuild
+	rebuild()
+	return tab
+end
+
+-- Onglet « Paramètres » prêt à l'emploi
+function Window:CreateSettingsTab(name, icon)
+	local win = self
+	local tab = self:CreateTab(name or "Paramètres", nil, icon)
+
+	local A = tab:CreateBlock({ Name = "Apparence", Side = "Left" })
+	A:CreateSlider({ Name = "Opacité de la fenêtre", Flag = "ui.opacity", Min = 20, Max = 100, Step = 1, Suffix = "%",
+		Default = math.floor((win.Opacity or 0.96) * 100 + 0.5), Tooltip = "Rend la fenêtre transparente pour voir le jeu derrière.",
+		Callback = function(v) win:SetOpacity(v / 100) end })
+	A:CreateColorPicker({ Name = "Couleur d'accent", Flag = "ui.accent", Default = T.Accent,
+		Tooltip = "Appliquée en direct sur toute l'interface.",
+		Callback = function(c) Library:SetAccent(c) end })
+	A:CreateSlider({ Name = "Arrondi", Flag = "ui.radius", Min = 0, Max = 20, Step = 1,
+		Default = Library.GlobalCornerValue, Callback = function(v) Library:SetCornerRadius(v) end })
+	A:CreateSlider({ Name = "Échelle de l'interface", Flag = "ui.scale", Min = 0.6, Max = 1.6, Step = 0.05,
+		Default = Library.Scale, Callback = function(v) win:SetScale(v) end })
+	local fonts = { Petite = 0.88, Normale = 1, Grande = 1.14 }
+	local fontName = "Normale"
+	for k, v in pairs(fonts) do if math.abs(v - Library.FontScale) < 0.01 then fontName = k end end
+	A:CreateDropdown({ Name = "Taille de police", Flag = "ui.font", Items = { "Petite", "Normale", "Grande" },
+		Default = fontName, Callback = function(v) Library:SetFontScale(fonts[v] or 1) end })
+
+	local B = tab:CreateBlock({ Name = "Performances", Side = "Left" })
+	B:CreateToggle({ Name = "Animations", Flag = "ui.anim", Default = Library.Animations,
+		Tooltip = "Désactive toutes les transitions (utile sur les PC faibles).",
+		Callback = function(v) Library:SetAnimations(v) end })
+	local speeds = { ["0.5x"] = 0.5, ["1x"] = 1, ["2x"] = 2 }
+	B:CreateDropdown({ Name = "Vitesse des animations", Flag = "ui.animspeed", Items = { "0.5x", "1x", "2x" },
+		Default = "1x", Search = false, Callback = function(v) Library:SetAnimSpeed(speeds[v] or 1) end })
+	local bgNames = { full = "Complet", light = "Léger", off = "Désactivé" }
+	local bgModes = { Complet = "full", ["Léger"] = "light", ["Désactivé"] = "off" }
+	B:CreateDropdown({ Name = "Fond animé", Flag = "ui.bg", Items = { "Complet", "Léger", "Désactivé" },
+		Default = bgNames[win:GetBackground()] or "Complet", Search = false,
+		Tooltip = "Désactiver le trou noir et les étoiles réduit la charge.",
+		Callback = function(v) win:SetBackground(bgModes[v] or "full") end })
+	B:CreateToggle({ Name = "Indicateur FPS / ping", Flag = "ui.fps", Default = win.StatsVisible,
+		Callback = function(v) win:SetStats(v) end })
+
+	local C = tab:CreateBlock({ Name = "Notifications", Side = "Right" })
+	local posNames = { TopLeft = "Haut gauche", TopRight = "Haut droite", BottomLeft = "Bas gauche", BottomRight = "Bas droite" }
+	local posKeys = {}
+	for k, v in pairs(posNames) do posKeys[v] = k end
+	C:CreateDropdown({ Name = "Position", Flag = "ui.notifpos",
+		Items = { "Haut gauche", "Haut droite", "Bas gauche", "Bas droite" },
+		Default = posNames[Library.NotifPos] or "Bas droite", Search = false,
+		Callback = function(v) Library:SetNotifPosition(posKeys[v] or "BottomRight") end })
+	C:CreateSlider({ Name = "Durée par défaut", Flag = "ui.notifdur", Min = 1, Max = 15, Step = 0.5, Suffix = " s",
+		Default = Library.NotifDuration, Callback = function(v) Library:SetNotifDuration(v) end })
+	C:CreateButton({ Name = "Tester une notification", Favorite = false, Callback = function()
+		Library:Notify({ Title = "Test", Content = "Voilà à quoi ressemblent les notifications.", Type = "Info" })
+	end })
+
+	local D = tab:CreateBlock({ Name = "Fenêtre", Side = "Right" })
+	D:CreateButton({ Name = "Réinitialiser la fenêtre", Favorite = false,
+		Tooltip = "Recentre la fenêtre et remet sa taille d'origine (Ctrl+R).",
+		Callback = function() win:Reset() end })
+	local NONE = "(aucune)"
+	local function autoItems()
+		local t = { NONE }
+		for _, n in ipairs(Library:ListConfigs()) do t[#t + 1] = n end
+		return t
+	end
+	D:CreateDropdown({ Name = "Config auto-chargée", Items = autoItems(), Default = Library:GetAutoLoad() or NONE,
+		UpdateList = autoItems, Favorite = false,
+		Tooltip = "Cette config est chargée toute seule au démarrage.",
+		Callback = function(v) Library:SetAutoLoad(v ~= NONE and v or "") end })
+	D:CreateParagraph({ Title = "Raccourcis",
+		Content = "Double-clic sur la barre de titre : réduire / restaurer.\nCtrl+R : recentrer la fenêtre.\nBouton = dans la barre de titre : tout replier / déplier." })
+	return tab
+end
+
 -- ============================================================================
 -- FENÊTRE
 -- ============================================================================
@@ -1555,6 +2012,8 @@ function Library:CreateWindow(cfg)
 	refreshTheme()
 	local transp = tonumber(cfg.Transparency) or 0.04
 	Library.ConfigFolder = cfg.ConfigFolder or Library.ConfigFolder or "Ui-Lib"
+	if cfg.Animations ~= nil then Library.Animations = cfg.Animations and true or false end
+	if cfg.AnimSpeed then Library.AnimSpeed = math.clamp(tonumber(cfg.AnimSpeed) or 1, 0.25, 4) end
 
 	-- Nettoie une ancienne instance (relance du script)
 	for _, p in ipairs({ CoreGui, LP:FindFirstChild("PlayerGui") }) do
@@ -1572,6 +2031,7 @@ function Library:CreateWindow(cfg)
 	local size = cfg.Size or UDim2.new(0, 480, 0, 560)
 	local W = math.min(size.X.Offset + size.X.Scale * vp.X, vp.X - 16)
 	local H = math.min(size.Y.Offset + size.Y.Scale * vp.Y, vp.Y - 16)
+	local W0, H0 = W, H
 	local center
 	if cfg.Position then
 		local pos = cfg.Position
@@ -1586,8 +2046,7 @@ function Library:CreateWindow(cfg)
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
 	mount(gui)
 
-	-- CanvasGroup = fondu d'ouverture, mais coûteux (toute la fenêtre est redessinée dans une texture à chaque changement).
-	-- NoCanvasGroup = true dans CreateWindow (ou Library.NoCanvasGroup) -> simple Frame, beaucoup plus fluide.
+	-- CanvasGroup = fondu d'ouverture, mais coûteux. NoCanvasGroup = true -> simple Frame, beaucoup plus fluide.
 	local useCanvas = canvasSupported and not cfg.NoCanvasGroup and not Library.NoCanvasGroup
 	local main = new(useCanvas and "CanvasGroup" or "Frame", {
 		Name = "MainBackground", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(W, H),
@@ -1598,9 +2057,18 @@ function Library:CreateWindow(cfg)
 	local uiScale = new("UIScale", { Scale = 1 }, main)
 	local scaleBase = 1
 
-	-- Position lissée (déplacement fluide)
+	-- ------------------------------------------------------------------
+	-- Etat de la fenêtre : position / taille lissées
+	-- ------------------------------------------------------------------
 	local curPos, tgtPos = center, nil
-	local curSize, tgtSize, rsBase = nil, nil, nil -- redimensionnement lissé
+	local curSize, tgtSize = Vector2.new(W, H), nil
+	local lastSize = Vector2.new(W, H)
+	local rsDir = Vector2.new(0, 0)   -- bord fixe lors d'un redimensionnement (0 = centre, 1 = haut/gauche fixe, -1 = bas/droite fixe)
+	local rsSmooth = false            -- true = animation lissée (réduction, reset), false = suit directement le curseur
+	local collapsed, preSize = false, nil
+	local setMinimized
+	local statsOn = cfg.ShowStats ~= false
+
 	local function clampCenter(c)
 		local v = viewport()
 		local w, h = main.Size.X.Offset * scaleBase, main.Size.Y.Offset * scaleBase
@@ -1609,6 +2077,30 @@ function Library:CreateWindow(cfg)
 			math.clamp(c.Y, h / 2, v.Y - 40 + h / 2)
 		)
 	end
+	local function setMainPos()
+		main.Position = UDim2.fromOffset(math.floor(curPos.X + 0.5), math.floor(curPos.Y + 0.5))
+	end
+	local function applySize(sz)
+		-- tailles paires + positions entières = pas de tremblement
+		local nw = math.floor(sz.X / 2 + 0.5) * 2
+		local nh = math.floor(sz.Y / 2 + 0.5) * 2
+		local ns = Vector2.new(nw, nh)
+		if ns == lastSize then return false end
+		curPos = curPos + (ns - lastSize) * scaleBase * rsDir / 2
+		lastSize = ns
+		main.Size = UDim2.fromOffset(nw, nh)
+		return true
+	end
+	local function saveWin()
+		local v = viewport()
+		local p = tgtPos or curPos
+		Library.Flags["__window"] = {
+			cx = p.X / v.X, cy = p.Y / v.Y,
+			w = main.Size.X.Offset,
+			h = (collapsed and preSize) and preSize.Y or main.Size.Y.Offset,
+		}
+	end
+	local function saveWinLater() task.delay(0.5, saveWin) end
 
 	-- ------------------------------------------------------------------
 	-- Fond : trou noir + étoiles (derrière tout le reste)
@@ -1697,27 +2189,41 @@ function Library:CreateWindow(cfg)
 		tx = 42
 	end
 	local title = label(titleBar, cfg.Title or "UI", 15, { Position = UDim2.new(0, tx, 0, 0),
-		Size = UDim2.new(1, -tx - 60, 1, 0), Font = F_BOLD })
+		Size = UDim2.new(1, -tx - 190, 1, 0), Font = F_BOLD })
 	new("UIGradient", { Color = ColorSequence.new(T.GradientStart, T.GradientEnd) }, title)
+
 	local hideBtn = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
 		Size = UDim2.new(0, 28, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.93,
 		Text = "-", TextColor3 = T.Text, TextSize = 16, Font = F_BOLD, AutoButtonColor = false }, titleBar)
 	corner(hideBtn, 7)
 	hideBtn.MouseEnter:Connect(function() tween(hideBtn, { BackgroundTransparency = 0.8 }, 0.2) end)
 	hideBtn.MouseLeave:Connect(function() tween(hideBtn, { BackgroundTransparency = 0.93 }, 0.25) end)
+
+	-- bouton « tout replier / tout déplier » (onglet courant)
+	local foldBtn = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -46, 0.5, 0),
+		Size = UDim2.new(0, 28, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.93,
+		Text = "=", TextColor3 = T.Text, TextSize = 15, Font = F_BOLD, AutoButtonColor = false }, titleBar)
+	corner(foldBtn, 7)
+	foldBtn.MouseEnter:Connect(function() tween(foldBtn, { BackgroundTransparency = 0.8 }, 0.2) end)
+	foldBtn.MouseLeave:Connect(function() tween(foldBtn, { BackgroundTransparency = 0.93 }, 0.25) end)
+	attachTip(foldBtn, "Tout replier / tout déplier (onglet actuel)")
+
+	-- indicateur FPS / ping
+	local fpsLabel = label(titleBar, "", 11, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -80, 0.5, 0),
+		Size = UDim2.new(0, 104, 0, 16), TextXAlignment = RIGHT, Font = F_REG, TextColor3 = T.ElementAccent,
+		Visible = statsOn })
 	fadeLine(main, { Position = UDim2.new(0, 14, 0, 42), Size = UDim2.new(1, -28, 0, 1) })
 
-	-- Déplacement de la fenêtre (lissé)
-	dragZone.InputBegan:Connect(function(i)
-		if isPress(i) then
-			local start = Vector2.new(i.Position.X, i.Position.Y)
-			local origin = curPos
-			tgtPos = nil
-			startDrag(function(p)
-				tgtPos = clampCenter(origin + (Vector2.new(p.X, p.Y) - start))
-			end)
-		end
-	end)
+	-- Tooltip global
+	tipLabel = new("TextLabel", { Name = "Tooltip", AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.fromOffset(0, 0),
+		BackgroundColor3 = T.Second, BackgroundTransparency = 0.04, TextColor3 = T.Text, TextSize = 12, Font = F_REG,
+		TextWrapped = true, TextXAlignment = LEFT, Visible = false, ZIndex = 500, BorderSizePixel = 0 }, gui)
+	tipShown = false
+	corner(tipLabel, 7)
+	stroke(tipLabel, 0.8)
+	new("UIPadding", { PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5),
+		PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 9) }, tipLabel)
+	new("UISizeConstraint", { MaxSize = Vector2.new(260, 400) }, tipLabel)
 
 	-- ------------------------------------------------------------------
 	-- Recherche + barre latérale + contenu
@@ -1755,13 +2261,32 @@ function Library:CreateWindow(cfg)
 	local contentW = W - 156
 	local win = setmetatable({
 		Gui = gui, Main = main, Sidebar = sidebar, Content = content, Tabs = {}, Veil = veil, Search = search,
-		TwoCols = contentW >= 520, Open = true,
+		TwoCols = contentW >= 520, Open = true, Opacity = 1 - transp, StatsVisible = statsOn,
 	}, Window)
 
 	search:GetPropertyChangedSignal("Text"):Connect(function() applySearch(win, search.Text) end)
 
+	-- Déplacement de la fenêtre (lissé) + double-clic = réduire / restaurer
+	local lastClick = 0
+	dragZone.InputBegan:Connect(function(i)
+		if not isPress(i) then return end
+		local now = os.clock()
+		if now - lastClick < 0.32 then
+			lastClick = 0
+			if setMinimized then setMinimized(not collapsed) end
+			return
+		end
+		lastClick = now
+		local start = Vector2.new(i.Position.X, i.Position.Y)
+		local origin = tgtPos or curPos
+		tgtPos = nil
+		startDrag(function(p)
+			tgtPos = clampCenter(origin + (Vector2.new(p.X, p.Y) - start))
+		end, nil, i.Position, saveWinLater)
+	end)
+
 	-- ------------------------------------------------------------------
-	-- Bordure « horizon des événements » + poignée de redimensionnement
+	-- Bordure « horizon des événements » + poignées de redimensionnement (bords et coins)
 	-- ------------------------------------------------------------------
 	local horizon = new("Frame", { Name = "Horizon", Position = UDim2.new(0, 1, 0, 1), Size = UDim2.new(1, -2, 1, -2),
 		BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 50 }, main)
@@ -1776,6 +2301,46 @@ function Library:CreateWindow(cfg)
 		}),
 	}, hst), 55)
 
+	local handles = {}
+	local function attachResize(h, dx, dy)
+		handles[#handles + 1] = h
+		h.InputBegan:Connect(function(i)
+			if not isPress(i) or collapsed then return end
+			local start = Vector2.new(i.Position.X, i.Position.Y)
+			local sw, sh = main.Size.X.Offset, main.Size.Y.Offset
+			local sc = scaleBase
+			tgtPos = nil
+			curSize = Vector2.new(sw, sh)
+			lastSize = curSize
+			tgtSize = nil
+			rsDir = Vector2.new(dx, dy)
+			rsSmooth = false
+			startDrag(function(p)
+				local d = (Vector2.new(p.X, p.Y) - start) / sc
+				local v = viewport()
+				tgtSize = Vector2.new(
+					dx == 0 and sw or math.clamp(sw + d.X * dx, minW, math.max(minW, v.X / sc - 10)),
+					dy == 0 and sh or math.clamp(sh + d.Y * dy, minH, math.max(minH, v.Y / sc - 10))
+				)
+			end, nil, i.Position, saveWinLater)
+		end)
+	end
+
+	local function handle(dx, dy, pos, sz)
+		local h = new("TextButton", { Position = pos, Size = sz, BackgroundTransparency = 1, Text = "",
+			AutoButtonColor = false, ZIndex = 70 }, main)
+		attachResize(h, dx, dy)
+		return h
+	end
+	handle(1, 0,  UDim2.new(1, -6, 0, 46),  UDim2.new(0, 6, 1, -76))   -- droite
+	handle(-1, 0, UDim2.new(0, 0, 0, 46),   UDim2.new(0, 6, 1, -76))   -- gauche
+	handle(0, 1,  UDim2.new(0, 30, 1, -6),  UDim2.new(1, -60, 0, 6))   -- bas
+	handle(0, -1, UDim2.new(0, 30, 0, 0),   UDim2.new(1, -72, 0, 4))   -- haut
+	handle(-1, -1, UDim2.new(0, 0, 0, 0),   UDim2.fromOffset(14, 14))  -- haut gauche
+	handle(1, -1, UDim2.new(1, -14, 0, 0),  UDim2.fromOffset(14, 14))  -- haut droite
+	handle(-1, 1, UDim2.new(0, 0, 1, -14),  UDim2.fromOffset(14, 14))  -- bas gauche
+
+	-- poignée visible (coin bas-droite)
 	local grip = new("TextButton", { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -4, 1, -4),
 		Size = UDim2.new(0, 20, 0, 20), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 60 }, main)
 	local dots = { { 15, 15 }, { 9, 15 }, { 15, 9 } }
@@ -1785,24 +2350,84 @@ function Library:CreateWindow(cfg)
 	end
 	grip.MouseEnter:Connect(function() tween(grip, { BackgroundTransparency = 0.9 }, 0.2) end)
 	grip.MouseLeave:Connect(function() tween(grip, { BackgroundTransparency = 1 }, 0.25) end)
-	grip.InputBegan:Connect(function(i)
-		if isPress(i) then
-			local start = Vector2.new(i.Position.X, i.Position.Y)
-			local sw, sh = main.Size.X.Offset, main.Size.Y.Offset
-			local sc = scaleBase
-			tgtPos = nil
-			curSize = Vector2.new(sw, sh)
-			tgtSize = curSize
-			rsBase = { c0 = curPos, sw = sw, sh = sh, sc = sc }
-			startDrag(function(p)
-				local d = (Vector2.new(p.X, p.Y) - start) / sc
-				local v = viewport()
-				tgtSize = Vector2.new(
-					math.clamp(sw + d.X, minW, math.max(minW, v.X / sc - 10)),
-					math.clamp(sh + d.Y, minH, math.max(minH, v.Y / sc - 10))
-				)
+	attachResize(grip, 1, 1)
+
+	-- ------------------------------------------------------------------
+	-- Réduire (barre de titre seule) / recentrer / mise en page sauvegardée
+	-- ------------------------------------------------------------------
+	local parts = { search, sidebar, vline, content }
+	setMinimized = function(v)
+		v = v and true or false
+		if v == collapsed then return end
+		collapsed = v
+		local sz = Vector2.new(main.Size.X.Offset, main.Size.Y.Offset)
+		curSize, lastSize, rsDir, rsSmooth = sz, sz, Vector2.new(0, 1), true
+		if v then
+			preSize = sz
+			tgtSize = Vector2.new(sz.X, 44)
+			task.delay(0.35, function()
+				if collapsed then for _, p in ipairs(parts) do p.Visible = false end end
 			end)
+		else
+			for _, p in ipairs(parts) do p.Visible = true end
+			tgtSize = preSize or Vector2.new(W0, H0)
 		end
+		for _, h in ipairs(handles) do h.Visible = not v end
+		Library._busyUntil = os.clock() + 0.6
+		task.delay(0.7, saveWin)
+	end
+
+	local function evenSize(n) return math.floor(n / 2 + 0.5) * 2 end
+
+	function win:ApplyLayout(d)
+		if collapsed then
+			collapsed = false
+			for _, p in ipairs(parts) do p.Visible = true end
+			for _, h in ipairs(handles) do h.Visible = true end
+		end
+		local v = viewport()
+		local nw = evenSize(math.clamp(tonumber(d.w) or W0, minW, math.max(minW, v.X / scaleBase - 10)))
+		local nh = evenSize(math.clamp(tonumber(d.h) or H0, minH, math.max(minH, v.Y / scaleBase - 10)))
+		tgtSize, tgtPos = nil, nil
+		main.Size = UDim2.fromOffset(nw, nh)
+		lastSize, curSize = Vector2.new(nw, nh), Vector2.new(nw, nh)
+		curPos = clampCenter(Vector2.new((tonumber(d.cx) or 0.5) * v.X, (tonumber(d.cy) or 0.5) * v.Y))
+		setMainPos()
+		saveWin()
+	end
+
+	function win:Reset()
+		if collapsed then setMinimized(false) end
+		local v = viewport()
+		curSize = Vector2.new(main.Size.X.Offset, main.Size.Y.Offset)
+		lastSize = curSize
+		rsDir, rsSmooth = Vector2.new(0, 0), true
+		tgtSize = Vector2.new(math.min(W0, v.X / scaleBase - 16), math.min(H0, v.Y / scaleBase - 16))
+		tgtPos = clampCenter(v / 2)
+		Library._busyUntil = os.clock() + 0.8
+		task.delay(0.9, saveWin)
+	end
+
+	function win:SetOpacity(o)
+		o = math.clamp(tonumber(o) or 1, 0.1, 1)
+		win.Opacity = o
+		main.BackgroundTransparency = 1 - o
+	end
+	function win:SetStats(v)
+		statsOn = v and true or false
+		win.StatsVisible = statsOn
+		fpsLabel.Visible = statsOn
+	end
+	function win:SetMinimized(v) setMinimized(v) end
+
+	foldBtn.MouseButton1Click:Connect(function()
+		local tab = win.Current
+		if not tab then return end
+		local anyOpen = false
+		for _, b in ipairs(tab.Blocks) do
+			if b._isCollapsed and not b._isCollapsed() then anyOpen = true break end
+		end
+		tab:CollapseAll(anyOpen)
 	end)
 
 	-- ------------------------------------------------------------------
@@ -1826,7 +2451,7 @@ function Library:CreateWindow(cfg)
 			if Library._openDD then Library._openDD(false) end
 			tween(uiScale, { Scale = scaleBase * 0.94 }, 0.3)
 			if useCanvas then tween(main, { GroupTransparency = 1 }, 0.28) end
-			task.delay(0.32, function()
+			task.delay(0.32 / math.max(Library.AnimSpeed or 1, 0.05) + 0.02, function()
 				if toggleToken == my and not self.Open then main.Visible = false end
 			end)
 		end
@@ -1837,7 +2462,8 @@ function Library:CreateWindow(cfg)
 		scaleBase = s
 		Library.Scale = s
 		tween(uiScale, { Scale = s }, 0.3)
-		tgtPos = clampCenter(curPos)
+		tgtPos = clampCenter(tgtPos or curPos)
+		task.delay(0.5, saveWin)
 	end
 	function win:SetTitle(t) title.Text = tostring(t) end
 	function win:SetBackground(m)
@@ -1860,7 +2486,12 @@ function Library:CreateWindow(cfg)
 
 	track(UIS.InputBegan:Connect(function(i, processed)
 		if processed or Library._listening then return end
-		if i.KeyCode == toggleKey then win:Toggle() end
+		if i.KeyCode == toggleKey then
+			win:Toggle()
+		elseif i.KeyCode == Enum.KeyCode.R
+			and (UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.RightControl)) then
+			win:Reset()
+		end
 	end))
 
 	-- Orbe flottant pour mobile (pas de clavier) : déplaçable
@@ -1895,45 +2526,85 @@ function Library:CreateWindow(cfg)
 	end
 
 	-- ------------------------------------------------------------------
-	-- Boucle d'animation (anneaux, étoiles, déplacement lissé)
+	-- Boucles d'animation
+	--   RenderStepped : uniquement le déplacement / redimensionnement lissé + tooltip (léger, à chaque frame)
+	--   Heartbeat     : le fond (anneaux + étoiles), limité à ~30 Hz (~15 Hz pendant un geste) au lieu d'être
+	--                   recalculé à chaque frame ; il ne se met plus en pause brutalement, il ralentit seulement.
 	-- ------------------------------------------------------------------
 	track(RunService.RenderStepped:Connect(function(dt)
 		if not main.Visible then return end
-		local t = os.clock()
-		-- le fond animé se met en pause pendant les gestes lourds (déplacer, redimensionner, replier, changer d'onglet)
-		local paused = activeDrag ~= nil or tgtSize ~= nil or tgtPos ~= nil or t < (Library._busyUntil or 0)
-		if not (paused or bgMode == "off") then
-			for _, sp in ipairs(spinners) do
-				sp.a = ((sp.a or 0) + dt * sp.speed) % 360
-				sp.g.Rotation = sp.a
-			end
-		end
-		if tgtSize and rsBase then
-			local d = tgtSize - curSize
-			if d.Magnitude < 0.25 then
+		dt = math.min(dt, 0.1)
+		local dirty = false
+		if tgtSize then
+			if rsSmooth then
+				local d = tgtSize - curSize
+				if d.Magnitude < 0.5 then
+					curSize = tgtSize
+					tgtSize = nil
+				else
+					curSize = curSize + d * (1 - math.exp(-dt * 16))
+				end
+			else
 				curSize = tgtSize
 				tgtSize = nil
-			else
-				curSize = curSize + d * (1 - math.exp(-dt * 28))
 			end
-			-- tailles paires + positions entières = pas de tremblement (fenêtre ancrée au centre)
-			local nw = math.floor(curSize.X / 2 + 0.5) * 2
-			local nh = math.floor(curSize.Y / 2 + 0.5) * 2
-			main.Size = UDim2.fromOffset(nw, nh)
-			curPos = rsBase.c0 + (curSize - Vector2.new(rsBase.sw, rsBase.sh)) * rsBase.sc / 2
-			main.Position = UDim2.fromOffset(math.floor(curPos.X + 0.5), math.floor(curPos.Y + 0.5))
+			if applySize(curSize) then dirty = true end
 		end
 		if tgtPos then
 			local d = tgtPos - curPos
-			if d.Magnitude < 0.25 then
+			if d.Magnitude < 0.3 then
 				curPos = tgtPos
 				tgtPos = nil
 			else
-				curPos = curPos + d * (1 - math.exp(-dt * 22))
+				curPos = curPos + d * (1 - math.exp(-dt * 24))
 			end
-			main.Position = UDim2.fromOffset(math.floor(curPos.X + 0.5), math.floor(curPos.Y + 0.5))
+			dirty = true
 		end
-		if paused or bgMode == "off" then return end
+		if dirty then setMainPos() end
+		if tipShown and tipLabel then
+			local m = UIS:GetMouseLocation()
+			local v = viewport()
+			local sz = tipLabel.AbsoluteSize
+			local x, y = m.X + 14, m.Y + 18
+			if x + sz.X > v.X - 4 then x = m.X - sz.X - 10 end
+			if y + sz.Y > v.Y - 4 then y = m.Y - sz.Y - 10 end
+			tipLabel.Position = UDim2.fromOffset(x, y)
+		end
+	end))
+
+	local bgAcc = 0
+	local fpsFrames, fpsT = 0, os.clock()
+	local pingItem
+	pcall(function() pingItem = Stats.Network.ServerStatsItem["Data Ping"] end)
+	track(RunService.Heartbeat:Connect(function(dt)
+		local now = os.clock()
+		fpsFrames += 1
+		if now - fpsT >= 0.5 then
+			if statsOn then
+				local fps = math.floor(fpsFrames / (now - fpsT) + 0.5)
+				local ping = 0
+				if pingItem then
+					local ok, v = pcall(function() return pingItem:GetValue() end)
+					if ok and v then ping = math.floor(v + 0.5) end
+				end
+				fpsLabel.Text = fps .. " fps | " .. ping .. " ms"
+			end
+			fpsFrames, fpsT = 0, now
+		end
+
+		if not main.Visible or bgMode == "off" then return end
+		bgAcc += dt
+		local busy = activeDrag ~= nil or now < (Library._busyUntil or 0)
+		if bgAcc < (busy and (1 / 15) or (1 / 30)) then return end
+		local step = math.min(bgAcc, 0.1)
+		bgAcc = 0
+
+		for _, sp in ipairs(spinners) do
+			sp.a = ((sp.a or 0) + step * sp.speed) % 360
+			sp.g.Rotation = sp.a
+		end
+		if collapsed then return end
+
 		local w, h = main.Size.X.Offset, main.Size.Y.Offset
 		local cx, cy = w - 66, 54
 		for n = 1, starLim do
@@ -1944,11 +2615,11 @@ function Library:CreateWindow(cfg)
 				respawn(s, w, h, cx, cy)
 				s.f.BackgroundTransparency = 1
 			else
-				local pull  = (s.v + 5200 / (d + 40)) * dt
-				local swirl = (2600 / (d + 80)) * dt
+				local pull  = (s.v + 5200 / (d + 40)) * step
+				local swirl = (2600 / (d + 80)) * step
 				s.x = s.x + dx / d * pull - dy / d * swirl
 				s.y = s.y + dy / d * pull + dx / d * swirl
-				local fade = math.clamp((d - 24) / 70, 0, 1) * math.clamp((t - s.born) / 0.8, 0, 1)
+				local fade = math.clamp((d - 24) / 70, 0, 1) * math.clamp((now - s.born) / 0.8, 0, 1)
 				s.f.Position = UDim2.fromOffset(s.x, s.y)
 				s.f.BackgroundTransparency = 1 - s.a * fade
 			end
@@ -1961,7 +2632,23 @@ function Library:CreateWindow(cfg)
 	tween(uiScale, { Scale = 1 }, 0.7, BACK)
 	if useCanvas then tween(main, { GroupTransparency = 0 }, 0.5) end
 
+	-- Mémorisation de la fenêtre dans la config + favoris
+	saveWin()
+	Library.Items["__window"] = {
+		Get = function() return Library.Flags["__window"] end,
+		Set = function(_, d)
+			if type(d) == "table" and d.w then win:ApplyLayout(d) end
+		end,
+	}
+	registerFavItem()
+
 	Library.Window = win
+	Library._autoDone = false
+	if cfg.AutoLoad ~= false then
+		task.delay(tonumber(cfg.AutoLoadDelay) or 1.2, function()
+			if Library.Window == win then Library:AutoLoad() end
+		end)
+	end
 	return win
 end
 
@@ -1978,6 +2665,10 @@ function Library:Destroy()
 	table.clear(Library.Flags)
 	table.clear(Library.Items)
 	table.clear(Library.CornerObjects)
+	table.clear(Library.FavEntries)
+	table.clear(Library.FavStars)
+	tipLabel, tipShown = nil, false
+	Library._autoDone = false
 end
 
 return Library
