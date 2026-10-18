@@ -25,6 +25,11 @@
 		• Écran trop petit : le nombre de colonnes affichées est réduit automatiquement.
 		• Library.ColumnMinWidth = largeur minimale d'une colonne (255 par défaut).
 
+	RACCOURCIS CLAVIER (Paramètres > « Raccourcis clavier »)
+		• Liste tous les keybinds de l'interface (Block:CreateKeybind). Bouton « Aller » à droite : 1er clic = confirmer,
+		  2e clic = ouvre l'onglet, déplie le bloc, défile jusqu'au keybind et le fait clignoter.
+		• Library:RevealElement(entrée) fait la même chose depuis le code ; Library.KeybindEntries = la liste.
+
 	NOUVEAUTÉS
 		• Design « trou noir » : anneau d'horizon qui tourne autour de la fenêtre, trou noir
 		  décoratif avec disque d'accrétion, étoiles aspirées en spirale.
@@ -104,8 +109,11 @@
 		  (Window:CreateNotifLogTab), 6 positions (haut / bas x gauche / centre / droite), couleurs par type.
 
 	─────────────  V6 : TROU NOIR À LA FERMETURE, PASTILLE +N, SONS, PALETTE (Ctrl+K)  ─────────────
-		• Fermeture d'une notification : effet « aspiré par le trou noir » (carte étirée qui tourne et disparaît dans
-		  un mini trou noir, étincelles en spirale, onde de choc). Library.NotifBlackHole = false pour le couper
+		• Look des notifications : pilule noire très arrondie, contour blanc fin, texte blanc net, pastille d'icône blanche
+		  (Library.NotifColored = true pour recolorer la pastille selon le type).
+		• Fermeture d'une notification : la carte se brouille (images fantômes), se froisse en boule de papier (plis
+		  clairs) pendant qu'un trou noir noir & blanc s'ouvre derrière elle, puis elle spirale vers son centre avec des
+		  morceaux de papier arrachés, et une onde de choc referme tout. Library.NotifBlackHole = false pour le couper
 		  (le swipe latéral garde son glissement). Réglages > Notifications.
 		• Au-delà du maximum affiché (NotifMax) les plus anciennes ne sont plus fermées : elles sont masquées (minuteur en
 		  pause) et une pastille « +3 » apparaît. Clic sur la pastille = tout vider. Library.NotifOverflow = "Close" pour
@@ -153,6 +161,7 @@ local Library = {
 	Favorites         = {},
 	FavEntries        = {},
 	CmdEntries        = {},    -- éléments disponibles dans la palette de commandes (Ctrl+K)
+	KeybindEntries    = {},    -- tous les keybinds placés dans l'interface (bloc « Raccourcis clavier » des Paramètres)
 	TxtEntries        = {},    -- textes (labels / paragraphes) cherchables dans la barre de recherche (Ctrl+T)
 	TitleStretch      = true,  -- titre étiré (lettres espacées)
 	TitleBold         = true,  -- titre en gras
@@ -725,7 +734,7 @@ Library.NotifColors = {
 	Warning = Color3.fromRGB(255, 200, 87),
 	Error   = Color3.fromRGB(255, 77, 94),
 }
-Library.NotifColored      = true   -- couleur par type (vert / orange / rouge) ; false = tout en noir & blanc
+Library.NotifColored      = false  -- false = tout en noir & blanc (défaut) ; true = pastille colorée par type (vert / orange / rouge)
 Library.NotifPauseOnHover = true   -- le minuteur se met en pause quand la souris est sur la notification
 Library.NotifStack        = true   -- les doublons s'empilent en « x2, x3... » au lieu de se répéter
 Library.NotifMax          = 5      -- nombre maximum affiché en même temps
@@ -1016,102 +1025,198 @@ end
 
 function Library:SetNotifBlackHole(v) Library.NotifBlackHole = v and true or false end
 
--- ───────────── Effet « aspiré par le trou noir » ─────────────
--- Un petit trou noir apparaît sur la carte, qui se tord, tourne sur elle-même et s'engouffre dedans ;
--- quelques étincelles spiralent vers le centre, puis une onde de choc referme tout.
+-- ───────────── Effet « papier froissé aspiré par un trou noir » ─────────────
+-- La carte se brouille (images fantômes qui tremblent), se plisse (arêtes et facettes claires), se tasse en boule de
+-- papier pendant qu'un trou noir s'ouvre derrière elle, puis la boule spirale vers le centre du trou et disparaît.
+-- De petits morceaux de papier s'en détachent et sont aspirés eux aussi. Une onde de choc referme tout. Noir & blanc.
 local function blackHoleOut(slot, card, cardScale, h, accent)
 	local k = 1 / math.max(Library.AnimSpeed or 1, 0.05)
 	local cw = card.AbsoluteSize.X / math.max(cardScale.Scale, 0.01)
 	if cw < 10 then cw = Library.NotifWidth or 300 end
 	local cy = h / 2
 	local dirSpin = (math.random() < 0.5) and -1 or 1
+	local WHITE, BLACK = Color3.new(1, 1, 1), Color3.new(0, 0, 0)
+	local KP = NumberSequenceKeypoint.new
+	local rnd, sin, cos, clamp = math.random, math.sin, math.cos, math.clamp
 	local IN = Enum.EasingDirection.In
+	local TOT = 1.0            -- durée du mouvement (en « secondes animation »)
+	local BALL_W, BALL_H = 70, 46
+	local R0 = math.min(cw * 0.2, 52)
 
-	-- on fige la carte et on la recentre pour qu'elle tourne autour de son milieu
+	-- on fige la carte (taille en pixels) et on la recentre pour qu'elle se froisse autour de son milieu
 	card.AutomaticSize = AN
-	card.Size = UDim2.new(1, 0, 0, h)
+	card.Size = UDim2.fromOffset(cw, h)
 	card.AnchorPoint = Vector2.new(0.5, 0.5)
 	card.Position = UDim2.new(0.5, 0, 0, cy)
+	card.ZIndex = 10
+	local cardCornerObj = card:FindFirstChildOfClass("UICorner")
 
-	local sing = new("Frame", { Name = "Singularity", AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(0.5, 0, 0, cy), Size = UDim2.fromOffset(0, 0),
-		BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0, ZIndex = 30 }, slot)
-	new("UICorner", { CornerRadius = UDim.new(1, 0) }, sing)
-	local sst = new("UIStroke", { Color = accent, Thickness = 2, Transparency = 0.05 }, sing)
-	local sgr = new("UIGradient", { Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(70, 70, 78)),
-		Transparency = ringSeq() }, sst)
-	TweenService:Create(sgr, TweenInfo.new(0.8 * k, LINEAR, OUT), { Rotation = 360 * dirSpin }):Play()
+	-- images fantômes (effet de flou de mouvement), prises avant que la carte ne change
+	local ghosts = {}
+	if canvasSupported then
+		for i = 1, 2 do
+			local g = card:Clone()
+			g.Name = "Ghost"
+			g.ZIndex = 8
+			g.GroupTransparency = 0.62
+			for _, d in ipairs(g:GetDescendants()) do
+				if d:IsA("GuiButton") then d.Active = false end
+			end
+			g.Parent = slot
+			ghosts[i] = g
+		end
+	end
 
-	local halo = new("Frame", { Name = "Halo", AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(0.5, 0, 0, cy), Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1,
-		BorderSizePixel = 0, ZIndex = 29 }, slot)
-	new("UICorner", { CornerRadius = UDim.new(1, 0) }, halo)
-	local hst = new("UIStroke", { Color = accent, Thickness = 1.5, Transparency = 0.35 }, halo)
+	-- le contenu s'efface vite : il ne reste qu'une feuille noire qui se plisse (le contour blanc reste)
+	local keep = card:FindFirstChild("Outline")
+	for _, d in ipairs(card:GetDescendants()) do
+		if d ~= keep and not (keep and d:IsDescendantOf(keep)) then
+			if d:IsA("TextLabel") or d:IsA("TextButton") then
+				tween(d, { TextTransparency = 1, BackgroundTransparency = 1 }, 0.2)
+			elseif d:IsA("GuiObject") then
+				tween(d, { BackgroundTransparency = 1 }, 0.2)
+			elseif d:IsA("UIStroke") then
+				tween(d, { Transparency = 1 }, 0.2)
+			end
+		end
+	end
 
-	-- 1) le trou noir s'ouvre, la carte frémit
-	tween(sing, { Size = UDim2.fromOffset(30, 30) }, 0.25, BACK)
-	tween(halo, { Size = UDim2.fromOffset(84, 84) }, 0.45)
-	tween(hst, { Transparency = 1 }, 0.5)
-	tween(card, { Rotation = -4 * dirSpin }, 0.12)
-	tween(cardScale, { Scale = 1.03 }, 0.12)
+	-- plis : arêtes claires + facettes douces, qui apparaissent l'une après l'autre
+	local folds = {}
+	for i = 1, 6 do
+		local f = new("Frame", { Name = "Fold", AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.1 + rnd() * 0.8, 0, 0.1 + rnd() * 0.8, 0), Size = UDim2.new(0.4 + rnd() * 0.5, 0, 0, 1),
+			Rotation = rnd(-70, 70), BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0,
+			ZIndex = 40 }, card)
+		folds[#folds + 1] = { f = f, d = 0.02 + i * 0.035, to = 0.4 + rnd() * 0.25 }
+	end
+	for i = 1, 4 do
+		local f = new("Frame", { Name = "Facet", AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.15 + rnd() * 0.7, 0, 0.2 + rnd() * 0.6, 0),
+			Size = UDim2.new(0.5 + rnd() * 0.4, 0, 0.9, 0), Rotation = rnd(-60, 60), BackgroundColor3 = WHITE,
+			BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 39 }, card)
+		new("UIGradient", { Rotation = rnd(0, 180), Transparency = NumberSequence.new({ KP(0, 0), KP(1, 1) }) }, f)
+		folds[#folds + 1] = { f = f, d = 0.05 + i * 0.04, to = 0.8 + rnd() * 0.08 }
+	end
 
-	-- 2) la carte est étirée, tourne et disparaît dans le trou
-	task.delay(0.12 * k, function()
-		if not card.Parent then return end
-		tween(card, { Rotation = 220 * dirSpin, Size = UDim2.new(0.3, 0, 0, h * 1.15) }, 0.5, QUINT, IN)
-		tween(cardScale, { Scale = 0.02 }, 0.5, QUINT, IN)
-		task.delay(0.08 * k, function()
-			if not card.Parent then return end
-			if canvasSupported then tween(card, { GroupTransparency = 1 }, 0.4)
-			else tween(card, { BackgroundTransparency = 1 }, 0.4) end
-		end)
+	-- le trou noir (derrière la carte) : disque noir, anneau photonique, deux bras qui tournent, halo
+	local hole = new("Frame", { Name = "BlackHole", AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0, cy), Size = UDim2.fromOffset(160, 160), BackgroundTransparency = 1,
+		BorderSizePixel = 0, ZIndex = 3 }, slot)
+	local holeScale = new("UIScale", { Scale = 0 }, hole)
+	local function disc(d, z, fill, ftr)
+		local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(d, d), BackgroundColor3 = fill or BLACK, BackgroundTransparency = ftr or 1,
+			BorderSizePixel = 0, ZIndex = z }, hole)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
+		return f
+	end
+	local function ring(d, z, thick, tr, seq)
+		local f = disc(d, z)
+		local st = new("UIStroke", { Color = WHITE, Thickness = thick, Transparency = tr, ApplyStrokeMode = BORDER }, f)
+		local g = new("UIGradient", { Transparency = seq }, st)
+		return g
+	end
+	disc(150, 1, WHITE, 0.965)
+	ring(150, 1, 1, 0.8, NumberSequence.new(0))
+	local arm1 = ring(128, 2, 2, 0.1, NumberSequence.new({ KP(0, 0), KP(0.38, 0.1), KP(0.5, 1), KP(1, 1) }))
+	local arm2 = ring(100, 3, 3, 0.05, NumberSequence.new({ KP(0, 1), KP(0.5, 1), KP(0.58, 0.1), KP(1, 0) }))
+	ring(78, 4, 2.5, 0, NumberSequence.new(0))
+	disc(72, 5, BLACK, 0)
+	TweenService:Create(arm1, TweenInfo.new(1.1 * k, LINEAR, OUT, -1), { Rotation = 360 * dirSpin }):Play()
+	TweenService:Create(arm2, TweenInfo.new(0.75 * k, LINEAR, OUT, -1), { Rotation = -360 * dirSpin }):Play()
+
+	local wave = new("Frame", { Name = "Shock", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, cy),
+		Size = UDim2.fromOffset(40, 40), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 11 }, slot)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, wave)
+	local wst = new("UIStroke", { Color = WHITE, Thickness = 2, Transparency = 1, ApplyStrokeMode = BORDER }, wave)
+
+	-- morceaux de papier arrachés, aspirés en spirale
+	local scraps = {}
+	for i = 1, 12 do
+		local sx, sy = (rnd() - 0.5) * cw * 0.85, (rnd() - 0.5) * h * 0.8
+		local f = new("Frame", { Name = "Scrap", AnchorPoint = Vector2.new(0.5, 0.5),
+			Size = UDim2.fromOffset(rnd(3, 6), rnd(2, 4)), BackgroundColor3 = (i % 3 == 0) and Color3.fromRGB(190, 190, 195) or WHITE,
+			BackgroundTransparency = 1, BorderSizePixel = 0, Rotation = rnd(0, 180), ZIndex = 12 }, slot)
+		scraps[i] = { f = f, r0 = math.sqrt(sx * sx + sy * sy), a0 = math.atan2(sy, sx), d = 0.06 + rnd() * 0.3,
+			s = 4 + rnd() * 3, rot = (rnd() - 0.5) * 900 }
+	end
+
+	-- ouverture du trou noir, puis fermeture dans une onde de choc
+	task.delay(0.05 * k, function()
+		if hole.Parent then tween(holeScale, { Scale = 1 }, 0.35, BACK) end
+	end)
+	task.delay(0.9 * k, function()
+		if not hole.Parent then return end
+		tween(holeScale, { Scale = 0 }, 0.2, QUINT, IN)
+		wave.Size = UDim2.fromOffset(40, 40)
+		wst.Transparency = 0.1
+		tween(wave, { Size = UDim2.fromOffset(190, 190) }, 0.35)
+		tween(wst, { Transparency = 1 }, 0.35)
+	end)
+	task.delay(0.7 * k, function()
+		if slot.Parent then tween(slot, { Size = UDim2.new(1, 0, 0, 0) }, 0.3) end
 	end)
 
-	-- 3) étincelles en spirale
-	local parts = {}
-	for i = 1, 10 do
-		local sz = (i % 3 == 0) and 4 or 3
-		local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(sz, sz),
-			BackgroundColor3 = (i % 2 == 0) and accent or Color3.new(1, 1, 1), BackgroundTransparency = 1,
-			BorderSizePixel = 0, ZIndex = 28 }, slot)
-		new("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
-		parts[i] = { f = f, a = math.random() * math.pi * 2, r = 40 + math.random() * math.max(cw / 2 - 50, 20),
-			d = 0.08 + math.random() * 0.3, s = 3 + math.random() * 3 }
-	end
+	-- mouvement de la carte (une seule boucle : froissage, puis spirale vers le centre)
+	local ang0 = rnd() * math.pi * 2
+	local t0 = os.clock()
 	task.spawn(function()
-		local t0 = os.clock()
-		while slot.Parent do
+		while slot.Parent and card.Parent do
 			local t = (os.clock() - t0) / k
-			if t > 1.05 then break end
-			for _, p in ipairs(parts) do
-				local u = math.clamp((t - p.d) / 0.5, 0, 1)
+			if t > TOT then break end
+			local A = clamp(t / 0.34, 0, 1)                 -- froissage
+			local eA = 1 - (1 - A) ^ 3
+			local B = clamp((t - 0.2) / 0.75, 0, 1)         -- aspiration
+			local shrink = 1 - B ^ 2.2
+			local jit = 1 - B
+			local w = (cw + (BALL_W - cw) * eA) * shrink * (1 + 0.05 * sin(t * 47) * jit)
+			local hh = (h + (BALL_H - h) * eA) * shrink * (1 + 0.08 * sin(t * 53 + 1) * jit)
+			card.Size = UDim2.fromOffset(math.max(w, 0), math.max(hh, 0))
+			local r = R0 * (1 - B) * math.min(B * 4, 1)
+			local ang = ang0 + dirSpin * (B * 7 + B * B * 6)
+			local px, py = cos(ang) * r, sin(ang) * r * 0.8
+			card.Position = UDim2.new(0.5, px, 0, cy + py)
+			card.Rotation = 7 * sin(t * 36) * (1 - A) + dirSpin * 640 * B ^ 1.7
+			if cardCornerObj then cardCornerObj.CornerRadius = UDim.new(0, 22 + 24 * eA) end
+			local fade = clamp((B - 0.7) / 0.3, 0, 1)
+			if canvasSupported then card.GroupTransparency = fade else card.BackgroundTransparency = fade end
+
+			for _, p in ipairs(folds) do
+				local u = clamp((t - p.d) / 0.1, 0, 1)
+				p.f.BackgroundTransparency = 1 - u * (1 - p.to) * (1 - fade)
+			end
+
+			local gt = clamp(t / 0.42, 0, 1)
+			for i, g in ipairs(ghosts) do
+				if gt >= 1 then
+					g.Visible = false
+				else
+					local amp = 7 * (1 - gt)
+					g.Size = card.Size
+					g.Position = UDim2.new(0.5, px + sin(t * 70 + i * 2.1) * amp, 0, cy + py + cos(t * 83 + i * 1.3) * amp)
+					g.Rotation = card.Rotation + ((i == 1) and 3 or -3) * (1 - gt)
+					g.GroupTransparency = 0.6 + 0.4 * gt
+				end
+			end
+
+			for _, p in ipairs(scraps) do
+				local u = clamp((t - p.d) / 0.55, 0, 1)
 				if u > 0 then
-					local ease = u * u
-					local rad = p.r * (1 - ease)
-					local ang = p.a + p.s * ease
-					p.f.Position = UDim2.new(0.5, math.cos(ang) * rad, 0, cy + math.sin(ang) * rad * 0.55)
-					local tr = 1 - math.min(u * 6, 1) * 0.9
+					local e = u * u
+					local rr = p.r0 * (1 - e)
+					local aa = p.a0 + dirSpin * p.s * e
+					p.f.Position = UDim2.new(0.5, cos(aa) * rr, 0, cy + sin(aa) * rr)
+					p.f.Rotation = p.rot * u
+					local tr = (u < 0.12) and (1 - u / 0.12 * 0.9) or 0.1
 					if u > 0.8 then tr = math.min(1, 0.1 + (u - 0.8) * 4.5) end
 					p.f.BackgroundTransparency = tr
 				end
 			end
 			RunService.Heartbeat:Wait()
 		end
-		for _, p in ipairs(parts) do p.f:Destroy() end
-	end)
-
-	-- 4) le trou noir se referme dans une onde de choc, la place se résorbe
-	task.delay(0.55 * k, function()
-		if not sing.Parent then return end
-		tween(sing, { Size = UDim2.fromOffset(0, 0) }, 0.22, QUINT, IN)
-		tween(sst, { Transparency = 1 }, 0.22)
-		halo.Size = UDim2.fromOffset(24, 24)
-		hst.Transparency = 0.15
-		tween(halo, { Size = UDim2.fromOffset(64, 64) }, 0.4)
-		tween(hst, { Transparency = 1 }, 0.4)
-	end)
-	task.delay(0.5 * k, function()
-		if slot.Parent then tween(slot, { Size = UDim2.new(1, 0, 0, 0) }, 0.3) end
+		for _, g in ipairs(ghosts) do g:Destroy() end
+		for _, p in ipairs(scraps) do p.f:Destroy() end
 	end)
 end
 
@@ -1179,21 +1284,28 @@ function Library:Notify(o)
 	}, notifHolder)
 	local card = new(canvasSupported and "CanvasGroup" or "Frame", {
 		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Position = farOffset(),
-		BackgroundColor3 = T.Second, BackgroundTransparency = Sty.NotifTr, BorderSizePixel = 0,
+		BackgroundColor3 = T.Main, BackgroundTransparency = 0.03, BorderSizePixel = 0,
 		ClipsDescendants = not canvasSupported,
 	}, slot)
 	if canvasSupported then card.GroupTransparency = 1 end
-	local cardCorner = corner(card, 10)
+	-- style moderne : noir profond, coins très arrondis (pilule), fin contour blanc, léger reflet en haut
+	local cardCorner = new("UICorner", { CornerRadius = UDim.new(0, 22) }, card)
 	local cardScale = new("UIScale", { Scale = 0.9 }, card)
+	local sheen = new("Frame", { Name = "Sheen", Size = UDim2.new(1, 0, 0.6, 0), BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0, ZIndex = 2 }, card)
+	new("UICorner", { CornerRadius = UDim.new(0, 22) }, sheen)
+	new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.93), NumberSequenceKeypoint.new(1, 1) }) }, sheen)
 
 	local inner = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
 		ZIndex = 6 }, card)
-	new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 14),
-		PaddingLeft = UDim.new(0, 46), PaddingRight = UDim.new(0, 12) }, inner)
+	new("UIPadding", { PaddingTop = UDim.new(0, 13), PaddingBottom = UDim.new(0, 17),
+		PaddingLeft = UDim.new(0, 56), PaddingRight = UDim.new(0, 16) }, inner)
 	new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = BYORDER }, inner)
-	local titleL = label(inner, o.Title or "Notification", 13, { Font = F_BOLD, Size = UDim2.new(1, -30, 0, 17),
+	local CT = 0.2   -- transparence finale du texte secondaire (blanc légèrement adouci, pas de gris terne)
+	local titleL = label(inner, o.Title or "Notification", 14, { Font = F_BOLD, Size = UDim2.new(1, -34, 0, 18),
 		LayoutOrder = 1, TextTransparency = 1, ZIndex = 6 })
-	local contentL = label(inner, o.Content or "", 12, { TextColor3 = T.ElementAccent, TextWrapped = true,
+	local contentL = label(inner, o.Content or "", 12, { TextColor3 = T.Text, TextWrapped = true,
 		TextTruncate = Enum.TextTruncate.None, AutomaticSize = AY, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = 2,
 		TextTransparency = 1, ZIndex = 6 })
 	contentL.Visible = contentL.Text ~= ""
@@ -1210,10 +1322,10 @@ function Library:Notify(o)
 		ZIndex = 6 }, card)
 
 	-- pastille d'icône (+ onde, + spinner)
-	local icoHold = new("Frame", { Position = UDim2.new(0, 11, 0, 10), Size = UDim2.new(0, 24, 0, 24),
+	local icoHold = new("Frame", { Position = UDim2.new(0, 14, 0, 13), Size = UDim2.new(0, 28, 0, 28),
 		BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 6 }, card)
 	local pulse = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(24, 24), BackgroundTransparency = 1, BorderSizePixel = 0 }, icoHold)
+		Size = UDim2.fromOffset(28, 28), BackgroundTransparency = 1, BorderSizePixel = 0 }, icoHold)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, pulse)
 	local pulseSt = new("UIStroke", { Color = T.Accent, Thickness = 2, Transparency = 1 }, pulse)
 	local ico = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
@@ -1223,7 +1335,7 @@ function Library:Notify(o)
 	local icoScale = new("UIScale", { Scale = 0 }, ico)
 	local icoText = label(ico, "i", 14, { Font = F_BOLD, TextXAlignment = CENTER })
 	local spinRing = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(16, 16), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, ico)
+		Size = UDim2.fromOffset(18, 18), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, ico)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, spinRing)
 	local spinSt = new("UIStroke", { Color = T.Accent, Thickness = 2, Transparency = 0 }, spinRing)
 	local spinGrad = new("UIGradient", { Transparency = NumberSequence.new({
@@ -1232,30 +1344,31 @@ function Library:Notify(o)
 	local spinTw
 
 	-- badge « x2 » (doublons)
-	local badge = new("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 9),
-		Size = UDim2.new(0, 26, 0, 16), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.86,
+	local badge = new("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 12),
+		Size = UDim2.new(0, 26, 0, 16), BackgroundColor3 = T.Accent, BackgroundTransparency = 0,
 		BorderSizePixel = 0, Visible = false, ZIndex = 6 }, card)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, badge)
 	local badgeScale = new("UIScale", { Scale = 1 }, badge)
-	local badgeL = label(badge, "x2", 10, { Font = F_BOLD, TextXAlignment = CENTER, ZIndex = 6 })
+	local badgeL = label(badge, "x2", 10, { Font = F_BOLD, TextXAlignment = CENTER, ZIndex = 6,
+		TextColor3 = Color3.fromRGB(10, 10, 12) })
 
 	-- contour intérieur + piste de durée / progression
-	local outline = new("Frame", { Position = UDim2.new(0, 1, 0, 1), Size = UDim2.new(1, -2, 1, -2),
+	local outline = new("Frame", { Name = "Outline", Position = UDim2.new(0, 1, 0, 1), Size = UDim2.new(1, -2, 1, -2),
 		BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 7 }, card)
-	new("UICorner", { CornerRadius = UDim.new(0, 9) }, outline)
+	new("UICorner", { CornerRadius = UDim.new(0, 21) }, outline)
 	local outSt = stroke(outline, 0.82)
-	local track = new("Frame", { Position = UDim2.new(0, 12, 1, -6), Size = UDim2.new(1, -24, 0, 3),
+	local track = new("Frame", { Position = UDim2.new(0, 24, 1, -9), Size = UDim2.new(1, -48, 0, 2),
 		BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, BorderSizePixel = 0, ClipsDescendants = true,
 		ZIndex = 6 }, card)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
 	local fill = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = T.Accent,
-		BackgroundTransparency = 0.35, BorderSizePixel = 0, ZIndex = 6 }, track)
+		BackgroundTransparency = 0.05, BorderSizePixel = 0, ZIndex = 6 }, track)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
 
 	-- reflet qui balaie la carte
 	local shine = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0, Visible = false, ZIndex = 8 }, card)
-	new("UICorner", { CornerRadius = UDim.new(0, 10) }, shine)
+	new("UICorner", { CornerRadius = UDim.new(0, 22) }, shine)
 	local shineGrad = new("UIGradient", { Rotation = 20, Offset = Vector2.new(-1.3, 0),
 		Transparency = NumberSequence.new({
 			NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.4, 1), NumberSequenceKeypoint.new(0.5, 0.82),
@@ -1294,19 +1407,19 @@ function Library:Notify(o)
 		kind = k
 		local c = notifKindColor(k)
 		local ac = c or T.Accent
-		ico.BackgroundColor3 = ac
-		ico.BackgroundTransparency = c and 0.05 or 0.9
+		ico.BackgroundColor3 = ac            -- pastille pleine : blanche (ou couleur du type si NotifColored)
+		ico.BackgroundTransparency = 0
 		icoText.Text = NOTIF_ICON[k] or ""
 		icoText.Visible = k ~= "Loading"
-		icoText.TextColor3 = c and Color3.fromRGB(14, 14, 16) or T.Text
+		icoText.TextColor3 = Color3.fromRGB(10, 10, 12)
 		strip.BackgroundColor3 = ac
-		strip.Visible = c ~= nil
+		strip.Visible = false                -- plus de liseré : la carte est une pilule
 		outSt.Color = ac
-		baseTr = c and 0.55 or 0.82
+		baseTr = c and 0.55 or 0.8
 		outSt.Transparency = baseTr
 		fill.BackgroundColor3 = ac
 		pulseSt.Color = ac
-		spinSt.Color = ac
+		spinSt.Color = Color3.fromRGB(10, 10, 12)
 		spinRing.Visible = k == "Loading"
 		if spinTw then spinTw:Cancel() spinTw = nil end
 		if k == "Loading" then
@@ -1320,9 +1433,9 @@ function Library:Notify(o)
 		ico.Rotation = (kind == "Success") and -90 or 0
 		tween(icoScale, { Scale = 1 }, 0.5, BACK)
 		if kind == "Success" then tween(ico, { Rotation = 0 }, 0.5) end
-		pulse.Size = UDim2.fromOffset(24, 24)
+		pulse.Size = UDim2.fromOffset(28, 28)
 		pulseSt.Transparency = 0.15
-		tween(pulse, { Size = UDim2.fromOffset(52, 52) }, 0.75)
+		tween(pulse, { Size = UDim2.fromOffset(62, 62) }, 0.75)
 		tween(pulseSt, { Transparency = 1 }, 0.75)
 		if not Library.Animations then return end
 		if kind == "Error" then
@@ -1330,7 +1443,7 @@ function Library:Notify(o)
 				task.wait(0.2)
 				for _, dx in ipairs({ -4, 4, -3, 3, -2, 2, 0 }) do
 					if dead then return end
-					tween(icoHold, { Position = UDim2.new(0, 11 + dx, 0, 10) }, 0.05, LINEAR)
+					tween(icoHold, { Position = UDim2.new(0, 14 + dx, 0, 13) }, 0.05, LINEAR)
 					task.wait(0.05)
 				end
 			end)
@@ -1445,7 +1558,7 @@ function Library:Notify(o)
 		-- effet « trou noir » (sauf swipe : là, la carte suit le doigt / la souris)
 		if Library.NotifBlackHole ~= false and Library.Animations and not sign and h > 4 then
 			V6.hole(slot, card, cardScale, h, notifKindColor(kind) or T.Accent)
-			task.delay(1.0 / math.max(Library.AnimSpeed or 1, 0.05), function()
+			task.delay(1.15 / math.max(Library.AnimSpeed or 1, 0.05), function()
 				dropCorner()
 				slot:Destroy()
 			end)
@@ -1493,12 +1606,12 @@ function Library:Notify(o)
 		actRow.Visible = type(list) == "table" and #list > 0
 		if type(list) ~= "table" then return end
 		for idx, a in ipairs(list) do
-			local btn = new("TextButton", { Size = UDim2.new(0, 0, 0, 24), AutomaticSize = Enum.AutomaticSize.X,
+			local btn = new("TextButton", { Size = UDim2.new(0, 0, 0, 26), AutomaticSize = Enum.AutomaticSize.X,
 				BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, Text = tostring(a.Text or a.Name or "OK"),
 				TextColor3 = T.Text, TextSize = 12, Font = F_MED, AutoButtonColor = false, BorderSizePixel = 0,
 				LayoutOrder = idx, ZIndex = 6 }, actRow)
-			new("UICorner", { CornerRadius = UDim.new(0, 6) }, btn)
-			new("UIPadding", { PaddingLeft = UDim.new(0, 11), PaddingRight = UDim.new(0, 11) }, btn)
+			new("UICorner", { CornerRadius = UDim.new(0, 13) }, btn)
+			new("UIPadding", { PaddingLeft = UDim.new(0, 13), PaddingRight = UDim.new(0, 13) }, btn)
 			btn.MouseEnter:Connect(function()
 				tween(btn, { BackgroundTransparency = 0.76 }, 0.15)
 				hoverChange(1)
@@ -1579,7 +1692,7 @@ function Library:Notify(o)
 			contentL.Text = tostring(d.Content)
 			contentL.Visible = contentL.Text ~= ""
 			contentL.TextTransparency = 0.7
-			tween(contentL, { TextTransparency = 0 }, 0.3)
+			tween(contentL, { TextTransparency = CT }, 0.3)
 		end
 		local typeChanged = false
 		if d.Type and NOTIF_ICON[d.Type] and d.Type ~= kind then
@@ -1686,7 +1799,7 @@ function Library:Notify(o)
 		if strip.Visible then tween(strip, { Size = UDim2.new(0, 3, 1, 0) }, 0.55) end
 		task.delay(0.12, function() if not dead then playIcon() end end)
 		task.delay(0.15, function() if not dead then tween(titleL, { TextTransparency = 0 }, 0.3) end end)
-		task.delay(0.25, function() if not dead then tween(contentL, { TextTransparency = 0 }, 0.3) end end)
+		task.delay(0.25, function() if not dead then tween(contentL, { TextTransparency = CT }, 0.3) end end)
 		task.delay(0.2, function() if not dead then shinePlay() end end)
 		task.delay(0.3, function() if not dead then applyMode() end end)
 	end)
@@ -3005,6 +3118,7 @@ function Block:CreateKeybind(o)
 		key = k
 		btn.Text = k.Name
 		if o.Flag then Library.Flags[o.Flag] = k.Name end
+		if Library._onKeybindChanged then pcall(Library._onKeybindChanged) end
 		if not silent then fire(o.Callback, k) end
 	end
 	local listening = false
@@ -3258,6 +3372,12 @@ for _, kind in ipairs(WRAP_KINDS) do
 		local e = self.Entries[#self.Entries]
 		if e and e.Frame then
 			if opts.Tooltip then attachTip(e.Frame, opts.Tooltip) end
+			-- liste des keybinds (bloc « Raccourcis clavier » des Paramètres)
+			if kind == "Keybind" and not self._noFav then
+				Library.KeybindEntries[#Library.KeybindEntries + 1] = { Name = tostring(opts.Name or "Keybind"),
+					Tab = self.Tab, Block = self, Frame = e.Frame, Item = item }
+				if Library._onKeybindAdded then pcall(Library._onKeybindAdded) end
+			end
 			-- palette de commandes (Ctrl+K) : { Palette = false } pour exclure un élément
 			if not self._noFav and opts.Palette ~= false then
 				local ptab = self.Tab and self.Tab.Name or ""
@@ -3298,6 +3418,45 @@ function Block:CreateConfirmButton(o)
 	return self:CreateButton(o)
 end
 Block.CreateSeparator = Block.CreateDivider
+
+-- Va jusqu'à un élément : sélectionne son onglet, déplie son bloc, fait défiler jusqu'à sa ligne et la fait clignoter
+function Library:RevealElement(e)
+	local w = Library.Window
+	if not (w and e and e.Tab and e.Block and e.Frame and e.Frame.Parent) then return false end
+	if w.Search and w.Search.Text ~= "" then w.Search.Text = "" end   -- un filtre actif pourrait cacher la ligne
+	if w.Current ~= e.Tab then e.Tab:Select() end
+	local blk, frame = e.Block, e.Frame
+	local wasCollapsed = blk._isCollapsed and blk._isCollapsed()
+	if wasCollapsed then blk:SetCollapsed(false) end
+	task.spawn(function()
+		task.wait(wasCollapsed and 0.45 or 0.12)
+		-- plusieurs passes : corrige l'écart éventuel dû à l'échelle / aux animations
+		for _ = 1, 3 do
+			local sf = blk.Scroll
+			if not (frame.Parent and sf and sf.Parent) then return end
+			local sc = pxScale()
+			local off = (frame.AbsolutePosition.Y - sf.AbsolutePosition.Y) / sc - 36
+			if math.abs(off) <= 3 then break end
+			local maxY = math.max(0, (sf.AbsoluteCanvasSize.Y - sf.AbsoluteWindowSize.Y) / sc)
+			local target = math.clamp(sf.CanvasPosition.Y + off, 0, maxY)
+			if math.abs(target - sf.CanvasPosition.Y) < 1 then break end
+			tween(sf, { CanvasPosition = Vector2.new(0, target) }, 0.3)
+			task.wait(0.34)
+		end
+		if not frame.Parent then return end
+		local ov = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
+			BorderSizePixel = 0, ZIndex = 50 }, frame)
+		new("UICorner", { CornerRadius = UDim.new(0, 8) }, ov)
+		for _ = 1, 2 do
+			if not ov.Parent then return end
+			ov.BackgroundTransparency = 0.5
+			tween(ov, { BackgroundTransparency = 1 }, 0.5)
+			task.wait(0.6)
+		end
+		ov:Destroy()
+	end)
+	return true
+end
 
 -- Aides sur les onglets
 function Tab:ClearBlocks()
@@ -4035,6 +4194,95 @@ function Window:CreateSettingsTab(name, icon, docked)
 		end })
 	D:CreateParagraph({ Title = "Raccourcis",
 		Content = "Double-clic sur la barre de titre : réduire / restaurer.\nCtrl+R : recentrer la fenêtre.\nBouton = dans la barre de titre : tout replier / déplier.\nLa position et la taille de la fenêtre sont retenues automatiquement.\nCtrl+K : palette de commandes (roue au centre de l'écran, choix de 1 à 0)." })
+
+	-- ───────────── Raccourcis clavier : tous les keybinds, avec saut vers leur emplacement ─────────────
+	local KB = tab:CreateBlock({ Name = "Raccourcis clavier", Side = "Right", Collapsed = true })
+	KB._noFav = true
+	local kbRows = {}
+	local function keyText(it)
+		local ok, k = pcall(function() return it.Get() end)
+		return (ok and typeof(k) == "EnumItem") and k.Name or "—"
+	end
+	local function subText(e)
+		return "Touche : " .. keyText(e.Item) .. "  ·  " .. tostring(e.Tab and e.Tab.Name or "") .. " › " .. tostring(e.Block and e.Block.Name or "")
+	end
+	local function refreshSubs()
+		for _, r in ipairs(kbRows) do
+			if r.sub.Parent then r.sub.Text = subText(r.e) end
+		end
+	end
+	local function buildKbRow(e)
+		local f, st = makeRow(KB, 42, e.Name)
+		hover(f, st)
+		label(f, e.Name, 13, { Position = UDim2.new(0, 12, 0, 4), Size = UDim2.new(1, -108, 0, 18) })
+		local sub = label(f, subText(e), 10, { Position = UDim2.new(0, 12, 0, 23), Size = UDim2.new(1, -108, 0, 14),
+			TextColor3 = T.ElementAccent, TextTransparency = 0.2 })
+		kbRows[#kbRows + 1] = { e = e, sub = sub }
+		local btn = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
+			Size = UDim2.new(0, 84, 0, 26), BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0,
+			Text = "Aller", TextColor3 = T.Text, TextSize = 12, Font = F_MED, AutoButtonColor = false }, f)
+		corner(btn, 6)
+		trackStyled(btn, stroke(btn, 0.9), "input")
+		-- 1er clic = confirmer, 2e clic = aller à l'emplacement du keybind
+		local armed, token = false, 0
+		local function disarm()
+			armed = false
+			btn.Text = "Aller"
+			tween(btn, { BackgroundColor3 = T.Off, BackgroundTransparency = Sty.InputTr }, 0.3)
+		end
+		btn.MouseButton1Click:Connect(function()
+			if not armed then
+				armed = true
+				token += 1
+				local my = token
+				btn.Text = "Confirmer ?"
+				tween(btn, { BackgroundColor3 = Color3.fromRGB(150, 45, 45), BackgroundTransparency = 0.1 }, 0.2)
+				task.delay(3, function()
+					if armed and token == my then disarm() end
+				end)
+				return
+			end
+			token += 1
+			disarm()
+			Library:RevealElement(e)
+		end)
+	end
+	local kbBuilding = false
+	local function rebuildKeybinds()
+		if kbBuilding then return end
+		kbBuilding = true
+		for _, c in ipairs(KB.Body:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		table.clear(KB.Entries)
+		table.clear(kbRows)
+		local L, list = Library.KeybindEntries, {}
+		for i = #L, 1, -1 do
+			if not (L[i].Frame and L[i].Frame.Parent) then table.remove(L, i) end
+		end
+		for _, e in ipairs(L) do list[#list + 1] = e end
+		if #list == 0 then
+			KB:CreateParagraph({ Title = "Aucun keybind",
+				Content = "Les keybinds ajoutés à l'interface apparaîtront ici." })
+		else
+			KB:CreateParagraph({ Title = #list .. (#list > 1 and " keybinds" or " keybind"),
+				Content = "Clique une 1re fois sur « Aller » pour confirmer, une 2e fois pour être emmené à l'emplacement du keybind." })
+			for _, e in ipairs(list) do buildKbRow(e) end
+		end
+		kbBuilding = false
+	end
+	local kbQueued = false
+	Library._onKeybindAdded = function()
+		if win.Current ~= tab or kbQueued then return end
+		kbQueued = true
+		task.defer(function()
+			kbQueued = false
+			rebuildKeybinds()
+		end)
+	end
+	Library._onKeybindChanged = refreshSubs
+	tab.OnSelect = rebuildKeybinds   -- la liste se remet à jour à chaque ouverture de l'onglet
+	rebuildKeybinds()
 
 	-- ───────────── Configurations ─────────────
 	local CF = tab:CreateBlock({ Name = "Configurations", Side = "Left", Collapsed = true })
@@ -6777,6 +7025,8 @@ function Library:Destroy()
 	table.clear(Library.CornerObjects)
 	table.clear(Library.FavEntries)
 	table.clear(Library.CmdEntries)
+	table.clear(Library.KeybindEntries)
+	Library._onKeybindAdded, Library._onKeybindChanged = nil, nil
 	if Library._destroyPalette then pcall(Library._destroyPalette) end
 	if Library._destroySpotlight then pcall(Library._destroySpotlight) end
 	table.clear(Library.TxtEntries)
