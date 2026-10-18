@@ -108,6 +108,13 @@
 		  1-0 ou clic pour choisir, Tab = filtre (Tout / Favoris / Boutons / Toggles / Réglages), molette ou flèches = page,
 		  / = recherche, Échap = retour. Boutons lancés, toggles basculés, curseurs / listes / champs / couleurs / touches
 		  réglés sans ouvrir la fenêtre. Library:OpenPalette() / ClosePalette() / TogglePalette(). { Palette = false } exclut un élément.
+
+	─────────────  V7 : TITRE ÉTIRÉ, BARRE DE RECHERCHE (Ctrl+T)  ─────────────
+		• Titre étiré + en gras (Library.TitleStretch / TitleBold, Réglages > Apparence). Le texte se réduit tout seul
+		  pour tenir dans la barre de titre. Si tu vois des carrés entre les lettres : Library.TitleSpacing = " ".
+		• Ctrl+T : barre de recherche seule au milieu de l'écran (sans la fenêtre), trou noir + étoiles qui spiralent.
+		  Les résultats affichent les vrais contrôles (interrupteur, curseur, bouton, liste, champ, couleur, touche).
+		  Library:OpenSpotlight() / CloseSpotlight() / ToggleSpotlight() / SetSpotlightKey(KeyCode, needCtrl).
 ]]
 
 local Players      = game:GetService("Players")
@@ -138,6 +145,10 @@ local Library = {
 	Favorites         = {},
 	FavEntries        = {},
 	CmdEntries        = {},    -- éléments disponibles dans la palette de commandes (Ctrl+K)
+	TxtEntries        = {},    -- textes (labels / paragraphes) cherchables dans la barre de recherche (Ctrl+T)
+	TitleStretch      = true,  -- titre étiré (lettres espacées)
+	TitleBold         = true,  -- titre en gras
+	TitleSpacing      = utf8.char(0x2009), -- espace fine entre les lettres (mets " " si tu vois des carrés)
 	FavStars          = {},
 	Shape              = "Arrondie", -- "Arrondie" | "Douce" | "Classique"
 	StyleName          = "Standard", -- "Standard" | "Verre" | "Givré" | "Mat" | "Néon"
@@ -1890,6 +1901,12 @@ local function titleSeq(a)
 	})
 end
 Library._titleSeq = titleSeq
+function Library._stretch(s)
+	s = tostring(s)
+	local out = {}
+	for _, c in utf8.codes(s) do out[#out + 1] = utf8.char(c) end
+	return table.concat(out, Library.TitleSpacing or " ")
+end
 
 local function applyColorsNow()
 	local list = {}
@@ -2065,6 +2082,8 @@ function Library:GetTheme()
 		Breathing = Library.Breathing,
 		TitleFont = Library.TitleFont,
 		TitleShine = Library.TitleShine,
+		TitleStretch = Library.TitleStretch,
+		TitleBold = Library.TitleBold,
 		Ripple = Library.Ripple,
 		SpinSpeed = Library.SpinSpeed,
 		HoleVisible = Library.HoleVisible,
@@ -2120,6 +2139,8 @@ function Library:ApplyTheme(t)
 		{ "Breathing", "ui.breath", nil, opt("Breathing") },
 		{ "TitleFont", "ui.titlefont", nil, opt("TitleFont") },
 		{ "TitleShine", "ui.titleshine", nil, opt("TitleShine") },
+		{ "TitleStretch", "ui.titlestretch", nil, opt("TitleStretch") },
+		{ "TitleBold", "ui.titlebold", nil, opt("TitleBold") },
 		{ "Ripple", "ui.ripple", nil, opt("Ripple") },
 		{ "SpinSpeed", "ui.spin", pct, opt("SpinSpeed") },
 		{ "HoleVisible", "ui.hole", nil, opt("HoleVisible") },
@@ -2370,6 +2391,10 @@ function Block:CreateLabel(o)
 	}, self.Body)
 	new("UIPadding", { PaddingLeft = UDim.new(0, 4), PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 2) }, l)
 	local e = self:_reg(l, o.Text)
+	if not self._noFav then
+		Library.TxtEntries[#Library.TxtEntries + 1] = { Kind = "Text", Frame = l, Tab = self.Tab and self.Tab.Name or "",
+			Block = self.Name, Seq = 1000000 + #Library.TxtEntries, Get = function() return "", l.Text end }
+	end
 	local item = {}
 	item.SetText = function(...)
 		local t = tostring((unself(item, ...)))
@@ -2406,6 +2431,10 @@ function Block:CreateParagraph(o)
 	}, holder)
 	titleL.Visible = titleL.Text ~= ""
 	local e = self:_reg(holder, (o.Title or o.Name or "") .. " " .. (o.Content or o.Text or ""))
+	if not self._noFav then
+		Library.TxtEntries[#Library.TxtEntries + 1] = { Kind = "Text", Frame = holder, Tab = self.Tab and self.Tab.Name or "",
+			Block = self.Name, Seq = 1000000 + #Library.TxtEntries, Get = function() return titleL.Text, bodyL.Text end }
+	end
 	local item = {}
 	item.Set = function(...)
 		local d = unself(item, ...)
@@ -3732,6 +3761,10 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Default = Library.TitleFont, Callback = opt("TitleFont") })
 	A:CreateToggle({ Name = "Titre qui brille", Flag = "ui.titleshine", Default = Library.TitleShine,
 		Tooltip = "Un reflet balaie le titre de temps en temps.", Callback = opt("TitleShine") })
+	A:CreateToggle({ Name = "Titre étiré", Flag = "ui.titlestretch", Default = Library.TitleStretch,
+		Tooltip = "Espace les lettres du titre pour le mettre en avant.", Callback = opt("TitleStretch") })
+	A:CreateToggle({ Name = "Titre en gras", Flag = "ui.titlebold", Default = Library.TitleBold,
+		Callback = opt("TitleBold") })
 
 	-- ───────────── Étoiles & forme ─────────────
 	local F = tab:CreateBlock({ Name = "Étoiles & forme", Side = "Right" })
@@ -3912,6 +3945,26 @@ function Window:CreateSettingsTab(name, icon, docked)
 	PL:CreateButton({ Name = "Ouvrir la palette", Favorite = false, Callback = function() Library:OpenPalette() end })
 	PL:CreateParagraph({ Title = "Utilisation",
 		Content = "Ctrl+K ouvre la roue au milieu de l'écran (curseur libre).\n1 à 0 ou clic : choisir.   Tab : filtre (Tout / Favoris / Boutons / Toggles / Réglages).\nMolette ou ← → : page.   / : rechercher.   Échap ou Retour : retour / fermer.\nMaj + bouton : la palette reste ouverte.   Les éléments ★ passent en premier." })
+
+	-- ───────────── Barre de recherche (Ctrl+T) ─────────────
+	local SP = tab:CreateBlock({ Name = "Barre de recherche", Side = "Left", Collapsed = true })
+	SP:CreateToggle({ Name = "Barre de recherche activée", Flag = "ui.spotlighton", Default = Library.SpotlightEnabled,
+		Callback = function(v) Library:SetSpotlightEnabled(v) end })
+	SP:CreateToggle({ Name = "Exiger Ctrl (recherche)", Flag = "ui.spotlightctrl", Default = Library.SpotlightNeedCtrl,
+		Tooltip = "Désactivé : la touche seule ouvre la barre (déconseillé si tu tapes du texte).",
+		Callback = function(v) Library.SpotlightNeedCtrl = v and true or false end })
+	SP:CreateKeybind({ Name = "Touche d'ouverture (recherche)", Flag = "ui.spotlightkey", Default = Library.SpotlightKey,
+		Favorite = false, Callback = function(k) Library.SpotlightKey = k end })
+	SP:CreateToggle({ Name = "Masquer la fenêtre à l'ouverture", Flag = "ui.spotlighthide", Default = Library.SpotlightHideWindow,
+		Tooltip = "La barre s'affiche seule, sans la fenêtre derrière ; elle revient à la fermeture.",
+		Callback = function(v) Library.SpotlightHideWindow = v and true or false end })
+	SP:CreateSlider({ Name = "Étoiles du fond (recherche)", Flag = "ui.spotlightstars", Min = 0, Max = 140, Step = 5,
+		Default = Library.SpotlightStars, Callback = function(v) Library.SpotlightStars = v end })
+	SP:CreateSlider({ Name = "Résultats affichés", Flag = "ui.spotlightmax", Min = 3, Max = 14, Step = 1,
+		Default = Library.SpotlightMax, Callback = function(v) Library.SpotlightMax = v end })
+	SP:CreateButton({ Name = "Ouvrir la barre de recherche", Favorite = false, Callback = function() Library:OpenSpotlight() end })
+	SP:CreateParagraph({ Title = "Utilisation",
+		Content = "Ctrl+T ouvre la barre au milieu de l'écran, sans la fenêtre : juste le trou noir et les étoiles.\nTape pour trouver n'importe quel bouton, interrupteur, curseur, liste, champ, couleur ou touche, et règle-le directement.\nEntrée : lance / bascule le premier résultat.   Échap : efface puis ferme.   Clic dehors : ferme." })
 
 	-- ───────────── Fenêtre ─────────────
 	local D = tab:CreateBlock({ Name = "Fenêtre", Side = "Right", Collapsed = true })
@@ -4816,6 +4869,840 @@ do
 end
 
 -- ============================================================================
+-- V7 : BARRE DE RECHERCHE « TROU NOIR »  (Ctrl+T)
+--   Une barre de recherche façon Google / Spotlight au milieu de l'écran, SANS la fenêtre : juste le fond noir,
+--   un trou noir et des étoiles qui spiralent vers lui. En tapant, les résultats apparaissent avec leurs vrais
+--   contrôles (interrupteur, curseur, bouton, liste, champ, couleur, touche) que tu règles directement.
+--     Ctrl+T : ouvrir / fermer   ·   Entrée : lance / bascule le premier résultat   ·   Échap : efface puis ferme
+--   API : Library:OpenSpotlight() / CloseSpotlight() / ToggleSpotlight() / SetSpotlightEnabled(v) /
+--         SetSpotlightKey(KeyCode, needCtrl)
+--   Options : Library.SpotlightStars (0-140) / SpotlightMax (3-14) / SpotlightHideWindow / SpotlightNeedCtrl / SpotlightKey
+--   Les éléments { Palette = false } sont exclus (comme dans la palette Ctrl+K).
+-- ============================================================================
+local spotOk, spotErr = pcall(function()
+	local CAS = game:GetService("ContextActionService")
+	local KC = Enum.KeyCode
+	local SINK, PASS = Enum.ContextActionResult.Sink, Enum.ContextActionResult.Pass
+	local IN = Enum.EasingDirection.In
+
+	Library.SpotlightEnabled    = true
+	Library.SpotlightNeedCtrl   = true
+	Library.SpotlightKey        = KC.T
+	Library.SpotlightStars      = 70
+	Library.SpotlightHideWindow = true
+	Library.SpotlightMax        = 8
+
+	local S = { open = false, rows = {}, recent = {} }
+	local BUILD = {}
+	local PRESET_COLORS = {
+		Color3.fromRGB(255, 255, 255), Color3.fromRGB(255, 77, 94), Color3.fromRGB(255, 150, 60),
+		Color3.fromRGB(255, 214, 80), Color3.fromRGB(61, 220, 151), Color3.fromRGB(80, 220, 235),
+		Color3.fromRGB(80, 130, 255), Color3.fromRGB(160, 100, 255), Color3.fromRGB(255, 110, 200),
+	}
+
+	-- ───────────── Outils ─────────────
+	local function low(s)
+		if s == nil then return "" end
+		return string.lower(tostring(s))
+	end
+	local function ctrlDown() return UIS:IsKeyDown(KC.LeftControl) or UIS:IsKeyDown(KC.RightControl) end
+	local function safeGet(it)
+		if type(it) ~= "table" or type(it.Get) ~= "function" then return nil end
+		local ok, v = pcall(it.Get)
+		if ok then return v end
+		return nil
+	end
+	local function pathOf(e)
+		local t, b = tostring(e.Tab or ""), tostring(e.Block or "")
+		if t ~= "" and b ~= "" and t ~= b then return t .. "  ·  " .. b end
+		return (t ~= "") and t or b
+	end
+	local function remember(e)
+		if not (e and e.Key) then return end
+		for i = #S.recent, 1, -1 do
+			if S.recent[i] == e.Key then table.remove(S.recent, i) end
+		end
+		table.insert(S.recent, 1, e.Key)
+		while #S.recent > 6 do table.remove(S.recent) end
+	end
+
+	-- ───────────── Contenu : éléments de l'interface + commandes intégrées ─────────────
+	local function builtins()
+		return {
+			{ Kind = "Action", Name = "Ouvrir l'interface", Tab = "Spotlight", Block = "Interface",
+				Extra = "fenêtre menu afficher ui", Opts = { Callback = function()
+					S.openAfter = true
+					Library:CloseSpotlight()
+				end } },
+			{ Kind = "Action", Name = "Ouvrir la palette de commandes", Tab = "Spotlight", Block = "Interface",
+				Extra = "ctrl k roue", Opts = { Callback = function()
+					Library:CloseSpotlight()
+					task.delay(0.4, function() Library:OpenPalette() end)
+				end } },
+			{ Kind = "Action", Name = "Recentrer la fenêtre", Tab = "Spotlight", Block = "Interface",
+				Extra = "reset position", Opts = { Callback = function()
+					local w = Library.Window
+					if w and w.Reset then w:Reset() end
+				end } },
+			{ Kind = "Action", Name = "Notifications : tout fermer", Tab = "Spotlight", Block = "Notifications",
+				Extra = "effacer vider", Opts = { Callback = function() Library:ClearNotifications() end } },
+		}
+	end
+
+	local function allEntries()
+		local list, keep = {}, {}
+		for _, e in pairs(Library.CmdEntries) do
+			if e.Frame and e.Frame.Parent then list[#list + 1] = e end
+		end
+		table.sort(list, function(a, b) return (a.Seq or 0) < (b.Seq or 0) end)
+		for _, t in ipairs(Library.TxtEntries) do
+			if t.Frame and t.Frame.Parent then
+				keep[#keep + 1] = t
+				local ok, ti, co = pcall(t.Get)
+				if ok then
+					ti, co = tostring(ti or ""), tostring(co or "")
+					t.TitleText, t.BodyText = ti, co
+					t.Name = (ti ~= "") and ti or co
+					t.Extra = co
+					list[#list + 1] = t
+				end
+			end
+		end
+		Library.TxtEntries = keep
+		return list
+	end
+
+	local function scoreOf(e, q, words)
+		local n = low(e.Name)
+		local hay = n .. " " .. low(e.Tab) .. " " .. low(e.Block) .. " " .. low(e.Extra)
+		for _, w in ipairs(words) do
+			if not string.find(hay, w, 1, true) then return 0 end
+		end
+		local s = 1
+		local at = string.find(n, q, 1, true)
+		if at == 1 then s = 4
+		elseif at then s = 3
+		elseif string.find(n, words[1], 1, true) then s = 2 end
+		if e.Kind == "Text" then s = s - 0.5 end
+		if e.Key and Library.Favorites[e.Key] then s = s + 0.25 end
+		return s
+	end
+
+	local function results(query)
+		local max = math.clamp(math.floor(tonumber(Library.SpotlightMax) or 8), 3, 14)
+		local q = string.match(low(query), "^%s*(.-)%s*$") or ""
+		local list = allEntries()
+		local out = {}
+		if q == "" then
+			local seen = {}
+			for _, key in ipairs(S.recent) do
+				local e = Library.CmdEntries[key]
+				if e and e.Frame and e.Frame.Parent and not seen[key] then
+					seen[key] = true
+					out[#out + 1] = e
+				end
+			end
+			for _, e in ipairs(list) do
+				if #out >= max then break end
+				if e.Key and e.Kind ~= "Text" and Library.Favorites[e.Key] and not seen[e.Key] then
+					seen[e.Key] = true
+					out[#out + 1] = e
+				end
+			end
+			while #out > max do table.remove(out) end
+			if #out == 0 then
+				for _, b in ipairs(builtins()) do
+					if #out < max then out[#out + 1] = b end
+				end
+				return out, "Suggestions  ·  tape pour chercher un réglage, un bouton, une couleur..."
+			end
+			return out, "Récents et favoris"
+		end
+		for _, b in ipairs(builtins()) do list[#list + 1] = b end
+		local words = {}
+		for w in string.gmatch(q, "%S+") do words[#words + 1] = w end
+		local scored = {}
+		for idx, e in ipairs(list) do
+			local s = scoreOf(e, q, words)
+			if s > 0 then scored[#scored + 1] = { e = e, s = s, i = idx } end
+		end
+		table.sort(scored, function(a, b)
+			if a.s ~= b.s then return a.s > b.s end
+			return a.i < b.i
+		end)
+		local total = #scored
+		for i = 1, math.min(total, max) do out[i] = scored[i].e end
+		local cap
+		if total == 0 then
+			cap = "Aucun résultat pour « " .. q .. " »"
+		elseif total > #out then
+			cap = #out .. " sur " .. total .. " résultats  ·  affine ta recherche"
+		else
+			cap = total .. ((total == 1) and " résultat" or " résultats")
+		end
+		return out, cap
+	end
+
+	-- ───────────── Cartes de résultats ─────────────
+	local function newCard(parent, order)
+		local f = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundColor3 = T.Second,
+			BackgroundTransparency = 0.1, BorderSizePixel = 0, LayoutOrder = order, Active = true }, parent)
+		new("UICorner", { CornerRadius = UDim.new(0, 14) }, f)
+		local st = new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.86, ApplyStrokeMode = BORDER }, f)
+		new("UIListLayout", { SortOrder = BYORDER }, f)
+		local sc = new("UIScale", { Scale = 0 }, f)
+		return f, st, sc
+	end
+
+	local function newHeader(f, e, rw)
+		local hdr = new("Frame", { Size = UDim2.new(1, 0, 0, 48), BackgroundTransparency = 1, LayoutOrder = 1 }, f)
+		label(hdr, e.Name, 13, { Position = UDim2.new(0, 16, 0, 8), Size = UDim2.new(1, -(rw + 32), 0, 18), Font = F_BOLD })
+		label(hdr, pathOf(e), 10, { Position = UDim2.new(0, 16, 0, 27), Size = UDim2.new(1, -(rw + 32), 0, 14),
+			TextColor3 = T.ElementAccent })
+		return hdr
+	end
+
+	local function round(o, r)
+		new("UICorner", { CornerRadius = (r == 1) and UDim.new(1, 0) or UDim.new(0, r) }, o)
+	end
+
+	BUILD.Toggle = function(f, e)
+		local it = e.Item
+		local hdr = newHeader(f, e, 56)
+		local sw = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0),
+			Size = UDim2.fromOffset(42, 22), BackgroundColor3 = T.Off, BorderSizePixel = 0 }, hdr)
+		round(sw, 1)
+		new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.8, ApplyStrokeMode = BORDER }, sw)
+		local knob = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0),
+			Size = UDim2.fromOffset(16, 16), BackgroundColor3 = T.Text, BorderSizePixel = 0 }, sw)
+		round(knob, 1)
+		local function paint(v, instant)
+			local t = instant and 0 or 0.3
+			tween(sw, { BackgroundColor3 = v and T.Accent or T.Off }, t)
+			tween(knob, { Position = v and UDim2.new(1, -19, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+				BackgroundColor3 = v and T.Main or T.Text }, t, BACK)
+		end
+		local function flip()
+			local cur = safeGet(it) and true or false
+			pcall(it.Set, it, not cur)
+			paint(not cur)
+			remember(e)
+		end
+		local hit = new("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "",
+			AutoButtonColor = false }, hdr)
+		hit.MouseButton1Click:Connect(flip)
+		paint(safeGet(it) and true or false, true)
+		return flip
+	end
+
+	BUILD.Button = function(f, e)
+		local o = e.Opts or {}
+		local hdr = newHeader(f, e, 108)
+		local pill = new("TextLabel", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
+			Size = UDim2.fromOffset(94, 26), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, Text = "Lancer",
+			TextColor3 = T.Text, TextSize = 12, Font = F_BOLD, BorderSizePixel = 0 }, hdr)
+		round(pill, 1)
+		local armed, tok = false, 0
+		local function run()
+			if o.Confirm and not armed then
+				armed = true
+				tok += 1
+				local my = tok
+				pill.Text = "Confirmer ?"
+				tween(pill, { BackgroundColor3 = Color3.fromRGB(150, 45, 45), BackgroundTransparency = 0.2 }, 0.2)
+				task.delay(3, function()
+					if armed and tok == my and pill.Parent then
+						armed = false
+						pill.Text = "Lancer"
+						tween(pill, { BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9 }, 0.3)
+					end
+				end)
+				return
+			end
+			armed = false
+			tok += 1
+			fire(o.Callback)
+			remember(e)
+			pill.Text = "Lancé"
+			pill.BackgroundColor3 = T.Accent
+			pill.BackgroundTransparency = 0.55
+			tween(pill, { BackgroundTransparency = 0.9 }, 0.7)
+			task.delay(1.1, function()
+				if pill.Parent and not armed then pill.Text = "Lancer" end
+			end)
+		end
+		local hit = new("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "",
+			AutoButtonColor = false }, hdr)
+		hit.MouseButton1Click:Connect(run)
+		return run
+	end
+	BUILD.Action = BUILD.Button
+
+	BUILD.Slider = function(f, e)
+		local o, it = e.Opts, e.Item
+		local min, max = o.Min or 0, o.Max or 100
+		local suffix = o.Suffix and tostring(o.Suffix) or ""
+		local hdr = newHeader(f, e, 104)
+		local box = new("TextBox", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
+			Size = UDim2.fromOffset(88, 26), BackgroundColor3 = T.Off, BackgroundTransparency = 0.55, Text = "",
+			TextColor3 = T.Text, TextSize = 12, Font = F_MED, ClearTextOnFocus = false, BorderSizePixel = 0 }, hdr)
+		round(box, 8)
+		local body = new("Frame", { Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, LayoutOrder = 2 }, f)
+		local bar = new("Frame", { Position = UDim2.new(0, 16, 0, 8), Size = UDim2.new(1, -32, 0, 6),
+			BackgroundColor3 = T.Off, BorderSizePixel = 0 }, body)
+		round(bar, 1)
+		local fill = new("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, bar)
+		round(fill, 1)
+		local knob = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+			Size = UDim2.fromOffset(14, 14), BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, bar)
+		round(knob, 1)
+		local hit = new("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "" }, body)
+		local function show(v)
+			v = tonumber(v) or min
+			local span = max - min
+			local ratio = span == 0 and 0 or math.clamp((v - min) / span, 0, 1)
+			fill.Size = UDim2.new(ratio, 0, 1, 0)
+			knob.Position = UDim2.new(ratio, 0, 0.5, 0)
+			if not box:IsFocused() then box.Text = tostring(v) .. suffix end
+		end
+		hit.InputBegan:Connect(function(i)
+			if not isPress(i) then return end
+			tween(knob, { Size = UDim2.fromOffset(18, 18) }, 0.2, BACK)
+			startDrag(function(p)
+				local t = math.clamp((p.X - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1)
+				pcall(it.Set, it, min + t * (max - min))
+				show(safeGet(it))
+			end, S.list, i.Position, function()
+				tween(knob, { Size = UDim2.fromOffset(14, 14) }, 0.25)
+				remember(e)
+			end)
+		end)
+		box.FocusLost:Connect(function()
+			local n = tonumber(string.match(box.Text, "-?%d+%.?%d*"))
+			if n then pcall(it.Set, it, n) remember(e) end
+			show(safeGet(it))
+		end)
+		show(safeGet(it))
+	end
+
+	BUILD.Dropdown = function(f, e)
+		local o, it = e.Opts, e.Item
+		local multi = (o.Multi == true) or (o.MultiSelect == true) or (o.MultipleOptions == true)
+		local src = o.Items or o.Options or {}
+		if type(o.UpdateList) == "function" then
+			local ok, r = pcall(o.UpdateList)
+			if ok and type(r) == "table" then src = r end
+		end
+		local names = {}
+		for _, v in ipairs(src) do names[#names + 1] = tostring(v) end
+		local hdr = newHeader(f, e, 150)
+		local valL = label(hdr, "", 12, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0),
+			Size = UDim2.fromOffset(136, 18), TextXAlignment = RIGHT, TextColor3 = T.ElementAccent })
+		local body = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
+			LayoutOrder = 2, Visible = #names > 0 }, f)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14), PaddingBottom = UDim.new(0, 14) }, body)
+		new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Wraps = true, Padding = UDim.new(0, 6),
+			SortOrder = BYORDER }, body)
+		local chips = {}
+		local function current()
+			local cur = safeGet(it)
+			local set = {}
+			if type(cur) == "table" then
+				for _, x in ipairs(cur) do set[tostring(x)] = true end
+			elseif cur ~= nil then
+				set[tostring(cur)] = true
+			end
+			return set, cur
+		end
+		local function paint()
+			local set, cur = current()
+			for n, c in pairs(chips) do
+				local on = set[n] == true
+				tween(c, { BackgroundTransparency = on and 0.72 or 0.93, TextColor3 = on and T.Accent or T.ElementAccent }, 0.18)
+			end
+			if multi then
+				if type(cur) ~= "table" or #cur == 0 then valL.Text = "Choisir..."
+				elseif #cur <= 2 then valL.Text = table.concat(cur, ", ")
+				else valL.Text = #cur .. " choisis" end
+			else
+				valL.Text = tostring(cur or "Choisir...")
+			end
+		end
+		for idx, n in ipairs(names) do
+			if idx > 30 then break end
+			local c = new("TextButton", { Size = UDim2.fromOffset(0, 28), AutomaticSize = Enum.AutomaticSize.X,
+				BackgroundColor3 = T.Accent, BackgroundTransparency = 0.93, Text = n, TextColor3 = T.ElementAccent,
+				TextSize = 12, Font = F_MED, AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = idx }, body)
+			round(c, 1)
+			new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, c)
+			chips[n] = c
+			c.MouseButton1Click:Connect(function()
+				if multi then
+					local set = current()
+					local list = {}
+					for _, m in ipairs(names) do
+						if (m == n and not set[m]) or (m ~= n and set[m]) then list[#list + 1] = m end
+					end
+					pcall(it.Set, it, list)
+				else
+					pcall(it.Set, it, n)
+				end
+				paint()
+				remember(e)
+			end)
+		end
+		paint()
+	end
+
+	BUILD.Input = function(f, e)
+		local o, it = e.Opts, e.Item
+		local rw = math.min(214, math.floor((S.barW or 560) * 0.5))
+		local hdr = newHeader(f, e, rw)
+		local tb = new("TextBox", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
+			Size = UDim2.fromOffset(rw - 14, 28), BackgroundColor3 = T.Off, BackgroundTransparency = 0.5,
+			Text = tostring(safeGet(it) or ""), PlaceholderText = o.Placeholder or o.PlaceholderText or "",
+			PlaceholderColor3 = Color3.fromRGB(125, 125, 132), TextColor3 = T.Text, TextSize = 12, Font = F_REG,
+			ClearTextOnFocus = false, TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd,
+			BorderSizePixel = 0 }, hdr)
+		round(tb, 8)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, tb)
+		tb.FocusLost:Connect(function()
+			pcall(it.Set, it, tb.Text)
+			remember(e)
+		end)
+	end
+
+	BUILD.Keybind = function(f, e)
+		local it = e.Item
+		local hdr = newHeader(f, e, 112)
+		local function nameOf()
+			local k = safeGet(it)
+			return (typeof(k) == "EnumItem") and k.Name or "—"
+		end
+		local btn = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
+			Size = UDim2.fromOffset(98, 26), BackgroundColor3 = T.Off, BackgroundTransparency = 0.5, Text = nameOf(),
+			TextColor3 = T.Text, TextSize = 12, Font = F_MED, AutoButtonColor = false, BorderSizePixel = 0 }, hdr)
+		round(btn, 8)
+		btn.MouseButton1Click:Connect(function()
+			if S.capture then return end
+			Library._listening = true
+			btn.Text = "..."
+			local conn
+			local function finish()
+				if conn then conn:Disconnect() conn = nil end
+				Library._listening = false
+				S.capture = nil
+			end
+			S.capture = function()
+				finish()
+				if btn.Parent then btn.Text = nameOf() end
+			end
+			conn = UIS.InputBegan:Connect(function(i)
+				if i.UserInputType ~= Enum.UserInputType.Keyboard or i.KeyCode == KC.Escape then return end
+				finish()
+				pcall(it.Set, it, i.KeyCode)
+				if btn.Parent then btn.Text = i.KeyCode.Name end
+				remember(e)
+			end)
+		end)
+	end
+
+	BUILD.ColorPicker = function(f, e)
+		local it = e.Item
+		local hdr = newHeader(f, e, 60)
+		local sw = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0),
+			Size = UDim2.fromOffset(40, 20), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, hdr)
+		round(sw, 6)
+		new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.6, ApplyStrokeMode = BORDER }, sw)
+		local body = new("Frame", { Size = UDim2.new(1, 0, 0, 42), BackgroundTransparency = 1, LayoutOrder = 2 }, f)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14) }, body)
+		new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8),
+			VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = BYORDER }, body)
+		local hex = new("TextBox", { Size = UDim2.fromOffset(90, 26), BackgroundColor3 = T.Off, BackgroundTransparency = 0.5,
+			Text = "", PlaceholderText = "#FFFFFF", TextColor3 = T.Text, TextSize = 12, Font = F_MED,
+			ClearTextOnFocus = false, BorderSizePixel = 0, LayoutOrder = 100 }, body)
+		round(hex, 8)
+		local function show()
+			local c = safeGet(it)
+			if typeof(c) == "Color3" then
+				sw.BackgroundColor3 = c
+				if not hex:IsFocused() then hex.Text = "#" .. string.upper(c:ToHex()) end
+			end
+		end
+		for idx, c in ipairs(PRESET_COLORS) do
+			local b = new("TextButton", { Size = UDim2.fromOffset(24, 24), BackgroundColor3 = c, Text = "",
+				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = idx }, body)
+			round(b, 1)
+			new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 1, Transparency = 0.75, ApplyStrokeMode = BORDER }, b)
+			b.MouseEnter:Connect(function() tween(b, { Size = UDim2.fromOffset(28, 28) }, 0.15, BACK) end)
+			b.MouseLeave:Connect(function() tween(b, { Size = UDim2.fromOffset(24, 24) }, 0.2) end)
+			b.MouseButton1Click:Connect(function()
+				pcall(it.Set, it, c)
+				show()
+				remember(e)
+			end)
+		end
+		hex.FocusLost:Connect(function()
+			local ok, c = pcall(Color3.fromHex, (string.gsub(hex.Text, "#", "")))
+			if ok and typeof(c) == "Color3" then
+				pcall(it.Set, it, c)
+				remember(e)
+			end
+			show()
+		end)
+		show()
+	end
+
+	BUILD.Text = function(f, e)
+		local ti, co = e.TitleText or "", e.BodyText or ""
+		local head = (ti ~= "") and ti or co
+		local body = (ti ~= "") and co or ""
+		local box = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
+			LayoutOrder = 1 }, f)
+		new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 12), PaddingLeft = UDim.new(0, 16),
+			PaddingRight = UDim.new(0, 16) }, box)
+		new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = BYORDER }, box)
+		label(box, pathOf(e), 10, { Size = UDim2.new(1, 0, 0, 14), TextColor3 = T.ElementAccent, LayoutOrder = 1 })
+		label(box, head, 13, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Font = F_BOLD, TextWrapped = true,
+			TextTruncate = Enum.TextTruncate.None, LayoutOrder = 2 })
+		if body ~= "" then
+			label(box, body, 12, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, TextWrapped = true,
+				TextTruncate = Enum.TextTruncate.None, TextColor3 = T.ElementAccent, Font = F_REG,
+				TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 3 })
+		end
+	end
+
+	local function buildRow(e, idx)
+		local b = BUILD[e.Kind]
+		if not b then return nil end
+		local f, st, sc = newCard(S.list, idx)
+		local ok, primary = pcall(b, f, e)
+		if not ok then
+			f:Destroy()
+			warn("[Ui-Lib] Spotlight : " .. tostring(primary))
+			return nil
+		end
+		f.MouseEnter:Connect(function() tween(st, { Transparency = 0.5 }, 0.2) end)
+		f.MouseLeave:Connect(function() tween(st, { Transparency = 0.86 }, 0.3) end)
+		task.delay((idx - 1) * 0.035, function()
+			if f.Parent then tween(sc, { Scale = 1 }, 0.45, BACK) end
+		end)
+		return { frame = f, primary = (type(primary) == "function") and primary or nil }
+	end
+
+	local function refresh()
+		if not (S.open and S.list and S.list.Parent) then return end
+		for _, r in ipairs(S.rows) do
+			if r.frame then r.frame:Destroy() end
+		end
+		S.rows = {}
+		local out, cap = results(S.box.Text)
+		for i, e in ipairs(out) do
+			local r = buildRow(e, i)
+			if r then S.rows[#S.rows + 1] = r end
+		end
+		S.caption.Text = cap
+		S.list.CanvasPosition = Vector2.new(0, 0)
+	end
+
+	-- ───────────── Fermeture ─────────────
+	local function escape()
+		if S.capture then S.capture() return end
+		if S.box and S.box.Text ~= "" then
+			S.box.Text = ""
+			return
+		end
+		Library:CloseSpotlight()
+	end
+
+	local function casHandler(_, state, input)
+		if not S.open then return PASS end
+		if state == Enum.UserInputState.Begin and input.KeyCode == KC.Escape then escape() end
+		return SINK
+	end
+
+	local function teardown(sess)
+		pcall(function() if sess.hb then sess.hb:Disconnect() end end)
+		for _, tw in ipairs(sess.tweens) do pcall(function() tw:Cancel() end) end
+		pcall(function() sess.gui:Destroy() end)
+	end
+
+	function Library:CloseSpotlight()
+		if not S.open then return end
+		S.open = false
+		if S.capture then pcall(S.capture) end
+		pcall(function() CAS:UnbindAction("UiLibSpotlight") end)
+		pcall(function() RunService:UnbindFromRenderStep("UiLibSpotlightMouse") end)
+		if S.box then pcall(function() S.box:ReleaseFocus() end) end
+		local sess = S.sess
+		if sess then
+			sess.target = 0
+			if S.ui and canvasSupported then tween(S.ui, { GroupTransparency = 1 }, 0.25) end
+			if S.barScale then tween(S.barScale, { Scale = 0.92 }, 0.3) end
+			if S.dim then tween(S.dim, { BackgroundTransparency = 1 }, 0.35) end
+			if S.stageScale then tween(S.stageScale, { Scale = 0 }, 0.4, QUINT, IN) end
+			task.delay(0.5 / math.max(Library.AnimSpeed or 1, 0.05) + 0.05, function()
+				teardown(sess)
+				if S.sess == sess then
+					S.sess = nil
+					S.box, S.list, S.caption, S.ui, S.barScale, S.dim, S.stageScale = nil, nil, nil, nil, nil, nil, nil
+				end
+			end)
+		end
+		S.rows = {}
+		-- la fenêtre revient si elle était ouverte (ou si on a demandé « Ouvrir l'interface »)
+		local w = Library.Window
+		local reopen = S.hid or S.openAfter
+		S.hid, S.openAfter = false, false
+		if reopen and w and w.Toggle then w:Toggle(true) end
+		pcall(setBlurTarget, (w and w.Open) and Library.BlurSize or 0)
+	end
+
+	-- ───────────── Ouverture ─────────────
+	function Library:OpenSpotlight()
+		if S.open or not Library.SpotlightEnabled then return end
+		if Library.IsPaletteOpen and Library:IsPaletteOpen() then Library:ClosePalette() end
+		S.open = true
+		S.openAt = os.clock()
+		S.capture = nil
+		S.rows = {}
+		S.openAfter = false
+
+		local w = Library.Window
+		S.hid = false
+		if Library.SpotlightHideWindow and w and w.Open then
+			S.hid = true
+			w:Toggle(false)
+		end
+		pcall(setBlurTarget, Library.BlurSize or 0)
+
+		local vp = viewport()
+		local vw, vh = vp.X, vp.Y
+		local barW = math.clamp(vw - 40, 280, 620)
+		local barY = math.clamp(math.floor(vh * 0.22), 64, 200)
+		S.barW = barW
+
+		local gui = new("ScreenGui", { Name = "SolarisSpotlight", ResetOnSpawn = false, DisplayOrder = 1002,
+			ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
+		mount(gui)
+		local sess = { gui = gui, tweens = {}, fade = 0, target = 1, stars = {} }
+		S.sess = sess
+
+		-- voile noir (bouton « Modal » : libère aussi le curseur en vue première personne) ; clic dehors = fermer
+		local dim = new("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
+			BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Modal = true, BorderSizePixel = 0 }, gui)
+		dim.MouseButton1Click:Connect(function() Library:CloseSpotlight() end)
+		tween(dim, { BackgroundTransparency = 0.1 }, 0.35)
+		S.dim = dim
+
+		-- trou noir : anneaux d'accrétion inclinés + horizon des événements, centrés sur la barre
+		local stage = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, barY),
+			Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1, BorderSizePixel = 0 }, gui)
+		local stageScale = new("UIScale", { Scale = 0 }, stage)
+		S.stageScale = stageScale
+		tween(stageScale, { Scale = math.clamp(vw / 1100, 0.5, 1.1) }, 0.8, BACK)
+		local ringCol = ColorSequence.new(T.Accent, T.Accent:Lerp(Color3.new(0, 0, 0), 0.55))
+		local function orbit(w0, h0, thick, tr, rot, dur, parent)
+			local fr = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(0, 0),
+				Size = UDim2.fromOffset(w0, h0), BackgroundTransparency = 1, BorderSizePixel = 0, Rotation = rot }, parent or stage)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, fr)
+			local st = new("UIStroke", { Color = T.Accent, Thickness = thick, Transparency = tr, ApplyStrokeMode = BORDER }, fr)
+			local g = new("UIGradient", { Color = ringCol, Transparency = ringSeq() }, st)
+			local tw = TweenService:Create(g, TweenInfo.new(math.abs(dur), LINEAR, OUT, -1),
+				{ Rotation = (dur > 0) and 360 or -360 })
+			tw:Play()
+			sess.tweens[#sess.tweens + 1] = tw
+			return fr
+		end
+		orbit(980, 320, 1, 0.78, -7, 26)
+		orbit(760, 250, 1.5, 0.55, -7, -17)
+		orbit(560, 180, 2, 0.35, -7, 11)
+		local core = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromOffset(170, 170), BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0 }, stage)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, core)
+		local cst = new("UIStroke", { Color = T.Accent, Thickness = 2.5, Transparency = 0.1, ApplyStrokeMode = BORDER }, core)
+		local cg = new("UIGradient", { Color = ringCol, Transparency = ringSeq() }, cst)
+		local ctw = TweenService:Create(cg, TweenInfo.new(8, LINEAR, OUT, -1), { Rotation = 360 })
+		ctw:Play()
+		sess.tweens[#sess.tweens + 1] = ctw
+		orbit(232, 232, 1, 0.6, 0, -14)
+
+		-- étoiles qui spiralent vers le trou noir
+		local rng = Random.new()
+		local R = math.sqrt(vw * vw + vh * vh) * 0.55
+		local nStars = math.clamp(math.floor(tonumber(Library.SpotlightStars) or 0), 0, 140)
+		for i = 1, nStars do
+			local sz = rng:NextInteger(1, 3)
+			local sf = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(sz, sz),
+				BackgroundColor3 = (i % 4 == 0) and Color3.new(1, 1, 1) or T.Accent, BackgroundTransparency = 1,
+				BorderSizePixel = 0 }, gui)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, sf)
+			sess.stars[i] = { f = sf, rad = rng:NextNumber(40, R), ang = rng:NextNumber(0, math.pi * 2),
+				v = rng:NextNumber(4, 16), a = rng:NextNumber(0.4, 0.95), ph = rng:NextNumber(0, 6.28),
+				ts = rng:NextNumber(1, 3), dir = (rng:NextInteger(0, 9) == 0) and -1 or 1 }
+		end
+		local acc = 0
+		sess.hb = RunService.Heartbeat:Connect(function(dt)
+			sess.fade = sess.fade + (sess.target - sess.fade) * (1 - math.exp(-dt * 5))
+			acc = acc + dt
+			if acc < 1 / 30 then return end
+			local step = math.min(acc, 0.1)
+			acc = 0
+			local now = os.clock()
+			for _, s in ipairs(sess.stars) do
+				local rad = s.rad - (s.v + 9000 / (s.rad + 60)) * step
+				s.ang = s.ang + (0.04 + 260 / (rad + 100)) * step * s.dir
+				if rad < 30 then
+					rad = R * (0.75 + math.random() * 0.25)
+					s.ang = math.random() * math.pi * 2
+				end
+				s.rad = rad
+				s.f.Position = UDim2.new(0.5, math.cos(s.ang) * rad, 0, barY + math.sin(s.ang) * rad * 0.55)
+				local a = s.a * math.clamp((rad - 30) / 90, 0, 1) * math.clamp((R - rad) / 80, 0, 1)
+					* (0.75 + 0.25 * math.sin(now * s.ts + s.ph)) * sess.fade
+				s.f.BackgroundTransparency = 1 - a
+			end
+		end)
+
+		-- interface : barre + légende + liste de résultats (au-dessus du fond)
+		local ui = new(canvasSupported and "CanvasGroup" or "Frame", { Name = "UI", Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1, BorderSizePixel = 0 }, gui)
+		if canvasSupported then
+			ui.GroupTransparency = 1
+			tween(ui, { GroupTransparency = 0 }, 0.35)
+		end
+		S.ui = ui
+
+		local bar = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, barY),
+			Size = UDim2.fromOffset(barW, 54), BackgroundColor3 = T.Main, BackgroundTransparency = 0.04,
+			BorderSizePixel = 0, Active = true }, ui)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
+		local bst = new("UIStroke", { Color = T.Accent, Thickness = 1.6, Transparency = 0.2, ApplyStrokeMode = BORDER }, bar)
+		local bg = new("UIGradient", { Color = ringCol, Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.15, 0.5), NumberSequenceKeypoint.new(0.3, 0.9),
+			NumberSequenceKeypoint.new(0.7, 0.9), NumberSequenceKeypoint.new(0.85, 0.5), NumberSequenceKeypoint.new(1, 0) }) }, bst)
+		local btw = TweenService:Create(bg, TweenInfo.new(6, LINEAR, OUT, -1), { Rotation = 360 })
+		btw:Play()
+		sess.tweens[#sess.tweens + 1] = btw
+		local barScale = new("UIScale", { Scale = 0.85 }, bar)
+		tween(barScale, { Scale = 1 }, 0.6, BACK)
+		S.barScale = barScale
+
+		-- loupe dessinée à la main
+		local lens = new("Frame", { Position = UDim2.new(0, 22, 0.5, -9), Size = UDim2.fromOffset(14, 14),
+			BackgroundTransparency = 1, BorderSizePixel = 0 }, bar)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, lens)
+		new("UIStroke", { Color = T.Text, Thickness = 2, Transparency = 0.15, ApplyStrokeMode = BORDER }, lens)
+		local hd = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 37, 0.5, 6),
+			Size = UDim2.fromOffset(8, 2), Rotation = 45, BackgroundColor3 = T.Text, BackgroundTransparency = 0.15,
+			BorderSizePixel = 0 }, bar)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, hd)
+
+		local showChip = barW >= 360
+		local box = new("TextBox", { Position = UDim2.new(0, 52, 0, 0), Size = UDim2.new(1, showChip and -134 or -68, 1, 0),
+			BackgroundTransparency = 1, Text = "", PlaceholderText = "Rechercher un réglage, un bouton, une option...",
+			PlaceholderColor3 = Color3.fromRGB(125, 125, 132), TextColor3 = T.Text, TextSize = 17, Font = F_MED,
+			ClearTextOnFocus = false, TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd,
+			BorderSizePixel = 0 }, bar)
+		if showChip then
+			local chip = new("TextLabel", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0),
+				Size = UDim2.fromOffset(56, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, Text = "Échap",
+				TextColor3 = T.ElementAccent, TextSize = 10, Font = F_BOLD, BorderSizePixel = 0 }, bar)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, chip)
+		end
+
+		local caption = new("TextLabel", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, barY + 38),
+			Size = UDim2.fromOffset(barW, 16), BackgroundTransparency = 1, Text = "", TextColor3 = T.ElementAccent,
+			TextSize = 11, Font = F_MED, TextXAlignment = CENTER, TextTruncate = Enum.TextTruncate.AtEnd }, ui)
+
+		local listTop = barY + 64
+		local list = new("ScrollingFrame", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, listTop),
+			Size = UDim2.fromOffset(barW, math.max(120, vh - listTop - 20)), BackgroundTransparency = 1,
+			BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageColor3 = T.Accent, ScrollBarImageTransparency = 0.5,
+			CanvasSize = UDim2.new(), AutomaticCanvasSize = AY, Active = true }, ui)
+		new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, list)
+		new("UIPadding", { PaddingTop = UDim.new(0, 2), PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 6),
+			PaddingBottom = UDim.new(0, 14) }, list)
+
+		S.box, S.list, S.caption = box, list, caption
+
+		local token = 0
+		box:GetPropertyChangedSignal("Text"):Connect(function()
+			local txt = box.Text
+			-- la touche d'ouverture (ex. « t » de Ctrl+T) ne doit pas s'écrire dans la barre
+			if os.clock() - (S.openAt or 0) < 0.3 and #txt == 1 and low(txt) == low(Library.SpotlightKey.Name) then
+				box.Text = ""
+				return
+			end
+			token += 1
+			local my = token
+			task.delay(0.07, function()
+				if token == my then refresh() end
+			end)
+		end)
+		box.FocusLost:Connect(function(enter)
+			if not (S.open and enter) then return end
+			local r = S.rows[1]
+			if r and r.primary then r.primary() end
+			task.defer(function()
+				if S.open and S.box == box then box:CaptureFocus() end
+			end)
+		end)
+
+		-- Échap : bloqué côté jeu (sinon il ouvre le menu Roblox) ; curseur libre
+		pcall(function() CAS:BindActionAtPriority("UiLibSpotlight", casHandler, false, 3000, KC.Escape) end)
+		pcall(function()
+			RunService:BindToRenderStep("UiLibSpotlightMouse", Enum.RenderPriority.Camera.Value + 10, function()
+				UIS.MouseBehavior = Enum.MouseBehavior.Default
+				UIS.MouseIconEnabled = true
+			end)
+		end)
+
+		refresh()
+		task.delay(0.08, function()
+			if S.open and S.box == box then box:CaptureFocus() end
+		end)
+	end
+
+	function Library:ToggleSpotlight()
+		if S.open then Library:CloseSpotlight() else Library:OpenSpotlight() end
+	end
+	function Library:IsSpotlightOpen() return S.open end
+	function Library:SetSpotlightEnabled(v)
+		Library.SpotlightEnabled = v and true or false
+		if not Library.SpotlightEnabled then Library:CloseSpotlight() end
+	end
+	function Library:SetSpotlightKey(key, needCtrl)
+		if typeof(key) == "EnumItem" then Library.SpotlightKey = key end
+		if needCtrl ~= nil then Library.SpotlightNeedCtrl = needCtrl and true or false end
+	end
+
+	track(UIS.InputBegan:Connect(function(i, processed)
+		if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
+		if i.KeyCode ~= Library.SpotlightKey then return end
+		if Library.SpotlightNeedCtrl and not ctrlDown() then return end
+		if S.open then
+			if S.capture then return end
+			if not Library.SpotlightNeedCtrl and S.box and S.box:IsFocused() then return end
+			Library:CloseSpotlight()
+			return
+		end
+		if processed or Library._listening or not Library.SpotlightEnabled then return end
+		Library:OpenSpotlight()
+	end))
+
+	Library._destroySpotlight = function()
+		S.open = false
+		pcall(function() CAS:UnbindAction("UiLibSpotlight") end)
+		pcall(function() RunService:UnbindFromRenderStep("UiLibSpotlightMouse") end)
+		if S.sess then teardown(S.sess) end
+		S.sess, S.box, S.list, S.caption, S.ui, S.barScale, S.dim, S.stageScale = nil, nil, nil, nil, nil, nil, nil, nil
+		S.rows = {}
+	end
+end)
+if not spotOk then warn("[Ui-Lib] Barre de recherche indisponible : " .. tostring(spotErr)) end
+
+-- ============================================================================
 -- FENÊTRE
 -- ============================================================================
 function Library:CreateWindow(cfg)
@@ -5075,9 +5962,13 @@ function Library:CreateWindow(cfg)
 			Transparency = ringSeq() }, lst), 160)
 		tx = 42
 	end
-	local title = label(titleBar, cfg.Title or "UI", 15, { Position = UDim2.new(0, tx, 0, 0),
+	local titleRaw = tostring(cfg.Title or "UI")
+	local title = label(titleBar, titleRaw, 16, { TextScaled = true, Position = UDim2.new(0, tx, 0, 0),
 		Size = UDim2.new(1, -tx - 190, 1, 0), Font = F_BOLD })
 	local titleGrad = new("UIGradient", { Color = Library._titleSeq(T.Accent), Rotation = 12 }, title)
+	new("UITextSizeConstraint", { MaxTextSize = 17, MinTextSize = 9 }, title)
+	local titleStroke = new("UIStroke", { Color = T.Accent, Thickness = 0.9, Transparency = 0.35,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual }, title)
 	Library._titleGrad = titleGrad
 	title:SetAttribute("FontRole", nil)   -- le titre a sa propre police
 
@@ -5383,6 +6274,8 @@ function Library:CreateWindow(cfg)
 			if ok then f = r end
 		end
 		title.Font = f or (Library.Fonts and Library.Fonts[3]) or F_BOLD
+		title.Text = (Library.TitleStretch ~= false) and Library._stretch(titleRaw) or titleRaw
+		titleStroke.Enabled = Library.TitleBold ~= false
 		if shineTw then
 			shineTw:Cancel()
 			shineTw = nil
@@ -5452,7 +6345,10 @@ function Library:CreateWindow(cfg)
 		tgtPos = clampCenter(tgtPos or curPos)
 		task.delay(0.5, saveWin)
 	end
-	function win:SetTitle(t) title.Text = tostring(t) end
+	function win:SetTitle(t)
+		titleRaw = tostring(t)
+		win:ApplyTitle()
+	end
 	function win:SetBackground(m)
 		if m == "full" or m == "light" or m == "off" then
 			bgMode = m
@@ -5754,6 +6650,8 @@ function Library:Destroy()
 	table.clear(Library.FavEntries)
 	table.clear(Library.CmdEntries)
 	if Library._destroyPalette then pcall(Library._destroyPalette) end
+	if Library._destroySpotlight then pcall(Library._destroySpotlight) end
+	table.clear(Library.TxtEntries)
 	table.clear(Library.FavStars)
 	table.clear(Library.Defaults)
 	Library._titleGrad = nil
