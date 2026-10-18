@@ -34,6 +34,10 @@
 		  et Window:CreateConfigTab("Config") qui crée un onglet tout prêt.
 		• Library:SetCornerRadius(v) met à jour tous les arrondis déjà créés.
 		• Options de CreateWindow en plus : Stars (nombre d'étoiles, 0 = aucune), MinSize (Vector2).
+		• Performances : NoCanvasGroup = true (CreateWindow ou Library.NoCanvasGroup) pour un rendu bien plus
+		  fluide (pas de fondu d'ouverture) ; Background = "full" | "light" | "off" dans CreateWindow, ou
+		  Window:SetBackground(mode) / Library:SetBackground(mode) à tout moment.
+		  Le fond se met en pause tout seul pendant les déplacements, redimensionnements et animations lourdes.
 ]]
 
 local Players      = game:GetService("Players")
@@ -302,6 +306,7 @@ local function drawer(parent, order)
 		self.Open = open and true or false
 		token = token + 1
 		local my = token
+		Library._busyUntil = os.clock() + 0.4
 		if self.Open then
 			wrap.Visible = true
 			tween(wrap, { Size = UDim2.new(1, 0, 0, self.Height) }, 0.34)
@@ -498,6 +503,10 @@ function Library:DeleteConfig(name)
 	if name == "" or not delfile then return false end
 	local ok = pcall(function() delfile(Library.ConfigFolder .. "/" .. name .. ".json") end)
 	return ok
+end
+
+function Library:SetBackground(m)
+	if Library.Window then Library.Window:SetBackground(m) end
 end
 
 function Library:SetCornerRadius(v)
@@ -1331,7 +1340,7 @@ function Tab:CreateBlock(o)
 	local clip = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
 		ClipsDescendants = true, LayoutOrder = 2, BorderSizePixel = 0 }, frame)
 	local body = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1 }, clip)
-	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = BYORDER }, body)
+	local lay = new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = BYORDER }, body)
 	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8),
 		PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 8) }, body)
 
@@ -1340,7 +1349,13 @@ function Tab:CreateBlock(o)
 		if c == collapsed then return end
 		collapsed = c
 		tween(arrow, { Rotation = c and 0 or 90 }, 0.3)
-		local h = body.AbsoluteSize.Y / pxScale()
+		Library._busyUntil = os.clock() + 0.45
+		local sc = pxScale()
+		local h = body.AbsoluteSize.Y / sc
+		if h < 1 then
+			-- bloc replié : AbsoluteSize peut valoir 0, on mesure via le layout (14 = padding haut 6 + bas 8)
+			h = lay.AbsoluteContentSize.Y / sc + 14
+		end
 		local fullyOpen = clip.AutomaticSize ~= AN
 		clip.AutomaticSize = AN
 		if c then
@@ -1456,6 +1471,7 @@ function Window:CreateTab(name, _, icon)
 			end
 		end
 		page.Visible = true
+		Library._busyUntil = os.clock() + 0.55
 		tween(bar, { Size = UDim2.new(0, 3, 0, 16) }, 0.45, BACK)
 		tween(btn, { BackgroundTransparency = 0.92 }, 0.25)
 		tween(txt, { TextColor3 = T.Text }, 0.25)
@@ -1570,7 +1586,10 @@ function Library:CreateWindow(cfg)
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
 	mount(gui)
 
-	local main = new(canvasSupported and "CanvasGroup" or "Frame", {
+	-- CanvasGroup = fondu d'ouverture, mais coûteux (toute la fenêtre est redessinée dans une texture à chaque changement).
+	-- NoCanvasGroup = true dans CreateWindow (ou Library.NoCanvasGroup) -> simple Frame, beaucoup plus fluide.
+	local useCanvas = canvasSupported and not cfg.NoCanvasGroup and not Library.NoCanvasGroup
+	local main = new(useCanvas and "CanvasGroup" or "Frame", {
 		Name = "MainBackground", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(W, H),
 		Position = UDim2.fromOffset(center.X, center.Y), BackgroundColor3 = T.Main,
 		BackgroundTransparency = transp, BorderSizePixel = 0, ClipsDescendants = true,
@@ -1581,6 +1600,7 @@ function Library:CreateWindow(cfg)
 
 	-- Position lissée (déplacement fluide)
 	local curPos, tgtPos = center, nil
+	local curSize, tgtSize, rsBase = nil, nil, nil -- redimensionnement lissé
 	local function clampCenter(c)
 		local v = viewport()
 		local w, h = main.Size.X.Offset * scaleBase, main.Size.Y.Offset * scaleBase
@@ -1645,6 +1665,16 @@ function Library:CreateWindow(cfg)
 		s.born = os.clock() - rng:NextNumber(0, 1)
 		stars[n] = s
 	end
+
+	-- Fond animé : "full" (tout), "light" (moitié d'étoiles), "off" (aucun fond, le plus fluide)
+	local bgMode = cfg.Background or "full"
+	local starLim = #stars
+	local function applyBg()
+		space.Visible = bgMode ~= "off"
+		starLim = (bgMode == "light") and math.ceil(#stars / 2) or #stars
+		for n, st in ipairs(stars) do st.f.Visible = n <= starLim end
+	end
+	applyBg()
 
 	-- ------------------------------------------------------------------
 	-- Barre de titre
@@ -1759,17 +1789,18 @@ function Library:CreateWindow(cfg)
 		if isPress(i) then
 			local start = Vector2.new(i.Position.X, i.Position.Y)
 			local sw, sh = main.Size.X.Offset, main.Size.Y.Offset
-			local c0 = curPos
 			local sc = scaleBase
 			tgtPos = nil
+			curSize = Vector2.new(sw, sh)
+			tgtSize = curSize
+			rsBase = { c0 = curPos, sw = sw, sh = sh, sc = sc }
 			startDrag(function(p)
 				local d = (Vector2.new(p.X, p.Y) - start) / sc
 				local v = viewport()
-				local nw = math.clamp(sw + d.X, minW, math.max(minW, v.X / sc - 10))
-				local nh = math.clamp(sh + d.Y, minH, math.max(minH, v.Y / sc - 10))
-				main.Size = UDim2.fromOffset(nw, nh)
-				curPos = c0 + Vector2.new(nw - sw, nh - sh) * sc / 2
-				main.Position = UDim2.fromOffset(curPos.X, curPos.Y)
+				tgtSize = Vector2.new(
+					math.clamp(sw + d.X, minW, math.max(minW, v.X / sc - 10)),
+					math.clamp(sh + d.Y, minH, math.max(minH, v.Y / sc - 10))
+				)
 			end)
 		end
 	end)
@@ -1790,11 +1821,11 @@ function Library:CreateWindow(cfg)
 		if v then
 			main.Visible = true
 			tween(uiScale, { Scale = scaleBase }, 0.55, BACK)
-			if canvasSupported then tween(main, { GroupTransparency = 0 }, 0.35) end
+			if useCanvas then tween(main, { GroupTransparency = 0 }, 0.35) end
 		else
 			if Library._openDD then Library._openDD(false) end
 			tween(uiScale, { Scale = scaleBase * 0.94 }, 0.3)
-			if canvasSupported then tween(main, { GroupTransparency = 1 }, 0.28) end
+			if useCanvas then tween(main, { GroupTransparency = 1 }, 0.28) end
 			task.delay(0.32, function()
 				if toggleToken == my and not self.Open then main.Visible = false end
 			end)
@@ -1809,6 +1840,13 @@ function Library:CreateWindow(cfg)
 		tgtPos = clampCenter(curPos)
 	end
 	function win:SetTitle(t) title.Text = tostring(t) end
+	function win:SetBackground(m)
+		if m == "full" or m == "light" or m == "off" then
+			bgMode = m
+			applyBg()
+		end
+	end
+	function win:GetBackground() return bgMode end
 
 	hideBtn.MouseButton1Click:Connect(function()
 		win:Toggle(false)
@@ -1859,11 +1897,31 @@ function Library:CreateWindow(cfg)
 	-- ------------------------------------------------------------------
 	-- Boucle d'animation (anneaux, étoiles, déplacement lissé)
 	-- ------------------------------------------------------------------
-	track(RunService.Heartbeat:Connect(function(dt)
+	track(RunService.RenderStepped:Connect(function(dt)
 		if not main.Visible then return end
 		local t = os.clock()
-		for _, sp in ipairs(spinners) do
-			sp.g.Rotation = (t * sp.speed) % 360
+		-- le fond animé se met en pause pendant les gestes lourds (déplacer, redimensionner, replier, changer d'onglet)
+		local paused = activeDrag ~= nil or tgtSize ~= nil or tgtPos ~= nil or t < (Library._busyUntil or 0)
+		if not (paused or bgMode == "off") then
+			for _, sp in ipairs(spinners) do
+				sp.a = ((sp.a or 0) + dt * sp.speed) % 360
+				sp.g.Rotation = sp.a
+			end
+		end
+		if tgtSize and rsBase then
+			local d = tgtSize - curSize
+			if d.Magnitude < 0.25 then
+				curSize = tgtSize
+				tgtSize = nil
+			else
+				curSize = curSize + d * (1 - math.exp(-dt * 28))
+			end
+			-- tailles paires + positions entières = pas de tremblement (fenêtre ancrée au centre)
+			local nw = math.floor(curSize.X / 2 + 0.5) * 2
+			local nh = math.floor(curSize.Y / 2 + 0.5) * 2
+			main.Size = UDim2.fromOffset(nw, nh)
+			curPos = rsBase.c0 + (curSize - Vector2.new(rsBase.sw, rsBase.sh)) * rsBase.sc / 2
+			main.Position = UDim2.fromOffset(math.floor(curPos.X + 0.5), math.floor(curPos.Y + 0.5))
 		end
 		if tgtPos then
 			local d = tgtPos - curPos
@@ -1875,9 +1933,11 @@ function Library:CreateWindow(cfg)
 			end
 			main.Position = UDim2.fromOffset(math.floor(curPos.X + 0.5), math.floor(curPos.Y + 0.5))
 		end
+		if paused or bgMode == "off" then return end
 		local w, h = main.Size.X.Offset, main.Size.Y.Offset
 		local cx, cy = w - 66, 54
-		for _, s in ipairs(stars) do
+		for n = 1, starLim do
+			local s = stars[n]
 			local dx, dy = cx - s.x, cy - s.y
 			local d = math.sqrt(dx * dx + dy * dy)
 			if d < 24 or s.x < -10 or s.x > w + 10 or s.y < -10 or s.y > h + 10 then
@@ -1896,10 +1956,10 @@ function Library:CreateWindow(cfg)
 	end))
 
 	-- Animation d'apparition
-	if canvasSupported then main.GroupTransparency = 1 end
+	if useCanvas then main.GroupTransparency = 1 end
 	uiScale.Scale = 0.9
 	tween(uiScale, { Scale = 1 }, 0.7, BACK)
-	if canvasSupported then tween(main, { GroupTransparency = 0 }, 0.5) end
+	if useCanvas then tween(main, { GroupTransparency = 0 }, 0.5) end
 
 	Library.Window = win
 	return win
