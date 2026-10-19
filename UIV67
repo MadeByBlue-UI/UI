@@ -7909,7 +7909,7 @@ end
 --   API : Library:OpenPalette() / ClosePalette() / TogglePalette() / SetPaletteEnabled(v) / SetPaletteKey(KeyCode, needCtrl)
 --         Option { Palette = false } sur un élément pour l'exclure de la palette.
 -- ============================================================================
-do
+;(function(...)
 	local CAS = game:GetService("ContextActionService")
 
 	Library.PaletteEnabled  = true
@@ -8792,7 +8792,7 @@ do
 		if P.gui then pcall(function() P.gui:Destroy() end) end
 		P.gui, P.slots, P.shown, P.stack, P.view = nil, {}, {}, {}, nil
 	end
-end
+end)(...)
 
 -- ============================================================================
 -- V7 : BARRE DE RECHERCHE « TROU NOIR »  (Ctrl+T)
