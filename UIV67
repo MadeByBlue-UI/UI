@@ -13,7 +13,7 @@
 		Tab:CreateBlock({Name, Side, ImageID}) -> Block
 		Block:CreateSection / CreateLabel / CreateParagraph / CreateDivider /
 		      CreateButton / CreateToggle / CreateSlider / CreateDropdown /
-		      CreateInput / CreateColorPicker / CreateKeybind
+		      CreateInput / CreateColorPicker / CreateKeybind / CreateProgress / CreateStepper
 		Library:Notify({Title, Content, Duration})
 		Library.Flags / Library.Items / Library.CornerObjects / Library.GlobalCornerValue
 
@@ -177,6 +177,27 @@
 		  Library.NotifExitByType = { Error = "Briser", Success = "Tourbillon" } (un style par type de notification)
 		  Library:Notify({ ..., Exit = "Effacer vers la droite" }) (style pour une seule notification)
 		• Le swipe latéral garde son glissement. Library.NotifBlackHole = false convertit « Trou noir » en « Glisser ».
+
+	─────────────  V10 : JAUGES, COMPTEURS, STYLES D'ENTRÉE, TRANSITIONS D'ONGLETS, HUD  ─────────────
+		• Block:CreateProgress({ Name, Min = 0, Max = 100, Default, Suffix | Format = function(v, ratio, max), Color, Text })
+		  Barre de progression / jauge mise à jour par le script (cooldowns, chargement) :
+		  p:Set(v) · p:Get() · p:GetRatio() · p:SetMax(m) · p:SetText("...") · p:SetColor(c) · p:SetName("...")
+		  p:Countdown(secondes, { Fill = false, ShowTime = true, OnDone = fn }) : se vide (ou se remplit avec Fill = true)
+		  p:SetIndeterminate(true) : chargement sans valeur connue · p:Cancel() : arrête le décompte / le chargement.
+		• Block:CreateStepper({ Name, Min, Max, Step = 1, Default, Suffix, Wrap = false, Flag, Callback })
+		  Compteur  - / valeur / +  pour les entiers (plus précis qu'un curseur). Maintenir le bouton = répétition qui accélère,
+		  Maj = pas x10, clic sur la valeur = saisie au clavier. item:Set(n) · item:Get() · item:Increment() · item:Decrement().
+		• Styles d'entrée des notifications : Paramètres > Notifications > « Styles d'entrée personnalisés » (DÉSACTIVÉ par défaut)
+		  puis « Style d'entrée » : Trou noir (sort d'un trou noir) · Éclats (se reconstitue à partir d'éclats) ·
+		  Balayage depuis la gauche / la droite / le haut / le bas · Aléatoire.
+		  API : Library:SetNotifEntry("Éclats") · Library:SetNotifEntryEnabled(true) · Library.NotifEntryByType = { Error = "Éclats" }
+		  Library:Notify({ ..., Entry = "Trou noir" }) pour une seule notification (marche même réglage coupé ; Entry = false = entrée classique).
+		• Transitions d'onglets : Paramètres > Animations & performances > « Transition des onglets » : Glisser · Fondu · Zoom.
+		  API : Library:SetTabTransition("Zoom") · Library.TabTransitions.
+		• HUD des actifs refait : il est ancré par le coin le plus proche d'un bord de l'écran, donc quand une ligne apparaît ou
+		  disparaît il s'agrandit vers l'intérieur de l'écran au lieu de se décaler. Largeur calculée, colonne des touches alignée
+		  à droite. Chaque ligne affiche sa touche : celle du toggle (Keybind = ...), sinon celle d'un Block:CreateKeybind du même
+		  nom, sinon celle donnée à la main : CreateToggle({ Name = "Vol", HudKey = monKeybind }) (item, Enum.KeyCode ou fonction).
 ]]
 
 local Players      = game:GetService("Players")
@@ -1649,6 +1670,52 @@ function Library:SetNotifExit(s)
 	return false
 end
 
+-- ───────────── V10 : STYLES D'ENTRÉE DES NOTIFICATIONS ─────────────
+-- Désactivés par défaut (Library.NotifEntryCustom = false) : l'entrée classique (glissement + rebond) est gardée.
+-- Library:SetNotifEntryEnabled(true) · Library:SetNotifEntry("Éclats") · Library.NotifEntryStyles (liste des noms)
+-- Library.NotifEntryByType = { Error = "Éclats", Success = "Trou noir" } · Library:Notify({ ..., Entry = "Balayage depuis la gauche" })
+Library.NotifEntryCustom = false
+Library.NotifEntry = "Trou noir"
+Library.NotifEntryStyles = { "Trou noir", "Éclats", "Balayage depuis la gauche", "Balayage depuis la droite",
+	"Balayage depuis le haut", "Balayage depuis le bas", "Aléatoire" }
+Library.NotifEntryByType = {}
+
+local ENTRY_SET = {}
+for _, n in ipairs(Library.NotifEntryStyles) do ENTRY_SET[n] = true end
+
+local function resolveEntry(explicit, kind)
+	if explicit == false or explicit == "Glisser" then return nil end
+	local s
+	if type(explicit) == "string" and ENTRY_SET[explicit] then
+		s = explicit
+	else
+		if not Library.NotifEntryCustom then return nil end
+		s = Library.NotifEntryByType and Library.NotifEntryByType[kind]
+		if type(s) ~= "string" or not ENTRY_SET[s] then s = Library.NotifEntry end
+		if not ENTRY_SET[s] then s = "Trou noir" end
+	end
+	if s == "Aléatoire" then
+		local pool = {}
+		for _, n in ipairs(Library.NotifEntryStyles) do
+			if n ~= "Aléatoire" then pool[#pool + 1] = n end
+		end
+		s = pool[math.random(#pool)]
+	end
+	return s
+end
+
+function Library:SetNotifEntry(s)
+	if ENTRY_SET[s] then
+		Library.NotifEntry = s
+		return true
+	end
+	return false
+end
+
+function Library:SetNotifEntryEnabled(v)
+	Library.NotifEntryCustom = v and true or false
+end
+
 do
 	local EXITS = {}
 	local KP = NumberSequenceKeypoint.new
@@ -1898,6 +1965,207 @@ do
 	EXITS["Casser"]    = function(s, c, cs, h) return shards(s, c, cs, h, "crack") end
 	EXITS["Dissoudre"] = function(s, c, cs, h) return shards(s, c, cs, h, "dissolve") end
 
+	-- ─────────── STYLES D'ENTRÉE ───────────
+	-- Chaque style reçoit (slot, card, cardScale, h, cw) et renvoie (durée en secondes d'animation, fonction de nettoyage).
+	-- La carte est remise en état normal par Notify (settleCard) une fois l'animation finie.
+	local ENTER = {}
+
+	-- TROU NOIR : un trou noir s'ouvre, la carte en sort en tournant et s'agrandit, puis le trou se referme
+	ENTER["Trou noir"] = function(slot, card, cardScale, h, cw)
+		local k = K()
+		local dirSpin = (math.random() < 0.5) and -1 or 1
+		freezeCard(card, cardScale, h)
+		if canvasSupported then card.GroupTransparency = 0 end
+		card.AnchorPoint = Vector2.new(0.5, 0.5)
+		card.Position = UDim2.new(0.5, 0, 0, h / 2)
+		card.ZIndex = 10
+		cardScale.Scale = 0
+		card.Rotation = dirSpin * -240
+		local made = {}
+		local function ring(d, thick, tr, dur, black)
+			local fr = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, h / 2),
+				Size = UDim2.fromOffset(0, 0), BackgroundColor3 = Color3.new(0, 0, 0),
+				BackgroundTransparency = black and 0 or 1, BorderSizePixel = 0, ZIndex = 3 }, slot)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, fr)
+			local sk = new("UIStroke", { Color = T.Accent, Thickness = thick, Transparency = tr, ApplyStrokeMode = BORDER }, fr)
+			local g = new("UIGradient", { Color = ColorSequence.new(WHITE, Color3.fromRGB(60, 60, 68)),
+				Transparency = ringSeq() }, sk)
+			tween(fr, { Size = UDim2.fromOffset(d, d) }, 0.3, BACK)
+			TweenService:Create(g, TweenInfo.new(math.abs(dur) * k, LINEAR, OUT, -1),
+				{ Rotation = 360 * ((dur < 0) and -dirSpin or dirSpin) }):Play()
+			task.delay(0.55 * k, function()
+				if fr.Parent then tween(fr, { Size = UDim2.fromOffset(0, 0) }, 0.3, QUINT, IN) end
+			end)
+			made[#made + 1] = fr
+		end
+		local D = math.clamp(cw * 0.45, 110, 160)
+		ring(D, 2, 0.1, 0.6, true)
+		ring(D * 0.7, 1.5, 0.4, -0.45, false)
+		task.delay(0.1 * k, function()
+			if not card.Parent then return end
+			tween(cardScale, { Scale = 1 }, 0.6, BACK)
+			tween(card, { Rotation = 0 }, 0.6)
+		end)
+		return 0.9, function()
+			for _, fr in ipairs(made) do fr:Destroy() end
+		end
+	end
+
+	-- ÉCLATS : la carte est découpée en 6x3 morceaux, dispersés, qui volent vers leur place et se recomposent
+	ENTER["Éclats"] = function(slot, card, cardScale, h, cw)
+		local k = K()
+		freezeCard(card, cardScale, h)
+		card.AnchorPoint = Vector2.new(0, 0)
+		card.Position = UDim2.new(0, 0, 0, 0)
+		if canvasSupported then card.GroupTransparency = 0 end
+		local cols, rows = 6, 3
+		local sw, sh = cw / cols, h / rows
+		local rng = Random.new()
+		local pieces, total = {}, 0
+		local alive = true
+		local function clear()
+			for _, p in ipairs(pieces) do
+				if p.box.Parent then p.box:Destroy() end
+			end
+		end
+		for r = 0, rows - 1 do
+			for c = 0, cols - 1 do
+				local x, y = c * sw, r * sh
+				local hx, hy = x + sw / 2, y + sh / 2
+				local cx = ((c + 0.5) / cols) * 2 - 1
+				local cy = ((r + 0.5) / rows) * 2 - 1
+				local p = { hx = hx, hy = hy, d = rng:NextNumber(0, 0.18), life = 0.55,
+					sx = hx + cx * rng:NextNumber(70, 190) + rng:NextNumber(-40, 40),
+					sy = hy + cy * rng:NextNumber(30, 90) - rng:NextNumber(50, 150),
+					sr = rng:NextNumber(-260, 260) }
+				local box = new(canvasSupported and "CanvasGroup" or "Frame", { Name = "ShardIn",
+					AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(p.sx, p.sy), Rotation = p.sr,
+					Size = UDim2.fromOffset(math.ceil(sw) + 1, math.ceil(sh) + 1), BackgroundTransparency = 1,
+					BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 10 }, slot)
+				if canvasSupported then box.GroupTransparency = 1 end
+				local bs = new("UIScale", { Scale = canvasSupported and 1 or 0 }, box)
+				local cl = card:Clone()
+				cl.Name = "Shard"
+				cl.AutomaticSize = AN
+				cl.Size = UDim2.fromOffset(cw, h)
+				cl.AnchorPoint = Vector2.new(0, 0)
+				cl.Position = UDim2.fromOffset(-math.floor(x), -math.floor(y))
+				cl.Rotation = 0
+				cl.Visible = true
+				if canvasSupported then cl.GroupTransparency = 0 end
+				for _, d in ipairs(cl:GetDescendants()) do
+					if d:IsA("GuiButton") then d.Active = false end
+				end
+				cl.Parent = box
+				p.box, p.bs = box, bs
+				total = math.max(total, p.d + p.life)
+				pieces[#pieces + 1] = p
+			end
+		end
+		card.Visible = false
+		task.spawn(function()
+			local t0 = os.clock()
+			while alive and slot.Parent do
+				RunService.Heartbeat:Wait()
+				local t = (os.clock() - t0) / k
+				if t > total then break end
+				for _, p in ipairs(pieces) do
+					local u = t - p.d
+					if u > 0 and p.box.Parent then
+						local f = math.clamp(u / p.life, 0, 1)
+						local e = 1 - (1 - f) ^ 3
+						p.box.Position = UDim2.fromOffset(p.sx + (p.hx - p.sx) * e, p.sy + (p.hy - p.sy) * e)
+						p.box.Rotation = p.sr * (1 - e)
+						if canvasSupported then
+							p.box.GroupTransparency = math.clamp(1 - f * 2.2, 0, 1)
+						else
+							p.bs.Scale = e
+						end
+					end
+				end
+			end
+			if alive then
+				alive = false
+				clear()
+				if card.Parent then card.Visible = true end
+			end
+		end)
+		return total + 0.05, function()
+			alive = false
+			clear()
+			card.Visible = true
+		end
+	end
+
+	-- BALAYAGE : un masque révèle la carte depuis un côté, un trait lumineux suit le bord
+	local function wipeIn(slot, card, cardScale, h, cw, side)
+		local k = K()
+		freezeCard(card, cardScale, h)
+		if canvasSupported then card.GroupTransparency = 0 end
+		card.AnchorPoint = Vector2.new(0, 0)
+		local mask = new("Frame", { Name = "WipeIn", BackgroundTransparency = 1, BorderSizePixel = 0,
+			ClipsDescendants = true, ZIndex = 10 }, slot)
+		local line = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = WHITE, BorderSizePixel = 0,
+			BackgroundTransparency = 0.15, ZIndex = 30 }, slot)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, line)
+		local vertical = (side == "top" or side == "bottom")
+		new("UIGradient", { Rotation = vertical and 0 or 90,
+			Transparency = NumberSequence.new({ KP(0, 1), KP(0.5, 0), KP(1, 1) }) }, line)
+		local goal, lineFrom, lineTo
+		if side == "left" then
+			mask.AnchorPoint, mask.Position, mask.Size = Vector2.new(0, 0), UDim2.fromOffset(0, 0), UDim2.fromOffset(0, h)
+			card.Position = UDim2.fromOffset(0, 0)
+			line.Size = UDim2.fromOffset(2, h - 20)
+			lineFrom, lineTo = UDim2.fromOffset(0, h / 2), UDim2.fromOffset(cw, h / 2)
+		elseif side == "right" then
+			mask.AnchorPoint, mask.Position, mask.Size = Vector2.new(1, 0), UDim2.fromOffset(cw, 0), UDim2.fromOffset(0, h)
+			card.Position = UDim2.new(1, -cw, 0, 0)
+			line.Size = UDim2.fromOffset(2, h - 20)
+			lineFrom, lineTo = UDim2.fromOffset(cw, h / 2), UDim2.fromOffset(0, h / 2)
+		elseif side == "top" then
+			mask.AnchorPoint, mask.Position, mask.Size = Vector2.new(0, 0), UDim2.fromOffset(0, 0), UDim2.fromOffset(cw, 0)
+			card.Position = UDim2.fromOffset(0, 0)
+			line.Size = UDim2.fromOffset(cw - 30, 2)
+			lineFrom, lineTo = UDim2.fromOffset(cw / 2, 0), UDim2.fromOffset(cw / 2, h)
+		else
+			mask.AnchorPoint, mask.Position, mask.Size = Vector2.new(0, 1), UDim2.fromOffset(0, h), UDim2.fromOffset(cw, 0)
+			card.Position = UDim2.new(0, 0, 1, -h)
+			line.Size = UDim2.fromOffset(cw - 30, 2)
+			lineFrom, lineTo = UDim2.fromOffset(cw / 2, h), UDim2.fromOffset(cw / 2, 0)
+		end
+		goal = UDim2.fromOffset(cw, h)
+		line.Position = lineFrom
+		card.Parent = mask
+		tween(mask, { Size = goal }, 0.55, QUINT, INOUT)
+		tween(line, { Position = lineTo }, 0.55, QUINT, INOUT)
+		task.delay(0.45 * k, function()
+			if line.Parent then tween(line, { BackgroundTransparency = 1 }, 0.15) end
+		end)
+		return 0.7, function()
+			if card.Parent == mask then card.Parent = slot end
+			mask:Destroy()
+			line:Destroy()
+		end
+	end
+	ENTER["Balayage depuis la gauche"] = function(s, c, cs, h, cw) return wipeIn(s, c, cs, h, cw, "left") end
+	ENTER["Balayage depuis la droite"] = function(s, c, cs, h, cw) return wipeIn(s, c, cs, h, cw, "right") end
+	ENTER["Balayage depuis le haut"]   = function(s, c, cs, h, cw) return wipeIn(s, c, cs, h, cw, "top") end
+	ENTER["Balayage depuis le bas"]    = function(s, c, cs, h, cw) return wipeIn(s, c, cs, h, cw, "bottom") end
+
+	-- appelé par l'entrée : renvoie (durée en secondes d'animation, fonction de nettoyage)
+	V6.enter = function(style, slot, card, cardScale, h, cw)
+		local f = ENTER[style]
+		if f then
+			local ok, d, c = pcall(f, slot, card, cardScale, h, cw)
+			if ok and tonumber(d) then
+				return d, (type(c) == "function") and c or function() end
+			end
+			warn("[Ui-Lib] Style d'entrée « " .. tostring(style) .. " » : " .. tostring(d))
+		end
+		return 0.01, function() end
+	end
+	V6.resolveEntry = resolveEntry
+
 	-- appelé par la fermeture : renvoie la durée (en secondes d'animation)
 	V6.exit = function(style, slot, card, cardScale, h)
 		local f = EXITS[style]
@@ -2080,6 +2348,21 @@ function Library:Notify(o)
 	-- ---------------------------------------------------------------- état
 	local dead = false
 	local entry, handle
+	local entryCleanup   -- style d'entrée en cours (V10) : nettoie les éléments d'animation
+	local function settleCard()
+		card.AnchorPoint = Vector2.new(0, 0)
+		card.Rotation = 0
+		card.ZIndex = 1
+		card.Visible = true
+		if card.Parent ~= slot then card.Parent = slot end
+		cardScale.Scale = 1
+		card.Position = ZERO
+		card.AutomaticSize = AY
+		card.Size = UDim2.new(1, 0, 0, 0)
+		if canvasSupported then card.GroupTransparency = 0 end
+		slot.AutomaticSize = AY
+		slot.Size = UDim2.new(1, 0, 0, 0)
+	end
 	local token, remaining, startedAt, paused, barTw, loadTw = 0, dur, 0, false, nil, nil
 	local count = 1
 	local baseTr = 0.82
@@ -2239,6 +2522,7 @@ function Library:Notify(o)
 		if dead then return end
 		dead = true
 		entry.dead = true
+		if entryCleanup then entryCleanup() end   -- fermée pendant son entrée : on termine proprement
 		token += 1
 		stopBar()
 		if loadTw then loadTw:Cancel() loadTw = nil end
@@ -2531,13 +2815,39 @@ function Library:Notify(o)
 			RunService.Heartbeat:Wait()
 			h = card.AbsoluteSize.Y / math.max(cardScale.Scale, 0.01)
 		end
+		local estyle = Library.Animations and V6.resolveEntry(o.Entry, kind) or nil
 		local grow = tween(slot, { Size = UDim2.new(1, 0, 0, h) }, 0.38)
 		grow.Completed:Connect(function()
-			if not dead then
+			if not dead and not estyle then
 				slot.AutomaticSize = AY
 				slot.Size = UDim2.new(1, 0, 0, 0)
 			end
 		end)
+		if estyle then
+			-- style d'entrée (V10) : la carte est dessinée par l'animation, le texte est donc visible tout de suite
+			local cw = card.AbsoluteSize.X / math.max(cardScale.Scale, 0.01)
+			if cw < 10 then cw = width end
+			titleL.TextTransparency = 0
+			contentL.TextTransparency = CT
+			icoScale.Scale = 1
+			local dur, cleanup = V6.enter(estyle, slot, card, cardScale, h, cw)
+			entryCleanup = function()
+				entryCleanup = nil
+				pcall(cleanup)
+				settleCard()
+			end
+			task.delay(dur / math.max(Library.AnimSpeed or 1, 0.05), function()
+				if dead or not entryCleanup then return end
+				entryCleanup()
+				pulse.Size = UDim2.fromOffset(28, 28)
+				pulseSt.Transparency = 0.15
+				tween(pulse, { Size = UDim2.fromOffset(62, 62) }, 0.75)
+				tween(pulseSt, { Transparency = 1 }, 0.75)
+				shinePlay()
+				applyMode()
+			end)
+			return
+		end
 		tween(card, { Position = ZERO }, 0.6)
 		tween(cardScale, { Scale = 1 }, 0.55, BACK)
 		if canvasSupported then tween(card, { GroupTransparency = 0 }, 0.35) end
@@ -3284,6 +3594,9 @@ function Library:GetTheme()
 		NotifPos = Library.NotifPos,
 		NotifDuration = Library.NotifDuration,
 		NotifExit = Library.NotifExit,
+		NotifEntryCustom = Library.NotifEntryCustom,
+		NotifEntry = Library.NotifEntry,
+		TabTransition = Library.TabTransition,
 	}
 end
 
@@ -3350,6 +3663,9 @@ function Library:ApplyTheme(t)
 		{ "NotifPos", "ui.notifpos", function(v) return N.NotifPos[v] or v end, function(v) Library:SetNotifPosition(v) end },
 		{ "NotifDuration", "ui.notifdur", nil, function(v) Library:SetNotifDuration(v) end },
 		{ "NotifExit", "ui.notifexit", nil, function(v) Library:SetNotifExit(v) end },
+		{ "NotifEntryCustom", "ui.notifentryon", nil, function(v) Library:SetNotifEntryEnabled(v) end },
+		{ "NotifEntry", "ui.notifentry", nil, function(v) Library:SetNotifEntry(v) end },
+		{ "TabTransition", "ui.tabtrans", nil, function(v) Library:SetTabTransition(v) end },
 	}
 	for _, e in ipairs(S) do
 		local v = t[e[1]]
@@ -4744,6 +5060,7 @@ function Block:CreateKeybind(o)
 		key = k
 		btn.Text = k.Name
 		if o.Flag then Library.Flags[o.Flag] = k.Name end
+		if Library._hudRefresh then Library._hudRefresh() end
 		if Library.RefreshKeybindConflicts then Library:RefreshKeybindConflicts() end
 		if Library._onKeybindChanged then pcall(Library._onKeybindChanged) end
 		if not silent then
@@ -4992,9 +5309,262 @@ local function registerFavItem()
 	}
 end
 
+-- Barre de progression / jauge : mise à jour par le script (cooldowns, chargement...).
+--   local p = block:CreateProgress({ Name = "Cooldown", Min = 0, Max = 100, Default = 0,
+--       Suffix = " %" (ou Format = function(v, ratio, max) return "..." end), Color = Color3, Text = "texte fixe", Tooltip = "..." })
+--   p:Set(v) · p:Get() · p:GetRatio() · p:SetMax(m) · p:SetText("...") / p:SetText(nil) · p:SetColor(c) · p:SetName("...")
+--   p:Countdown(secondes, { Fill = false, ShowTime = true, OnDone = function() end })   -- cooldown : se vide en N secondes
+--   p:SetIndeterminate(true)   -- chargement sans valeur connue · p:Cancel() arrête le décompte / le chargement
+function Block:CreateProgress(o)
+	o = o or {}
+	local min, max = tonumber(o.Min) or 0, tonumber(o.Max) or 100
+	if max <= min then max = min + 1 end
+	local suffix = (o.Suffix ~= nil) and tostring(o.Suffix) or nil
+	local customText = (o.Text ~= nil) and tostring(o.Text) or nil
+
+	local f, st = makeRow(self, 46, o.Name)
+	hover(f, st)
+	local nameL = label(f, o.Name or "Progression", 13, { Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -118, 0, 18) })
+	local valL = label(f, "", 12, { Position = UDim2.new(1, -106, 0, 6), Size = UDim2.new(0, 94, 0, 18),
+		TextXAlignment = RIGHT, TextColor3 = T.ElementAccent })
+	local bar = new("Frame", { Position = UDim2.new(0, 12, 0, 31), Size = UDim2.new(1, -24, 0, 8),
+		BackgroundColor3 = T.Off, BorderSizePixel = 0, ClipsDescendants = true }, f)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
+	local fill = new("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = o.Color or T.Accent,
+		BorderSizePixel = 0 }, bar)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
+
+	local value = math.clamp(tonumber(o.Default or o.Value) or min, min, max)
+	local runTw, runTok, indet = nil, 0, nil
+
+	local function ratioOf(v) return math.clamp((v - min) / (max - min), 0, 1) end
+	local function fmt(v)
+		if type(o.Format) == "function" then
+			local ok, s = pcall(o.Format, v, ratioOf(v), max)
+			if ok and s ~= nil then return tostring(s) end
+		end
+		if suffix then return tostring(math.floor(v * 100 + 0.5) / 100) .. suffix end
+		return tostring(math.floor(ratioOf(v) * 100 + 0.5)) .. " %"
+	end
+	local function stopRun()
+		runTok += 1
+		if runTw then runTw:Cancel() runTw = nil end
+		if indet then indet:Cancel() indet = nil end
+		fill.Position = UDim2.new(0, 0, 0, 0)
+	end
+	local function setValue(v, instant)
+		value = math.clamp(tonumber(v) or value, min, max)
+		valL.Text = customText or fmt(value)
+		local goal = UDim2.new(ratioOf(value), 0, 1, 0)
+		if instant then fill.Size = goal else tween(fill, { Size = goal }, 0.18) end
+	end
+
+	local item = {}
+	item.Set = function(...)
+		local v, instant = unself(item, ...)
+		stopRun()
+		setValue(v, instant)
+	end
+	item.Get = function() return value end
+	item.GetRatio = function() return ratioOf(value) end
+	item.SetMax = function(...)
+		local m = tonumber((unself(item, ...)))
+		if m and m > min then
+			max = m
+			stopRun()
+			setValue(value, true)
+		end
+	end
+	item.SetText = function(...)
+		local s = unself(item, ...)
+		customText = (s ~= nil) and tostring(s) or nil
+		valL.Text = customText or fmt(value)
+	end
+	item.SetColor = function(...)
+		local c = unself(item, ...)
+		if typeof(c) == "Color3" then tween(fill, { BackgroundColor3 = c }, 0.25) end
+	end
+	item.SetName = function(...) nameL.Text = tostring((unself(item, ...))) end
+	item.Cancel = function()
+		stopRun()
+		setValue(value, true)
+	end
+	item.SetIndeterminate = function(...)
+		local on = unself(item, ...)
+		stopRun()
+		if on == false then
+			setValue(value, true)
+			return
+		end
+		valL.Text = customText or "..."
+		fill.Size = UDim2.new(0.35, 0, 1, 0)
+		fill.Position = UDim2.new(-0.35, 0, 0, 0)
+		indet = TweenService:Create(fill, TweenInfo.new(1.1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1),
+			{ Position = UDim2.new(1, 0, 0, 0) })
+		indet:Play()
+	end
+	-- cooldown : la jauge se vide (ou se remplit avec Fill = true) en N secondes, texte = temps restant
+	item.Countdown = function(...)
+		local sec, opt = unself(item, ...)
+		sec = math.max(tonumber(sec) or 1, 0.05)
+		opt = (type(opt) == "table") and opt or {}
+		stopRun()
+		local from, to = max, min
+		if opt.Fill then from, to = min, max end
+		value = from
+		fill.Size = UDim2.new(ratioOf(from), 0, 1, 0)
+		runTw = TweenService:Create(fill, TweenInfo.new(sec, LINEAR, OUT), { Size = UDim2.new(ratioOf(to), 0, 1, 0) })
+		runTw:Play()
+		local my = runTok
+		local t0 = os.clock()
+		task.spawn(function()
+			while runTok == my and f.Parent do
+				local el = os.clock() - t0
+				if el >= sec then break end
+				value = from + (to - from) * (el / sec)
+				if customText then
+					valL.Text = customText
+				elseif opt.ShowTime == false then
+					valL.Text = fmt(value)
+				else
+					valL.Text = string.format("%.1f s", sec - el)
+				end
+				task.wait(0.05)
+			end
+			if runTok ~= my then return end
+			runTw = nil
+			value = to
+			valL.Text = customText or fmt(value)
+			if opt.OnDone then fire(opt.OnDone) end
+		end)
+	end
+	item.Instance = f
+
+	setValue(value, true)
+	return item
+end
+
+-- Compteur  -  valeur  +  pour les valeurs entières (plus précis qu'un curseur).
+--   block:CreateStepper({ Name = "Niveau", Min = 0, Max = 10, Step = 1, Default = 3, Suffix = "", Wrap = false, Flag = "...",
+--       Callback = function(v) end })
+--   Maintenir un bouton = répétition qui accélère · Maj = pas x10 · clic sur la valeur = saisie au clavier.
+--   item:Set(n) · item:Get() · item:Increment() · item:Decrement() · item:SetRange(min, max)
+function Block:CreateStepper(o)
+	o = o or {}
+	local min, max = math.floor(tonumber(o.Min) or 0), math.floor(tonumber(o.Max) or 100)
+	if max < min then min, max = max, min end
+	local step = math.max(math.floor(tonumber(o.Step or o.Increment) or 1), 1)
+	local suffix = (o.Suffix ~= nil) and tostring(o.Suffix) or ""
+	local value = math.clamp(math.floor(tonumber(o.Default) or min), min, max)
+
+	local f, st = makeRow(self, 36, o.Name)
+	hover(f, st)
+	label(f, o.Name or "Compteur", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -150, 1, 0) })
+
+	local function mk(txt, x)
+		local b = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, x, 0.5, 0),
+			Size = UDim2.fromOffset(26, 24), BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0,
+			Text = txt, TextColor3 = T.Text, TextSize = 16, Font = F_BOLD, AutoButtonColor = false }, f)
+		corner(b, 6)
+		local bst = stroke(b, 0.9)
+		trackStyled(b, bst, "input")
+		return b
+	end
+	local plus = mk("+", -8)
+	local valBox = new("TextBox", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -38, 0.5, 0),
+		Size = UDim2.fromOffset(60, 24), BackgroundColor3 = T.Off, BackgroundTransparency = 0.55, BorderSizePixel = 0,
+		Text = "", TextColor3 = T.Text, TextSize = 12, Font = F_MED, ClearTextOnFocus = false,
+		TextTruncate = Enum.TextTruncate.AtEnd }, f)
+	corner(valBox, 6)
+	local vst = stroke(valBox, 0.9)
+	trackStyled(valBox, vst, "input")
+	local minus = mk("-", -102)
+
+	local function fmt(v) return tostring(v) .. suffix end
+	local function apply(v, silent)
+		v = math.clamp(math.floor((tonumber(v) or value) + 0.5), min, max)
+		local changed = v ~= value
+		value = v
+		if not valBox:IsFocused() then valBox.Text = fmt(v) end
+		tween(minus, { TextTransparency = (o.Wrap or v > min) and 0 or 0.65 }, 0.15)
+		tween(plus, { TextTransparency = (o.Wrap or v < max) and 0 or 0.65 }, 0.15)
+		if o.Flag then Library.Flags[o.Flag] = v end
+		if changed and not silent then fire(o.Callback, v) end
+	end
+	local function bump(dir)
+		local mult = (UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift)) and 10 or 1
+		local nv = value + dir * step * mult
+		if o.Wrap then
+			if nv > max then nv = min elseif nv < min then nv = max end
+		end
+		apply(nv)
+	end
+	local function holdable(btn, dir)
+		local tok = 0
+		btn.MouseButton1Down:Connect(function()
+			uiSnd("click")
+			tween(btn, { BackgroundTransparency = 0.05 }, 0.1)
+			bump(dir)
+			tok += 1
+			local my = tok
+			task.spawn(function()
+				task.wait(0.45)
+				local gap = 0.12
+				while tok == my and btn.Parent do
+					bump(dir)
+					task.wait(gap)
+					gap = math.max(gap * 0.88, 0.03)
+				end
+			end)
+		end)
+		local function stop()
+			tok += 1
+			tween(btn, { BackgroundTransparency = Sty.InputTr }, 0.2)
+		end
+		btn.MouseButton1Up:Connect(stop)
+		btn.MouseLeave:Connect(stop)
+	end
+	holdable(minus, -1)
+	holdable(plus, 1)
+
+	valBox.Focused:Connect(function()
+		uiSnd("focus")
+		valBox.Text = tostring(value)
+		tween(valBox, { BackgroundTransparency = 0.25 }, 0.2)
+	end)
+	valBox.FocusLost:Connect(function()
+		tween(valBox, { BackgroundTransparency = 0.55 }, 0.25)
+		local n = tonumber(string.match(valBox.Text, "-?%d+"))
+		if n then apply(n) end
+		valBox.Text = fmt(value)
+	end)
+
+	local item = {}
+	item.Set = function(...)
+		local v = tonumber((unself(item, ...)))
+		if v then apply(v) end
+	end
+	item.Get = function() return value end
+	item.Increment = function() bump(1) end
+	item.Decrement = function() bump(-1) end
+	item.SetRange = function(...)
+		local a, b = unself(item, ...)
+		a, b = tonumber(a), tonumber(b)
+		if a and b then
+			min, max = math.floor(math.min(a, b)), math.floor(math.max(a, b))
+			apply(value, true)
+		end
+	end
+	apply(value, true)
+	register(o.Flag, item, value)
+	if Library.FireDefaults then fire(o.Callback, value) end
+	return item
+end
+
 -- On enrobe chaque élément interactif : tooltip (o.Tooltip) + étoile de favori (o.Favorite = false pour la retirer)
 local paletteSeq = 0
-local WRAP_KINDS = { "Button", "Toggle", "Slider", "RangeSlider", "Dropdown", "Input", "Keybind", "ColorPicker" }
+local WRAP_KINDS = { "Button", "Toggle", "Slider", "RangeSlider", "Dropdown", "Input", "Keybind", "ColorPicker",
+	"Stepper", "Progress" }
 for _, kind in ipairs(WRAP_KINDS) do
 	local base = Block["Create" .. kind]
 	Block["Create" .. kind] = function(self, o)
@@ -5009,22 +5579,23 @@ for _, kind in ipairs(WRAP_KINDS) do
 					Tab = self.Tab, Block = self, Frame = e.Frame, Item = item }
 				if Library._onKeybindAdded then pcall(Library._onKeybindAdded) end
 				Library:RefreshKeybindConflicts()
+				if Library._hudRefresh then Library._hudRefresh() end   -- la touche peut compléter une ligne du HUD
 			end
 			-- HUD des actifs : { HUD = false } pour cacher un toggle du panneau
 			if kind == "Toggle" and not self._noFav and opts.HUD ~= false and not (self.Tab and self.Tab._isSettings) then
 				Library.ToggleEntries[#Library.ToggleEntries + 1] = { Name = tostring(opts.Name or "Toggle"), Item = item,
-					Frame = e.Frame, Tab = self.Tab, Block = self }
+					Frame = e.Frame, Tab = self.Tab, Block = self, HudKey = opts.HudKey }
 				if Library._hudRefresh then Library._hudRefresh() end
 			end
 			-- palette de commandes (Ctrl+K) : { Palette = false } pour exclure un élément
-			if not self._noFav and opts.Palette ~= false then
+			if not self._noFav and opts.Palette ~= false and kind ~= "Progress" then
 				local ptab = self.Tab and self.Tab.Name or ""
 				local pkey = tostring(ptab) .. "/" .. tostring(self.Name) .. "/" .. kind .. "/" .. tostring(opts.Name or "")
 				paletteSeq = paletteSeq + 1
 				Library.CmdEntries[pkey] = { Kind = kind, Opts = opts, Item = item, Key = pkey, Tab = ptab,
 					Block = self.Name, Frame = e.Frame, Seq = paletteSeq, Name = tostring(opts.Name or kind) }
 			end
-			if not self._noFav and opts.Favorite ~= false then
+			if not self._noFav and opts.Favorite ~= false and kind ~= "Progress" then
 				local tabName = self.Tab and self.Tab.Name or ""
 				local key = tostring(tabName) .. "/" .. tostring(self.Name) .. "/" .. kind .. "/" .. tostring(opts.Name or "")
 				local host = e.Frame
@@ -5145,27 +5716,67 @@ local function hudShown()
 	return true
 end
 
-local function hudPos()
+-- Position enregistrée = POINT D'ANCRAGE en pixels écran + coin d'ancrage (Ax / Ay = 0 ou 1).
+-- Le HUD est ancré par le coin le plus proche d'un bord de l'écran : quand une ligne apparaît ou disparaît, il
+-- s'agrandit vers l'intérieur de l'écran, son coin ancré ne bouge jamais (plus de décalage ni de « saut »).
+-- Anciennes sauvegardes { X, Y } : lues comme un ancrage en haut à gauche.
+local function hudSaved()
 	local p = Library.HudPos
-	if type(p) == "table" and tonumber(p.X) and tonumber(p.Y) then return Vector2.new(p.X, p.Y) end
-	return Vector2.new(16, 120)
+	if type(p) == "table" and tonumber(p.X) and tonumber(p.Y) then
+		return tonumber(p.X), tonumber(p.Y), ((tonumber(p.Ax) or 0) >= 1) and 1 or 0, ((tonumber(p.Ay) or 0) >= 1) and 1 or 0
+	end
+	return 16, 120, 0, 0
 end
 
-local function hudSetPos(v, save)
+-- applique la position enregistrée (sans jamais la modifier : le garde-fou « dans l'écran » ne touche que l'affichage)
+local function hudPlace()
+	local card = hud.card
+	if not card then return end
+	local px, py, ax, ay = hudSaved()
+	local vp, sz = viewport(), card.AbsoluteSize
+	local left = math.clamp(px - ax * sz.X, 0, math.max(vp.X - sz.X, 0))
+	local top = math.clamp(py - ay * sz.Y, 0, math.max(vp.Y - sz.Y, 0))
+	card.AnchorPoint = Vector2.new(ax, ay)
+	card.Position = UDim2.fromOffset(left + ax * sz.X, top + ay * sz.Y)
+end
+
+-- place le HUD à partir de son coin haut-gauche (glisser) ; save = enregistre le nouvel ancrage
+local function hudPlaceTL(left, top, save)
 	local card = hud.card
 	if not card then return end
 	local vp, sz = viewport(), card.AbsoluteSize
-	local x = math.clamp(v.X, 0, math.max(vp.X - sz.X, 0))
-	local y = math.clamp(v.Y, 0, math.max(vp.Y - sz.Y, 0))
-	card.Position = UDim2.fromOffset(x, y)
+	left = math.clamp(left, 0, math.max(vp.X - sz.X, 0))
+	top = math.clamp(top, 0, math.max(vp.Y - sz.Y, 0))
+	local ax = (left + sz.X / 2 > vp.X / 2) and 1 or 0
+	local ay = (top + sz.Y / 2 > vp.Y / 2) and 1 or 0
+	local px, py = left + ax * sz.X, top + ay * sz.Y
+	card.AnchorPoint = Vector2.new(ax, ay)
+	card.Position = UDim2.fromOffset(px, py)
 	if save then
-		Library.HudPos = { X = math.floor(x), Y = math.floor(y) }
+		Library.HudPos = { X = math.floor(px + 0.5), Y = math.floor(py + 0.5), Ax = ax, Ay = ay }
 		Library.Flags["ui.hudpos"] = Library.HudPos
 	end
 end
 
+-- coin haut-gauche actuel, calculé à partir de Position / AnchorPoint (notre propre repère)
+local function hudTopLeft()
+	local card = hud.card
+	local sz = card.AbsoluteSize
+	return card.Position.X.Offset - card.AnchorPoint.X * sz.X, card.Position.Y.Offset - card.AnchorPoint.Y * sz.Y
+end
+
 function Library:_hudPlace()
-	if hud.card then hudSetPos(hudPos(), false) end
+	hudPlace()
+end
+
+local HUD_PAD = 13   -- marge gauche / droite de la carte
+
+local function hudMeasure(text, size, font)
+	local ok, v = pcall(function()
+		return game:GetService("TextService"):GetTextSize(tostring(text), size, font, Vector2.new(1000, 100))
+	end)
+	if ok and v then return v.X end
+	return #tostring(text) * size * 0.6
 end
 
 local function ensureHud()
@@ -5173,51 +5784,124 @@ local function ensureHud()
 	hud.gui = new("ScreenGui", { Name = "SolarisHud", ResetOnSpawn = false, DisplayOrder = 900,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true, Enabled = false })
 	mount(hud.gui)
-	local card = new("Frame", { Name = "Card", Size = UDim2.new(0, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.XY,
+	-- largeur calculée (tween), hauteur automatique : les lignes ont une taille fixe, rien ne « danse »
+	local card = new("Frame", { Name = "Card", Size = UDim2.new(0, 120, 0, 0), AutomaticSize = AY,
 		BackgroundColor3 = T.Main, BackgroundTransparency = 0.08, BorderSizePixel = 0, Active = true }, hud.gui)
 	new("UICorner", { CornerRadius = UDim.new(0, 16) }, card)
 	new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.84, ApplyStrokeMode = BORDER }, card)
 	hud.scale = new("UIScale", { Scale = Library.HudScale or 1 }, card)
-	new("UIPadding", { PaddingTop = UDim.new(0, 9), PaddingBottom = UDim.new(0, 10), PaddingLeft = UDim.new(0, 13),
-		PaddingRight = UDim.new(0, 13) }, card)
+	new("UIPadding", { PaddingTop = UDim.new(0, 9), PaddingBottom = UDim.new(0, 10), PaddingLeft = UDim.new(0, HUD_PAD),
+		PaddingRight = UDim.new(0, HUD_PAD) }, card)
 	new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = BYORDER }, card)
-	hud.title = new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 0, 0, 14),
-		AutomaticSize = Enum.AutomaticSize.X, Text = "ACTIFS", TextColor3 = T.Text, TextTransparency = 0.45,
+	hud.title = new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 14),
+		Text = "ACTIFS", TextColor3 = T.Text, TextTransparency = 0.45,
 		TextSize = 10, Font = F_BOLD, TextXAlignment = LEFT, LayoutOrder = 0 }, card)
-	hud.empty = new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 0, 0, 18),
-		AutomaticSize = Enum.AutomaticSize.X, Text = "Aucun actif", TextColor3 = T.Text, TextTransparency = 0.55,
+	hud.empty = new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 18),
+		Text = "Aucun actif", TextColor3 = T.Text, TextTransparency = 0.55,
 		TextSize = 12, Font = F_REG, TextXAlignment = LEFT, LayoutOrder = 1 }, card)
 	hud.card = card
 	-- glisser pour déplacer
 	card.InputBegan:Connect(function(i)
 		if not isPress(i) then return end
 		local start = Vector2.new(i.Position.X, i.Position.Y)
-		local origin = Vector2.new(card.AbsolutePosition.X, card.AbsolutePosition.Y)
+		local ox, oy = hudTopLeft()   -- lu depuis Position / AnchorPoint (jamais depuis AbsolutePosition : pas de dérive)
 		startDrag(function(p)
-			hudSetPos(origin + (Vector2.new(p.X, p.Y) - start), false)
+			local d = Vector2.new(p.X, p.Y) - start
+			hudPlaceTL(ox + d.X, oy + d.Y, false)
 		end, nil, i.Position, function()
-			hudSetPos(Vector2.new(card.AbsolutePosition.X, card.AbsolutePosition.Y), true)
+			local lx, ly = hudTopLeft()
+			hudPlaceTL(lx, ly, true)
 		end)
 	end)
-	hudSetPos(hudPos(), false)
+	local cam = workspace.CurrentCamera
+	if cam then
+		track(cam:GetPropertyChangedSignal("ViewportSize"):Connect(function() hudPlace() end))
+	end
+	hudPlace()
+end
+
+-- touche affichée pour une ligne : 1) celle du toggle (Keybind = ...) · 2) HudKey donné à la main (item / Enum.KeyCode /
+-- fonction) · 3) un Block:CreateKeybind portant le même nom (de préférence dans le même bloc)
+local HUD_STRIP = { "%(touche%)", "touche", "keybind", "raccourci", "bind", "key" }
+local function hudNorm(s)
+	s = string.lower(tostring(s or ""))
+	for _, w in ipairs(HUD_STRIP) do
+		s = string.gsub(s, w, " ")
+	end
+	s = string.gsub(s, "[%s%p]+", " ")
+	return string.match(s, "^%s*(.-)%s*$") or ""
+end
+
+local function hudKeyOf(e)
+	local function valid(k)
+		if typeof(k) == "EnumItem" and k ~= Enum.KeyCode.Unknown then return k end
+		return nil
+	end
+	local it = e.Item
+	if it and type(it.GetKey) == "function" then
+		local ok, k = pcall(it.GetKey)
+		if ok and valid(k) then return k end
+	end
+	local hk = e.HudKey
+	if hk ~= nil then
+		local k = hk
+		if type(hk) == "function" then
+			local ok, r = pcall(hk)
+			k = ok and r or nil
+		elseif type(hk) == "table" then
+			local g = hk.GetKey or hk.Get
+			if type(g) == "function" then
+				local ok, r = pcall(g, hk)
+				k = ok and r or nil
+			else
+				k = nil
+			end
+		end
+		if valid(k) then return k end
+	end
+	local nt = hudNorm(e.Name)
+	if #nt < 2 then return nil end
+	local best, bestScore
+	for _, ke in ipairs(Library.KeybindEntries) do
+		local kit = ke.Item
+		if kit and type(kit.Get) == "function" and ke.Frame and ke.Frame.Parent then
+			local ok, k = pcall(kit.Get)
+			if ok and valid(k) then
+				local nk = hudNorm(ke.Name)
+				local score = 0
+				if nk ~= "" then
+					if nk == nt then
+						score = 2
+					elseif #nt >= 3 and #nk >= 3 and (string.find(nk, nt, 1, true) or string.find(nt, nk, 1, true)) then
+						score = 1
+					end
+				end
+				if score > 0 then
+					if ke.Block == e.Block then score += 2 end
+					if not bestScore or score > bestScore then best, bestScore = k, score end
+				end
+			end
+		end
+	end
+	return best
 end
 
 local function hudRow(entry)
-	local row = new("Frame", { Name = "Row", Size = UDim2.new(0, 0, 0, 22), AutomaticSize = Enum.AutomaticSize.X,
-		BackgroundTransparency = 1 }, hud.card)
-	new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8),
-		SortOrder = BYORDER, VerticalAlignment = Enum.VerticalAlignment.Center }, row)
-	local dot = new("Frame", { Size = UDim2.fromOffset(7, 7), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
-		BorderSizePixel = 0, LayoutOrder = 1 }, row)
+	local row = new("Frame", { Name = "Row", Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1,
+		ClipsDescendants = true }, hud.card)
+	local dot = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.fromOffset(7, 7), BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0 }, row)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
-	local name = new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 0, 1, 0),
-		AutomaticSize = Enum.AutomaticSize.X, Text = entry.Name, TextColor3 = T.Text, TextTransparency = 1,
-		TextSize = 13, Font = F_MED, TextXAlignment = LEFT, LayoutOrder = 2 }, row)
-	local chip = new("TextLabel", { BackgroundColor3 = T.Text, BackgroundTransparency = 1, Size = UDim2.new(0, 0, 0, 18),
-		AutomaticSize = Enum.AutomaticSize.X, Text = "", TextColor3 = T.Text, TextTransparency = 1, TextSize = 10,
-		Font = F_BOLD, LayoutOrder = 3, Visible = false, BorderSizePixel = 0 }, row)
+	local name = new("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0, 15, 0, 0),
+		Size = UDim2.new(1, -15, 1, 0), Text = entry.Name, TextColor3 = T.Text, TextTransparency = 1,
+		TextSize = 13, Font = F_MED, TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd }, row)
+	-- la touche : puce alignée à droite (une colonne propre, quelle que soit la longueur des noms)
+	local chip = new("TextLabel", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(0, 18), BackgroundColor3 = T.Text, BackgroundTransparency = 1, Text = "",
+		TextColor3 = T.Text, TextTransparency = 1, TextSize = 10, Font = F_BOLD, Visible = false,
+		BorderSizePixel = 0 }, row)
 	new("UICorner", { CornerRadius = UDim.new(0, 6) }, chip)
-	new("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6) }, chip)
+	tween(row, { Size = UDim2.new(1, 0, 0, 22) }, 0.22)
 	tween(dot, { BackgroundTransparency = 0 }, 0.25)
 	tween(name, { TextTransparency = 0 }, 0.25)
 	tween(chip, { BackgroundTransparency = 0.88, TextTransparency = 0 }, 0.25)
@@ -5232,7 +5916,7 @@ local function hudRefresh()
 	if not shown then return end
 	hud.scale.Scale = Library.HudScale or 1
 
-	local want, count = {}, 0
+	local want, count, maxW = {}, 0, 0
 	for order, e in ipairs(Library.ToggleEntries) do
 		if e.Frame and e.Frame.Parent then
 			local ok, on = pcall(e.Item.Get)
@@ -5245,26 +5929,47 @@ local function hudRefresh()
 					hud.rows[e] = r
 				end
 				r.f.LayoutOrder = 10 + order
-				local k
-				if Library.HudShowKeys ~= false and e.Item.GetKey then k = shortKey(e.Item.GetKey()) end
-				r.chip.Text = k or ""
-				r.chip.Visible = k ~= nil
+				r.name.Text = e.Name
+				local key = (Library.HudShowKeys ~= false) and hudKeyOf(e) or nil
+				local chipW = 0
+				if key then
+					r.chip.Text = shortKey(key) or key.Name
+					chipW = math.ceil(hudMeasure(r.chip.Text, r.chip.TextSize, r.chip.Font)) + 14
+					r.chip.Size = UDim2.fromOffset(chipW, 18)
+					r.chip.Visible = true
+				else
+					r.chip.Text = ""
+					r.chip.Visible = false
+				end
+				local reserve = key and (chipW + 10) or 0
+				r.name.Size = UDim2.new(1, -(15 + reserve), 1, 0)
+				local nameW = math.ceil(hudMeasure(e.Name, r.name.TextSize, r.name.Font))
+				maxW = math.max(maxW, 15 + nameW + reserve)
 			end
 		end
 	end
 	for e, r in pairs(table.clone(hud.rows)) do
 		if not want[e] then
 			hud.rows[e] = nil
+			tween(r.f, { Size = UDim2.new(1, 0, 0, 0) }, 0.2)
 			tween(r.dot, { BackgroundTransparency = 1 }, 0.2)
 			tween(r.name, { TextTransparency = 1 }, 0.2)
 			tween(r.chip, { BackgroundTransparency = 1, TextTransparency = 1 }, 0.2)
-			task.delay(0.22, function() r.f:Destroy() end)
+			task.delay(0.24, function() r.f:Destroy() end)
 		end
 	end
 	hud.empty.Visible = count == 0
 	hud.title.Text = count > 0 and ("ACTIFS · " .. count) or "ACTIFS"
-	task.delay(0.08, function()
-		if hud.card then hudSetPos(Vector2.new(hud.card.AbsolutePosition.X, hud.card.AbsolutePosition.Y), false) end
+	local inner = math.max(maxW, hudMeasure(hud.title.Text, hud.title.TextSize, hud.title.Font),
+		count == 0 and hudMeasure(hud.empty.Text, hud.empty.TextSize, hud.empty.Font) or 0, 90)
+	local w = math.min(math.ceil(inner) + HUD_PAD * 2 + 2, 380)
+	tween(hud.card, { Size = UDim2.new(0, w, 0, 0) }, 0.2)
+	-- garde-fou : si le HUD dépasse de l'écran, on le ramène (affichage seulement, la position enregistrée ne change pas)
+	task.spawn(function()
+		RunService.Heartbeat:Wait()
+		hudPlace()
+		task.wait(0.3)
+		hudPlace()
 	end)
 end
 
@@ -5288,7 +5993,7 @@ end
 function Library:ResetHudPosition()
 	Library.HudPos = nil
 	Library.Flags["ui.hudpos"] = nil
-	if hud.card then hudSetPos(hudPos(), true) end
+	hudPlace()
 end
 Library._destroyHud = function()
 	if hud.gui then pcall(function() hud.gui:Destroy() end) end
@@ -5780,6 +6485,20 @@ local function applySearch(win, q)
 	if active and firstHit and not curHit then firstHit:Select() end
 end
 
+-- Transition d'onglet (Paramètres > Animations & performances > « Transition des onglets »)
+--   Glisser (défaut) : la page glisse de 16 px · Fondu : la page sort doucement du voile · Zoom : la page grossit depuis son centre
+Library.TabTransitions = { "Glisser", "Fondu", "Zoom" }
+Library.TabTransition = "Glisser"
+function Library:SetTabTransition(n)
+	for _, v in ipairs(Library.TabTransitions) do
+		if v == n then
+			Library.TabTransition = n
+			return true
+		end
+	end
+	return false
+end
+
 function Window:CreateTab(name, _, icon)
 	local win = self
 	local btn = new("TextButton", {
@@ -5835,15 +6554,31 @@ function Window:CreateTab(name, _, icon)
 		tween(txt, { TextColor3 = T.Text }, 0.25)
 		if Library._openDD then Library._openDD(false) end
 
-		-- transition : la page glisse et sort de l'ombre
+		-- transition : la page sort de l'ombre (glisser / fondu / zoom, au choix dans les Paramètres)
 		if win.Current ~= tab and win.Veil then
-			page.Position = UDim2.new(0, 16, 0, 0)
-			tween(page, { Position = UDim2.new(0, 0, 0, 0) }, 0.5)
+			local mode = Library.TabTransition
+			local zoom = page:FindFirstChild("TabZoom")
+			page.AnchorPoint = Vector2.new(0, 0)
+			page.Position = UDim2.new(0, 0, 0, 0)
+			if zoom then zoom.Scale = 1 end
+			local fadeT = 0.42
+			if mode == "Zoom" then
+				if not zoom then zoom = new("UIScale", { Name = "TabZoom", Scale = 1 }, page) end
+				page.AnchorPoint = Vector2.new(0.5, 0.5)
+				page.Position = UDim2.new(0.5, 0, 0.5, 0)   -- page pleine taille : identique à (0, 0) quand l'échelle vaut 1
+				zoom.Scale = 0.9
+				tween(zoom, { Scale = 1 }, 0.5, BACK)
+			elseif mode == "Fondu" then
+				fadeT = 0.6
+			else
+				page.Position = UDim2.new(0, 16, 0, 0)
+				tween(page, { Position = UDim2.new(0, 0, 0, 0) }, 0.5)
+			end
 			win.VeilToken = (win.VeilToken or 0) + 1
 			local my = win.VeilToken
 			win.Veil.Visible = true
 			win.Veil.BackgroundTransparency = Sty.VeilTr
-			local tw = tween(win.Veil, { BackgroundTransparency = 1 }, 0.42)
+			local tw = tween(win.Veil, { BackgroundTransparency = 1 }, fadeT)
 			tw.Completed:Connect(function()
 				if win.VeilToken == my then win.Veil.Visible = false end
 			end)
@@ -6596,6 +7331,12 @@ function Window:CreateSettingsTab(name, icon, docked)
 	B:CreateDropdown({ Name = "Vitesse des animations", Flag = "ui.animspeed", Items = { "0.5x", "1x", "2x" },
 		Default = tostring(Library.AnimSpeed) .. "x", Search = false,
 		Callback = function(v) Library:SetAnimSpeed(speeds[v] or 1) end })
+	B:CreateDropdown({ Name = "Transition des onglets", Flag = "ui.tabtrans", Items = Library.TabTransitions,
+		Default = Library.TabTransition, Search = false,
+		Tooltip = "Effet quand tu changes d'onglet : Glisser, Fondu ou Zoom.",
+		Callback = function(v)
+			Library:SetTabTransition(v)
+		end })
 	B:CreateToggle({ Name = "Onde au clic", Flag = "ui.ripple", Default = Library.Ripple,
 		Tooltip = "Une onde part du point de clic sur les boutons, interrupteurs et onglets.", Callback = opt("Ripple") })
 	B:CreateToggle({ Name = "Indicateur FPS / ping", Flag = "ui.fps", Default = win.StatsVisible,
@@ -6682,6 +7423,13 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Default = Library.NotifExit, Search = false,
 		Tooltip = "Comment la notification disparaît : trou noir, fondu, tourbillon, briser, casser, effacer vers un côté... « Aléatoire » en choisit un différent à chaque fois.",
 		Callback = function(v) Library:SetNotifExit(v) end })
+	C:CreateToggle({ Name = "Styles d'entrée personnalisés", Flag = "ui.notifentryon", Default = Library.NotifEntryCustom,
+		Tooltip = "Désactivé : entrée classique (glissement + rebond). Activé : l'entrée suit le « Style d'entrée » choisi juste en dessous.",
+		Callback = function(v) Library:SetNotifEntryEnabled(v) end })
+	C:CreateDropdown({ Name = "Style d'entrée", Flag = "ui.notifentry", Items = Library.NotifEntryStyles,
+		Default = Library.NotifEntry, Search = false,
+		Tooltip = "Comment la notification apparaît : sort d'un trou noir, se reconstitue à partir d'éclats, balayage depuis un côté... « Aléatoire » en choisit un différent à chaque fois. Sans effet tant que l'option du dessus est désactivée.",
+		Callback = function(v) Library:SetNotifEntry(v) end })
 	C:CreateToggle({ Name = "Ne pas déranger", Flag = "ui.notifmute", Default = Library.NotifMuted,
 		Tooltip = "Masque les notifications (les erreurs passent quand même). Elles restent dans l'historique.",
 		Callback = function(v) Library:SetNotifMuted(v) end })
@@ -6705,6 +7453,26 @@ function Window:CreateSettingsTab(name, icon, docked)
 					task.delay((i - 1) * 1.6, function()
 						Library:Notify({ Title = s, Content = "Style de fermeture", Type = "Info", Duration = 1,
 							Exit = s, Stack = false })
+					end)
+				end
+			end
+		end })
+	C:CreateButton({ Name = "Aperçu du style d'entrée", Favorite = false,
+		Tooltip = "Envoie une notification courte avec le style d'entrée choisi (même si l'option est désactivée).",
+		Callback = function()
+			Library:Notify({ Title = "Entrée : " .. tostring(Library.NotifEntry), Content = "Regarde-la apparaître.",
+				Type = "Info", Duration = 2.5, Stack = false, Entry = Library.NotifEntry })
+		end })
+	C:CreateButton({ Name = "Parcourir les styles d'entrée", Favorite = false,
+		Tooltip = "Envoie une notification par style d'entrée, l'une après l'autre.",
+		Callback = function()
+			local i = 0
+			for _, s in ipairs(Library.NotifEntryStyles) do
+				if s ~= "Aléatoire" then
+					i += 1
+					task.delay((i - 1) * 2.2, function()
+						Library:Notify({ Title = s, Content = "Style d'entrée", Type = "Info", Duration = 1.2,
+							Entry = s, Stack = false })
 					end)
 				end
 			end
@@ -7191,7 +7959,7 @@ do
 		local k, v = e.Kind, safeGet(e.Item)
 		if k == "Toggle" then
 			return v and "ON" or "OFF", (v and true or false), nil
-		elseif k == "Slider" then
+		elseif k == "Slider" or k == "Stepper" then
 			return tostring(v == nil and "" or v) .. (e.Opts.Suffix or ""), nil, nil
 		elseif k == "Dropdown" then
 			if type(v) == "table" then return #v .. " choisi(s)", nil, nil end
@@ -7399,7 +8167,7 @@ do
 				pcall(function() e.Item.Set(not cur) end)
 				flash(e.Name .. " : " .. ((not cur) and "ON" or "OFF"))
 				render(false)
-			elseif k == "Slider" then
+			elseif k == "Slider" or k == "Stepper" then
 				pushView(sliderView(e))
 			elseif k == "Dropdown" then
 				pushView(dropView(e))
@@ -9917,7 +10685,7 @@ function Library:CreateWindow(cfg)
 		Get = function() return Library.HudPos end,
 		Set = function(_, p)
 			if type(p) == "table" and tonumber(p.X) and tonumber(p.Y) then
-				Library.HudPos = { X = tonumber(p.X), Y = tonumber(p.Y) }
+				Library.HudPos = { X = tonumber(p.X), Y = tonumber(p.Y), Ax = tonumber(p.Ax) or 0, Ay = tonumber(p.Ay) or 0 }
 				Library.Flags["ui.hudpos"] = Library.HudPos
 				if Library._hudPlace then Library:_hudPlace() end
 			end
