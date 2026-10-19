@@ -148,6 +148,15 @@
 		• Ctrl+T : barre de recherche seule au milieu de l'écran (sans la fenêtre), trou noir + étoiles qui spiralent.
 		  Les résultats affichent les vrais contrôles (interrupteur, curseur, bouton, liste, champ, couleur, touche).
 		  Library:OpenSpotlight() / CloseSpotlight() / ToggleSpotlight() / SetSpotlightKey(KeyCode, needCtrl).
+
+	─────────────  V8 : SONS DE L'INTERFACE  ─────────────
+		• Petits bruits calmes (avec un léger écho « trou noir ») : survol des onglets et des éléments, changement d'onglet,
+		  clic sur un bouton, toggle activé / désactivé, liste déroulante, bloc replié, champ de saisie, ouverture et
+		  fermeture de la fenêtre, de la palette (Ctrl+K) et de la barre de recherche (Ctrl+T).
+		• Paramètres > « Sons de l'interface » : on/off, volume, ambiance (Trou noir / Cristal / Doux), bruits au survol,
+		  écho spatial. Sauvegardé automatiquement avec les autres réglages.
+		• API : Library:SetUISoundEnabled(bool) / SetUISoundVolume(0-1) / SetUISoundPack(nom) / SetUISoundHover(bool) /
+		  SetUISoundReverb(bool) / PlayUISound(evenement). Library.UISoundPacks = les ambiances (modifiables).
 ]]
 
 local Players      = game:GetService("Players")
@@ -575,10 +584,148 @@ local function spin(g, speed)
 	return g
 end
 
+-- ============================================================================
+-- SONS DE L'INTERFACE : petits bruits calmes (survol des onglets, clics, interrupteurs, palette, recherche...)
+-- Réglages : Paramètres > « Sons de l'interface ». API : Library:SetUISoundEnabled / SetUISoundVolume /
+-- SetUISoundPack / SetUISoundHover / SetUISoundReverb / PlayUISound(evenement)
+-- Les sons « rbxasset:// » viennent du dossier de contenu du client Roblox ; un léger écho (réverbération) et un
+-- filtre doux sont ajoutés pour l'ambiance « trou noir ».
+-- ============================================================================
+local UISND_ID = {
+	ping  = "rbxasset://sounds/electronicpingshort.wav",
+	click = "rbxasset://sounds/clickfast.wav",
+	snap  = "rbxasset://sounds/snap.mp3",
+	bass  = "rbxasset://sounds/bass.wav",
+}
+-- { son, vitesse (hauteur), volume, jit = variation aléatoire de hauteur, len = durée max en secondes }
+local UISND_BLACKHOLE = {
+	hover     = { "ping", 1.60, 0.06, jit = 0.10, len = 0.35 },
+	tabhover  = { "ping", 1.25, 0.08, jit = 0.06, len = 0.40 },
+	tab       = { "ping", 0.85, 0.28, len = 0.90 },
+	click     = { "click", 0.75, 0.35, jit = 0.05, len = 0.50 },
+	on        = { "ping", 1.20, 0.30, len = 0.80 },
+	off       = { "ping", 0.75, 0.28, len = 0.80 },
+	pick      = { "ping", 1.00, 0.26, len = 0.70 },
+	open      = { "ping", 0.90, 0.24, len = 0.70 },
+	close     = { "ping", 0.68, 0.20, len = 0.60 },
+	fold      = { "click", 0.55, 0.30, len = 0.50 },
+	focus     = { "ping", 1.45, 0.18, len = 0.50 },
+	winopen   = { "bass", 1.50, 0.30, len = 1.00 },
+	winclose  = { "bass", 0.85, 0.26, len = 0.90 },
+	palopen   = { "bass", 1.20, 0.30, len = 1.00 },
+	palclose  = { "bass", 0.80, 0.24, len = 0.80 },
+	spotopen  = { "ping", 0.60, 0.32, len = 1.10 },
+	spotclose = { "ping", 0.45, 0.26, len = 0.90 },
+}
+local function uisndDerive(f)
+	local out = {}
+	for ev, d in pairs(UISND_BLACKHOLE) do out[ev] = f(table.clone(d)) end
+	return out
+end
+Library.UISoundPackNames = { "Trou noir", "Cristal", "Doux" }
+Library.UISoundPacks = {
+	["Trou noir"] = UISND_BLACKHOLE,
+	-- Cristal : plus aigu et brillant
+	["Cristal"] = uisndDerive(function(d)
+		if d[1] == "bass" then d[1], d[2] = "ping", d[2] * 1.1 else d[2] = d[2] * 1.55 end
+		return d
+	end),
+	-- Doux : petits clics feutrés, très discret
+	["Doux"] = uisndDerive(function(d)
+		if d[1] ~= "bass" then d[1] = "click" end
+		d[2], d[3] = d[2] * 0.7, d[3] * 0.85
+		return d
+	end),
+}
+Library.UISound       = true     -- interrupteur général
+Library.UISoundVolume = 0.5      -- 0 à 1
+Library.UISoundHover  = true     -- petits bruits au survol
+Library.UISoundReverb = true     -- écho spatial
+Library.UISoundPack   = "Trou noir"
+
+local uiSndGui
+local uiSndObjs, uiSndLast = {}, {}
+
+local function uiSndHost()
+	if uiSndGui and uiSndGui.Parent then return uiSndGui end
+	uiSndGui = new("ScreenGui", { Name = "SolarisSound", ResetOnSpawn = false, DisplayOrder = 0 })
+	mount(uiSndGui)
+	return uiSndGui
+end
+
+local function uiSnd(ev)
+	if not Library.UISound then return end
+	if (Library._silentSound or 0) > 0 or (Library._restoring or 0) > 0 then return end
+	local hov = (ev == "hover" or ev == "tabhover")
+	if hov then
+		if not Library.UISoundHover then return end
+		if os.clock() < (Library._busyUntil or 0) then return end   -- pas de bruit pendant les transitions
+	end
+	local pack = Library.UISoundPacks[Library.UISoundPack]
+	local d = pack and pack[ev]
+	if not d then return end
+	local now = os.clock()
+	if now - (uiSndLast[ev] or 0) < (hov and 0.07 or 0.035) then return end
+	uiSndLast[ev] = now
+	local vol = math.clamp((d[3] or 0.3) * (tonumber(Library.UISoundVolume) or 0.5) * 2, 0, 1)
+	if vol <= 0.003 then return end
+	pcall(function()
+		local s = uiSndObjs[ev]
+		if not (s and s.Parent) then
+			s = Instance.new("Sound")
+			s.Name = "UI_" .. ev
+			local eq = Instance.new("EqualizerSoundEffect")
+			eq.Name, eq.LowGain, eq.MidGain, eq.HighGain = "Soft", 2, 0, -8
+			eq.Parent = s
+			local rv = Instance.new("ReverbSoundEffect")
+			rv.Name, rv.DecayTime, rv.Density, rv.Diffusion = "Space", 2.6, 1, 1
+			rv.DryLevel, rv.WetLevel = -2, -9
+			rv.Parent = s
+			s.Parent = uiSndHost()
+			uiSndObjs[ev] = s
+		end
+		local rv = s:FindFirstChild("Space")
+		if rv then rv.Enabled = Library.UISoundReverb ~= false end
+		local id = UISND_ID[d[1]] or d[1]
+		if s.SoundId ~= id then s.SoundId = id end
+		s.PlaybackSpeed = (d[2] or 1) * (1 + (math.random() * 2 - 1) * (d.jit or 0))
+		s.Volume = vol
+		s.TimePosition = 0
+		s:Play()
+		if d.len then   -- coupe en douceur les sons trop longs
+			local tok = (s:GetAttribute("tok") or 0) + 1
+			s:SetAttribute("tok", tok)
+			task.delay(d.len, function()
+				if s.Parent and s:GetAttribute("tok") == tok then
+					TweenService:Create(s, TweenInfo.new(0.18), { Volume = 0 }):Play()
+					task.delay(0.2, function()
+						if s.Parent and s:GetAttribute("tok") == tok then s:Stop() end
+					end)
+				end
+			end)
+		end
+	end)
+end
+
+function Library:PlayUISound(ev) uiSnd(tostring(ev)) end
+function Library:SetUISoundEnabled(v) Library.UISound = v and true or false end
+function Library:SetUISoundVolume(v) Library.UISoundVolume = math.clamp(tonumber(v) or 0.5, 0, 1) end
+function Library:SetUISoundHover(v) Library.UISoundHover = v and true or false end
+function Library:SetUISoundReverb(v) Library.UISoundReverb = v and true or false end
+function Library:SetUISoundPack(name)
+	if Library.UISoundPacks[name] then Library.UISoundPack = name return true end
+	return false
+end
+function Library._destroyUISound()
+	if uiSndGui then pcall(function() uiSndGui:Destroy() end) uiSndGui = nil end
+	table.clear(uiSndObjs)
+end
+
 -- Effet de survol fluide sur une ligne
 local function hover(f, st, hit)
 	hit = hit or f
 	hit.MouseEnter:Connect(function()
+		uiSnd("hover")
 		tween(f, { BackgroundTransparency = Sty.RowHot }, 0.2)
 		if st then tween(st, { Transparency = Sty.StrokeHot }, 0.2) end
 	end)
@@ -3122,6 +3269,7 @@ function Block:CreateButton(o)
 		if o.Confirm then
 			if not armed then
 				armed = true
+				uiSnd("focus")
 				armToken += 1
 				local my = armToken
 				b.Text = o.ConfirmText or "Êtes-vous sûr ?"
@@ -3139,6 +3287,7 @@ function Block:CreateButton(o)
 			b.Text = baseText
 		end
 		ripple(b)
+		uiSnd("click")
 		-- flash blanc qui s'estompe
 		b.BackgroundColor3 = T.Accent
 		b.BackgroundTransparency = 0
@@ -3481,7 +3630,7 @@ function Block:CreateToggle(o)
 	item.Set = function(...) apply((unself(item, ...)) and true or false) end
 	item.Get = function() return state end
 	f.ClipsDescendants = true
-	btn.MouseButton1Click:Connect(function() ripple(f) apply(not state) end)
+	btn.MouseButton1Click:Connect(function() ripple(f) apply(not state) uiSnd(state and "on" or "off") end)
 
 	-- ---- touche liée (option Keybind)
 	if hasKey then
@@ -3517,6 +3666,7 @@ function Block:CreateToggle(o)
 			listening = true
 			Library._listening = true
 			chip.Text = "..."
+			uiSnd("focus")
 			tween(cst, { Transparency = 0.25 }, 0.2)
 			local c
 			c = UIS.InputBegan:Connect(function(i)
@@ -3542,6 +3692,7 @@ function Block:CreateToggle(o)
 			if os.clock() - lastBind < 0.2 or not f.Parent then return end
 			if UIS:GetFocusedTextBox() then return end
 			apply(not state)
+			uiSnd(state and "on" or "off")
 		end))
 
 		keyItem.Set = function(...)
@@ -3656,7 +3807,7 @@ function Block:CreateSlider(o)
 		end
 	end)
 
-	valBox.Focused:Connect(function()
+	valBox.Focused:Connect(function() uiSnd("focus")
 		tween(valBox, { BackgroundTransparency = 0.5, TextColor3 = T.Text }, 0.2)
 	end)
 	valBox.FocusLost:Connect(function()
@@ -4010,7 +4161,7 @@ function Block:CreateDropdown(o)
 			b.MouseLeave:Connect(function()
 				if not isOn(text) then tween(b, { BackgroundTransparency = 1 }, 0.2) end
 			end)
-			b.MouseButton1Click:Connect(function() pick(text) end)
+			b.MouseButton1Click:Connect(function() uiSnd("pick") pick(text) end)
 		end
 		restyle()
 		layout()
@@ -4058,7 +4209,7 @@ function Block:CreateDropdown(o)
 	end
 
 	search:GetPropertyChangedSignal("Text"):Connect(layout)
-	head.MouseButton1Click:Connect(function() setOpen(not isOpen) end)
+	head.MouseButton1Click:Connect(function() uiSnd(isOpen and "close" or "open") setOpen(not isOpen) end)
 
 	local item = {}
 	item.Set = function(...)
@@ -4120,7 +4271,7 @@ function Block:CreateInput(o)
 	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, tb)
 	hover(f, st)
 
-	tb.Focused:Connect(function() tween(tst, { Transparency = 0.35 }, 0.2) end)
+	tb.Focused:Connect(function() uiSnd("focus") tween(tst, { Transparency = 0.35 }, 0.2) end)
 	tb.FocusLost:Connect(function()
 		tween(tst, { Transparency = Sty.InputStroke }, 0.3)
 		fire(o.Callback, tb.Text)
@@ -4177,6 +4328,7 @@ function Block:CreateKeybind(o)
 		listening = true
 		Library._listening = true
 		btn.Text = "..."
+		uiSnd("focus")
 		tween(bst, { Transparency = 0.25 }, 0.2)
 		local c
 		c = UIS.InputBegan:Connect(function(i)
@@ -4319,7 +4471,7 @@ function Block:CreateColorPicker(o)
 			end, self.Scroll, i.Position)
 		end
 	end)
-	head.MouseButton1Click:Connect(function() dr:Set(not dr.Open) end)
+	head.MouseButton1Click:Connect(function() uiSnd(dr.Open and "close" or "open") dr:Set(not dr.Open) end)
 
 	item.Set = function(...)
 		local c = unself(item, ...)
@@ -4887,7 +5039,7 @@ function Tab:CreateBlock(o)
 			end)
 		end
 	end
-	head.MouseButton1Click:Connect(function() setCollapsed(not collapsed) end)
+	head.MouseButton1Click:Connect(function() uiSnd("fold") setCollapsed(not collapsed) end)
 	if o.Collapsed then
 		collapsed = true
 		clip.AutomaticSize = AN
@@ -5010,7 +5162,7 @@ function Window:CreateTab(name, _, icon)
 	end
 	tab.Bar, tab.Label, tab.Dot = bar, txt, dot
 	btn.MouseEnter:Connect(function()
-		if win.Current ~= tab then tween(btn, { BackgroundTransparency = 0.95 }, 0.2) end
+		if win.Current ~= tab then uiSnd("tabhover") tween(btn, { BackgroundTransparency = 0.95 }, 0.2) end
 		if not txt:GetAttribute("BaseX") then txt:SetAttribute("BaseX", txt.Position.X.Offset) end
 		tween(txt, { Position = UDim2.new(0, txt:GetAttribute("BaseX") + 4, 0, 0) }, 0.25)
 	end)
@@ -5021,6 +5173,7 @@ function Window:CreateTab(name, _, icon)
 	end)
 	btn.MouseButton1Click:Connect(function()
 		ripple(btn)
+		if win.Current ~= tab then uiSnd("tab") end
 		tab:Select()
 	end)
 
@@ -5108,13 +5261,14 @@ function Tab:CreateSubTabs(list)
 			select(sub)
 		end
 		pill.MouseEnter:Connect(function()
-			if parent.CurrentSub ~= sub then tween(pill, { BackgroundTransparency = 0.88 }, 0.15) end
+			if parent.CurrentSub ~= sub then uiSnd("tabhover") tween(pill, { BackgroundTransparency = 0.88 }, 0.15) end
 		end)
 		pill.MouseLeave:Connect(function()
 			if parent.CurrentSub ~= sub then tween(pill, { BackgroundTransparency = 0.94 }, 0.2) end
 		end)
 		pill.MouseButton1Click:Connect(function()
 			ripple(pill)
+			if parent.CurrentSub ~= sub then uiSnd("tab") end
 			select(sub)
 		end)
 		parent.SubTabs[#parent.SubTabs + 1] = sub
@@ -5649,6 +5803,37 @@ function Window:CreateSettingsTab(name, icon, docked)
 	SN:CreateButton({ Name = "Écouter les 4 sons", Favorite = false, Callback = function()
 		for i, k in ipairs({ "Info", "Success", "Warning", "Error" }) do
 			task.delay((i - 1) * 0.6, function() Library:PlayNotifSound(k) end)
+		end
+	end })
+
+	-- ───────────── Sons de l'interface ─────────────
+	local US = tab:CreateBlock({ Name = "Sons de l'interface", Side = "Left", Collapsed = true })
+	US:CreateToggle({ Name = "Sons de l'interface", Flag = "ui.uisnd", Default = Library.UISound,
+		Tooltip = "Petits bruits calmes : survol des onglets, clics, interrupteurs, palette, barre de recherche...",
+		Callback = function(v)
+			Library:SetUISoundEnabled(v)
+			if v then Library:PlayUISound("on") end
+		end })
+	US:CreateSlider({ Name = "Volume de l'interface", Flag = "ui.uisndvol", Min = 0, Max = 100, Step = 5, Suffix = "%",
+		Default = pct(Library.UISoundVolume), Callback = function(v) Library:SetUISoundVolume(v / 100) end })
+	US:CreateDropdown({ Name = "Ambiance", Flag = "ui.uisndpack", Items = Library.UISoundPackNames, Search = false,
+		Favorite = false, Default = Library.UISoundPack,
+		Callback = function(v)
+			Library:SetUISoundPack(v)
+			Library:PlayUISound("tab")
+		end })
+	US:CreateToggle({ Name = "Bruits au survol", Flag = "ui.uisndhover", Default = Library.UISoundHover,
+		Tooltip = "Un tout petit bruit quand le curseur passe sur un onglet ou un élément.",
+		Callback = function(v) Library:SetUISoundHover(v) end })
+	US:CreateToggle({ Name = "Écho spatial", Flag = "ui.uisndrev", Default = Library.UISoundReverb,
+		Tooltip = "Ajoute une légère réverbération façon « trou noir » à chaque son.",
+		Callback = function(v)
+			Library:SetUISoundReverb(v)
+			Library:PlayUISound("open")
+		end })
+	US:CreateButton({ Name = "Écouter un aperçu", Favorite = false, Callback = function()
+		for i, ev in ipairs({ "tabhover", "tab", "on", "off", "palopen", "spotopen" }) do
+			task.delay((i - 1) * 0.45, function() Library:PlayUISound(ev) end)
 		end
 	end })
 
@@ -6397,6 +6582,7 @@ do
 			local slot = { btn = btn, st = st, sc = sc, badge = badge, num = num, name = name, sub = sub, dot = dot, pos = pos }
 			P.slots[i] = slot
 			btn.MouseEnter:Connect(function()
+				uiSnd("hover")
 				tween(st, { Transparency = 0.08 }, 0.15)
 				tween(sc, { Scale = 1.07 }, 0.2, BACK)
 				local it = P.shown[i]
@@ -6410,7 +6596,7 @@ do
 				tween(sc, { Scale = 1 }, 0.2)
 				setHint(nil)
 			end)
-			btn.MouseButton1Click:Connect(function() pick(i) end)
+			btn.MouseButton1Click:Connect(function() uiSnd("pick") pick(i) end)
 		end
 	end
 
@@ -6634,6 +6820,7 @@ do
 		if P.open or not Library.PaletteEnabled then return end
 		buildGui()
 		P.open = true
+		uiSnd("palopen")
 		P.stack = {}
 		P.filter = P.filter or 1
 		P.view = rootView()
@@ -6676,6 +6863,7 @@ do
 	function Library:ClosePalette()
 		if not P.open then return end
 		P.open = false
+		uiSnd("palclose")
 		pcall(function() CAS:UnbindAction("UiLibPalette") end)
 		pcall(function() RunService:UnbindFromRenderStep("UiLibPaletteMouse") end)
 		if P.view and P.view.capture then Library._listening = false end
@@ -6978,7 +7166,7 @@ local spotOk, spotErr = pcall(function()
 		end
 		local hit = new("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "",
 			AutoButtonColor = false }, hdr)
-		hit.MouseButton1Click:Connect(flip)
+		hit.MouseButton1Click:Connect(function() flip() uiSnd(safeGet(it) and "on" or "off") end)
 		paint(safeGet(it) and true or false, true)
 		return flip
 	end
@@ -7021,7 +7209,7 @@ local spotOk, spotErr = pcall(function()
 		end
 		local hit = new("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "",
 			AutoButtonColor = false }, hdr)
-		hit.MouseButton1Click:Connect(run)
+		hit.MouseButton1Click:Connect(function() uiSnd("click") run() end)
 		return run
 	end
 	BUILD.Action = BUILD.Button
@@ -7295,7 +7483,7 @@ local spotOk, spotErr = pcall(function()
 			warn("[Ui-Lib] Spotlight : " .. tostring(primary))
 			return nil
 		end
-		f.MouseEnter:Connect(function() tween(st, { Transparency = 0.5 }, 0.2) end)
+		f.MouseEnter:Connect(function() uiSnd("hover") tween(st, { Transparency = 0.5 }, 0.2) end)
 		f.MouseLeave:Connect(function() tween(st, { Transparency = 0.86 }, 0.3) end)
 		task.delay((idx - 1) * 0.035, function()
 			if f.Parent then tween(sc, { Scale = 1 }, 0.45, BACK) end
@@ -7343,6 +7531,7 @@ local spotOk, spotErr = pcall(function()
 	function Library:CloseSpotlight()
 		if not S.open then return end
 		S.open = false
+		uiSnd("spotclose")
 		if S.capture then pcall(S.capture) end
 		pcall(function() CAS:UnbindAction("UiLibSpotlight") end)
 		pcall(function() RunService:UnbindFromRenderStep("UiLibSpotlightMouse") end)
@@ -7367,7 +7556,7 @@ local spotOk, spotErr = pcall(function()
 		local w = Library.Window
 		local reopen = S.hid or S.openAfter
 		S.hid, S.openAfter = false, false
-		if reopen and w and w.Toggle then w:Toggle(true) end
+		if reopen and w and w.Toggle then Library._quietWin = true w:Toggle(true) Library._quietWin = false end
 		pcall(setBlurTarget, (w and w.Open) and Library.BlurSize or 0)
 	end
 
@@ -7376,6 +7565,7 @@ local spotOk, spotErr = pcall(function()
 		if S.open or not Library.SpotlightEnabled then return end
 		if Library.IsPaletteOpen and Library:IsPaletteOpen() then Library:ClosePalette() end
 		S.open = true
+		uiSnd("spotopen")
 		S.openAt = os.clock()
 		S.capture = nil
 		S.rows = {}
@@ -7385,7 +7575,9 @@ local spotOk, spotErr = pcall(function()
 		S.hid = false
 		if Library.SpotlightHideWindow and w and w.Open then
 			S.hid = true
+			Library._quietWin = true
 			w:Toggle(false)
+			Library._quietWin = false
 		end
 		pcall(setBlurTarget, Library.BlurSize or 0)
 
@@ -7934,7 +8126,7 @@ function Library:CreateWindow(cfg)
 	local sst = stroke(search, 0.92)
 	trackStyled(search, sst, "input")
 	new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 8) }, search)
-	search.Focused:Connect(function() tween(sst, { Transparency = 0.4 }, 0.2) end)
+	search.Focused:Connect(function() uiSnd("focus") tween(sst, { Transparency = 0.4 }, 0.2) end)
 	search.FocusLost:Connect(function() tween(sst, { Transparency = Sty.InputStroke }, 0.3) end)
 
 	local sidebar = new("ScrollingFrame", {
@@ -8305,6 +8497,7 @@ function Library:CreateWindow(cfg)
 		v = v and true or false
 		if v == self.Open then return end
 		self.Open = v
+		if not Library._quietWin then uiSnd(v and "winopen" or "winclose") end
 		if Library._hudRefresh then Library._hudRefresh() end
 		local noAnim = Library.WindowAnim == false   -- réglage « Animation ouverture / fermeture » désactivé
 		skyTarget = v and 1 or 0
@@ -8687,6 +8880,7 @@ function Library:Destroy()
 	table.clear(Library.NotifSilenced)
 	Library._onKeybindAdded, Library._onKeybindChanged, Library._onSilencedChanged = nil, nil, nil
 	if Library._destroyHud then pcall(Library._destroyHud) end
+	if Library._destroyUISound then pcall(Library._destroyUISound) end
 	if Library._destroyPalette then pcall(Library._destroyPalette) end
 	if Library._destroySpotlight then pcall(Library._destroySpotlight) end
 	table.clear(Library.TxtEntries)
