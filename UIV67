@@ -168,6 +168,15 @@
 		  écho spatial. Sauvegardé automatiquement avec les autres réglages.
 		• API : Library:SetUISoundEnabled(bool) / SetUISoundVolume(0-1) / SetUISoundPack(nom) / SetUISoundHover(bool) /
 		  SetUISoundReverb(bool) / PlayUISound(evenement). Library.UISoundPacks = les ambiances (modifiables).
+
+	─────────────  V9 : STYLES DE FERMETURE DES NOTIFICATIONS  ─────────────
+		• Paramètres > Notifications > « Style de fermeture » (sauvegardé automatiquement) : Trou noir · Fondu · Rétrécir ·
+		  Tourbillon · Briser (éclats projetés) · Casser (cassée en deux) · Dissoudre · Effacer vers le haut / le bas /
+		  la gauche / la droite (masque + trait lumineux) · Glisser · Aléatoire.
+		• API : Library:SetNotifExit("Briser") · Library.NotifExit · Library.NotifExitStyles
+		  Library.NotifExitByType = { Error = "Briser", Success = "Tourbillon" } (un style par type de notification)
+		  Library:Notify({ ..., Exit = "Effacer vers la droite" }) (style pour une seule notification)
+		• Le swipe latéral garde son glissement. Library.NotifBlackHole = false convertit « Trou noir » en « Glisser ».
 ]]
 
 local Players      = game:GetService("Players")
@@ -1603,6 +1612,307 @@ local function blackHoleOut(slot, card, cardScale, h, accent)
 	end)
 end
 
+-- ───────────── V9 : STYLES DE FERMETURE DES NOTIFICATIONS ─────────────
+-- Library:SetNotifExit("Briser")   ·   Library.NotifExit   ·   Library.NotifExitStyles (liste des noms)
+-- Library.NotifExitByType = { Error = "Briser", Success = "Tourbillon" }   (style différent selon le type)
+-- Une notification peut aussi choisir le sien : Library:Notify({ ..., Exit = "Effacer vers le haut" })
+-- Pour ajouter un style : ajoute son nom dans NotifExitStyles puis une fonction EXITS["Nom"] plus bas ;
+-- elle reçoit (slot, card, cardScale, h) et renvoie la durée de l'animation en secondes.
+Library.NotifExit = "Trou noir"
+Library.NotifExitStyles = { "Trou noir", "Fondu", "Rétrécir", "Tourbillon", "Briser", "Casser", "Dissoudre",
+	"Effacer vers le haut", "Effacer vers le bas", "Effacer vers la gauche", "Effacer vers la droite",
+	"Glisser", "Aléatoire" }
+Library.NotifExitByType = {}
+
+local EXIT_SET = {}
+for _, n in ipairs(Library.NotifExitStyles) do EXIT_SET[n] = true end
+
+local function resolveExit(s)
+	if type(s) ~= "string" or not EXIT_SET[s] then s = Library.NotifExit end
+	if not EXIT_SET[s] then s = "Trou noir" end
+	if s == "Aléatoire" then
+		local pool = {}
+		for _, n in ipairs(Library.NotifExitStyles) do
+			if n ~= "Aléatoire" and n ~= "Glisser" then pool[#pool + 1] = n end
+		end
+		s = pool[math.random(#pool)]
+	end
+	if s == "Trou noir" and Library.NotifBlackHole == false then s = "Glisser" end
+	return s
+end
+
+function Library:SetNotifExit(s)
+	if EXIT_SET[s] then
+		Library.NotifExit = s
+		return true
+	end
+	return false
+end
+
+do
+	local EXITS = {}
+	local KP = NumberSequenceKeypoint.new
+	local IN, INOUT = Enum.EasingDirection.In, Enum.EasingDirection.InOut
+	local WHITE = Color3.new(1, 1, 1)
+	local function K() return 1 / math.max(Library.AnimSpeed or 1, 0.05) end
+
+	-- fige la carte en pixels (sa hauteur automatique ne doit plus bouger) et renvoie sa largeur
+	local function freezeCard(card, cardScale, h)
+		local cw = card.AbsoluteSize.X / math.max(cardScale.Scale, 0.01)
+		if cw < 10 then cw = Library.NotifWidth or 300 end
+		card.AutomaticSize = AN
+		card.Size = UDim2.fromOffset(cw, h)
+		cardScale.Scale = 1
+		return cw
+	end
+	local function fadeCard(card, to, t, style, dir)
+		if canvasSupported then
+			tween(card, { GroupTransparency = to }, t, style, dir)
+		else
+			tween(card, { BackgroundTransparency = (to >= 1) and 1 or 0.03 }, t, style, dir)
+		end
+	end
+	-- la place de la notification se referme (les autres remontent / descendent en douceur)
+	local function collapse(slot, delay, t)
+		task.delay(delay * K(), function()
+			if slot.Parent then tween(slot, { Size = UDim2.new(1, 0, 0, 0) }, t) end
+		end)
+	end
+
+	-- FONDU : la carte s'efface sur place
+	EXITS["Fondu"] = function(slot, card, cardScale, h)
+		collapse(slot, 0.3, 0.3)
+		fadeCard(card, 1, 0.4)
+		tween(cardScale, { Scale = 0.96 }, 0.4)
+		return 0.7
+	end
+
+	-- RÉTRÉCIR : la carte se rétracte vers son centre
+	EXITS["Rétrécir"] = function(slot, card, cardScale, h)
+		freezeCard(card, cardScale, h)
+		card.AnchorPoint = Vector2.new(0.5, 0.5)
+		card.Position = UDim2.new(0.5, 0, 0, h / 2)
+		tween(cardScale, { Scale = 0 }, 0.45, BACK, IN)
+		fadeCard(card, 1, 0.45, QUINT, IN)
+		collapse(slot, 0.3, 0.3)
+		return 0.75
+	end
+
+	-- TOURBILLON : la carte tourne de plus en plus vite dans un anneau de vortex et se fait aspirer
+	EXITS["Tourbillon"] = function(slot, card, cardScale, h)
+		freezeCard(card, cardScale, h)
+		local k = K()
+		local dirSpin = (math.random() < 0.5) and -1 or 1
+		card.AnchorPoint = Vector2.new(0.5, 0.5)
+		card.Position = UDim2.new(0.5, 0, 0, h / 2)
+		card.ZIndex = 10
+		local function vortex(d, thick, tr, dur)
+			local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, h / 2),
+				Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 3 }, slot)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
+			local st = new("UIStroke", { Color = T.Accent, Thickness = thick, Transparency = tr, ApplyStrokeMode = BORDER }, f)
+			local g = new("UIGradient", { Color = ColorSequence.new(WHITE, Color3.fromRGB(60, 60, 68)),
+				Transparency = ringSeq() }, st)
+			tween(f, { Size = UDim2.fromOffset(d, d) }, 0.35, BACK)
+			TweenService:Create(g, TweenInfo.new(dur * k, LINEAR, OUT, -1), { Rotation = 360 * dirSpin }):Play()
+			task.delay(0.72 * k, function()
+				if f.Parent then tween(f, { Size = UDim2.fromOffset(0, 0) }, 0.25, QUINT, IN) end
+			end)
+		end
+		vortex(150, 2, 0.1, 0.6)
+		vortex(104, 1.5, 0.4, -0.45)
+		tween(card, { Rotation = dirSpin * 620 }, 0.85, QUINT, IN)
+		tween(cardScale, { Scale = 0 }, 0.85, QUINT, IN)
+		task.delay(0.5 * k, function()
+			if card.Parent then fadeCard(card, 1, 0.3) end
+		end)
+		collapse(slot, 0.6, 0.3)
+		return 1.0
+	end
+
+	-- EFFACER vers le haut / bas / gauche / droite : un masque rogne la carte, un trait lumineux suit le bord
+	local function wipe(slot, card, cardScale, h, side)
+		local cw = freezeCard(card, cardScale, h)
+		card.AnchorPoint = Vector2.new(0, 0)
+		local mask = new("Frame", { Name = "Wipe", BackgroundTransparency = 1, BorderSizePixel = 0,
+			ClipsDescendants = true, ZIndex = 10 }, slot)
+		local line = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = WHITE, BorderSizePixel = 0,
+			BackgroundTransparency = 0.15, ZIndex = 30 }, slot)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, line)
+		local vertical = (side == "up" or side == "down")
+		new("UIGradient", { Rotation = vertical and 0 or 90,
+			Transparency = NumberSequence.new({ KP(0, 1), KP(0.5, 0), KP(1, 1) }) }, line)
+		local goalSize, lineFrom, lineTo
+		if side == "up" then
+			mask.AnchorPoint, mask.Position, mask.Size = Vector2.new(0, 0), UDim2.fromOffset(0, 0), UDim2.fromOffset(cw, h)
+			card.Position = UDim2.fromOffset(0, 0)
+			goalSize = UDim2.fromOffset(cw, 0)
+			line.Size = UDim2.fromOffset(cw - 30, 2)
+			lineFrom, lineTo = UDim2.fromOffset(cw / 2, h), UDim2.fromOffset(cw / 2, 0)
+		elseif side == "down" then
+			mask.AnchorPoint, mask.Position, mask.Size = Vector2.new(0, 1), UDim2.new(0, 0, 1, 0), UDim2.fromOffset(cw, h)
+			card.Position = UDim2.new(0, 0, 1, -h)
+			goalSize = UDim2.fromOffset(cw, 0)
+			line.Size = UDim2.fromOffset(cw - 30, 2)
+			lineFrom, lineTo = UDim2.fromOffset(cw / 2, 0), UDim2.fromOffset(cw / 2, h)
+		elseif side == "left" then
+			mask.AnchorPoint, mask.Position, mask.Size = Vector2.new(0, 0), UDim2.fromOffset(0, 0), UDim2.fromOffset(cw, h)
+			card.Position = UDim2.fromOffset(0, 0)
+			goalSize = UDim2.fromOffset(0, h)
+			line.Size = UDim2.fromOffset(2, h - 20)
+			lineFrom, lineTo = UDim2.fromOffset(cw, h / 2), UDim2.fromOffset(0, h / 2)
+		else
+			mask.AnchorPoint, mask.Position, mask.Size = Vector2.new(1, 0), UDim2.new(1, 0, 0, 0), UDim2.fromOffset(cw, h)
+			card.Position = UDim2.new(1, -cw, 0, 0)
+			goalSize = UDim2.fromOffset(0, h)
+			line.Size = UDim2.fromOffset(2, h - 20)
+			lineFrom, lineTo = UDim2.fromOffset(0, h / 2), UDim2.fromOffset(cw, h / 2)
+		end
+		line.Position = lineFrom
+		card.Parent = mask
+		tween(mask, { Size = goalSize }, 0.55, QUINT, INOUT)
+		tween(line, { Position = lineTo }, 0.55, QUINT, INOUT)
+		task.delay(0.45 * K(), function()
+			if line.Parent then tween(line, { BackgroundTransparency = 1 }, 0.15) end
+		end)
+		collapse(slot, 0.4, 0.3)
+		return 0.8
+	end
+	EXITS["Effacer vers le haut"]    = function(s, c, cs, h) return wipe(s, c, cs, h, "up") end
+	EXITS["Effacer vers le bas"]     = function(s, c, cs, h) return wipe(s, c, cs, h, "down") end
+	EXITS["Effacer vers la gauche"]  = function(s, c, cs, h) return wipe(s, c, cs, h, "left") end
+	EXITS["Effacer vers la droite"]  = function(s, c, cs, h) return wipe(s, c, cs, h, "right") end
+
+	-- BRISER / CASSER / DISSOUDRE : la carte est découpée en morceaux (copies rognées) qui s'envolent
+	--   shatter : grille de 6x3 éclats projetés + gravité · crack : cassée en deux (trait de fissure) ·
+	--   dissolve : fine grille de 9x3 qui s'efface de gauche à droite en s'élevant
+	local function shards(slot, card, cardScale, h, mode)
+		local cw = freezeCard(card, cardScale, h)
+		local k = K()
+		local cols, rows
+		if mode == "crack" then cols, rows = 2, 1
+		elseif mode == "dissolve" then cols, rows = 9, 3
+		else cols, rows = 6, 3 end
+		local sw, sh = cw / cols, h / rows
+		local rng = Random.new()
+		local pieces, total = {}, 0
+
+		for r = 0, rows - 1 do
+			for c = 0, cols - 1 do
+				local x, y = c * sw, r * sh
+				local box = new(canvasSupported and "CanvasGroup" or "Frame", { AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromOffset(x + sw / 2, y + sh / 2),
+					Size = UDim2.fromOffset(math.ceil(sw) + 1, math.ceil(sh) + 1), BackgroundTransparency = 1,
+					BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 10 }, slot)
+				local bs = new("UIScale", { Scale = 1 }, box)
+				local cl = card:Clone()
+				cl.Name = "Shard"
+				cl.AutomaticSize = AN
+				cl.Size = UDim2.fromOffset(cw, h)
+				cl.AnchorPoint = Vector2.new(0, 0)
+				cl.Position = UDim2.fromOffset(-math.floor(x), -math.floor(y))
+				cl.Rotation = 0
+				cl.Visible = true
+				if canvasSupported then cl.GroupTransparency = 0 end
+				local us = cl:FindFirstChildOfClass("UIScale")
+				if us then us.Scale = 1 end
+				for _, d in ipairs(cl:GetDescendants()) do
+					if d:IsA("GuiButton") then d.Active = false end
+				end
+				cl.Parent = box
+
+				local cx = ((c + 0.5) / cols) * 2 - 1
+				local cy = ((r + 0.5) / rows) * 2 - 1
+				local p = { box = box, bs = bs, x = x + sw / 2, y = y + sh / 2, rot = 0 }
+				if mode == "crack" then
+					p.d, p.life, p.g = 0.3, 0.95, 900
+					p.vx, p.vy = cx * 55, 0
+					p.rv = cx * 150
+				elseif mode == "dissolve" then
+					p.d = (c / cols) * 0.32 + rng:NextNumber(0, 0.18)
+					p.life, p.g = 0.32, 0
+					p.vx, p.vy = rng:NextNumber(-16, 16), rng:NextNumber(-70, -20)
+					p.rv = rng:NextNumber(-40, 40)
+				else
+					p.d = rng:NextNumber(0, 0.1) + math.abs(cx) * 0.04
+					p.life, p.g = 0.95, 1000
+					p.vx = cx * rng:NextNumber(70, 200) + rng:NextNumber(-40, 40)
+					p.vy = cy * rng:NextNumber(40, 100) - rng:NextNumber(60, 180)
+					p.rv = rng:NextNumber(-280, 280)
+				end
+				total = math.max(total, p.d + p.life)
+				pieces[#pieces + 1] = p
+			end
+		end
+		card.Visible = false
+
+		if mode == "crack" then
+			local segs = 4
+			local segH = h / segs
+			for i = 1, segs do
+				local odd = (i % 2 == 1)
+				local sg = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromOffset(cw / 2 + (odd and -4 or 4), (i - 0.5) * segH),
+					Size = UDim2.fromOffset(2, segH * 1.3), Rotation = odd and -14 or 14, BackgroundColor3 = WHITE,
+					BackgroundTransparency = 0.1, BorderSizePixel = 0, ZIndex = 40 }, slot)
+				task.delay(0.28 * k, function()
+					if sg.Parent then tween(sg, { BackgroundTransparency = 1 }, 0.3) end
+				end)
+			end
+		end
+
+		collapse(slot, mode == "dissolve" and 0.45 or 0.55, 0.3)
+		task.spawn(function()
+			local t0 = os.clock()
+			local last = t0
+			while slot.Parent do
+				RunService.Heartbeat:Wait()
+				local now = os.clock()
+				local dt = math.min(now - last, 0.05) / k
+				last = now
+				local t = (now - t0) / k
+				if t > total then break end
+				for _, p in ipairs(pieces) do
+					local u = t - p.d
+					if u > 0 and p.box.Parent then
+						p.vy = p.vy + p.g * dt
+						p.x = p.x + p.vx * dt
+						p.y = p.y + p.vy * dt
+						p.rot = p.rot + p.rv * dt
+						local f = math.clamp(u / p.life, 0, 1)
+						p.box.Position = UDim2.fromOffset(p.x, p.y)
+						p.box.Rotation = p.rot
+						if canvasSupported then
+							p.box.GroupTransparency = f ^ 1.4
+							p.bs.Scale = (mode == "dissolve") and (1 - 0.4 * f) or 1
+						else
+							p.bs.Scale = math.max(1 - f, 0)
+						end
+					end
+				end
+			end
+		end)
+		return total + 0.1
+	end
+	EXITS["Briser"]    = function(s, c, cs, h) return shards(s, c, cs, h, "shatter") end
+	EXITS["Casser"]    = function(s, c, cs, h) return shards(s, c, cs, h, "crack") end
+	EXITS["Dissoudre"] = function(s, c, cs, h) return shards(s, c, cs, h, "dissolve") end
+
+	-- appelé par la fermeture : renvoie la durée (en secondes d'animation)
+	V6.exit = function(style, slot, card, cardScale, h)
+		local f = EXITS[style]
+		if f then
+			local ok, d = pcall(f, slot, card, cardScale, h)
+			if ok and tonumber(d) then return d end
+			warn("[Ui-Lib] Style de fermeture « " .. tostring(style) .. " » : " .. tostring(d))
+		end
+		fadeCard(card, 1, 0.35)
+		collapse(slot, 0.2, 0.3)
+		return 0.6
+	end
+	V6.resolveExit = resolveExit
+end
+
 	V6.play, V6.refresh, V6.hole = playNotifSound, refreshStack, blackHoleOut
 end
 
@@ -1957,10 +2267,17 @@ function Library:Notify(o)
 		slot.Size = UDim2.new(1, 0, 0, h)
 		local sign = (type(dir) == "number" and dir ~= 0) and dir or nil
 
-		-- effet « trou noir » (sauf swipe : là, la carte suit le doigt / la souris)
-		if Library.NotifBlackHole ~= false and Library.Animations and not sign and h > 4 then
-			V6.hole(slot, card, cardScale, h, notifKindColor(kind) or T.Accent)
-			task.delay(1.15 / math.max(Library.AnimSpeed or 1, 0.05), function()
+		-- style de fermeture (sauf swipe : là, la carte suit le doigt / la souris)
+		local style = V6.resolveExit(o.Exit or (Library.NotifExitByType and Library.NotifExitByType[kind]) or Library.NotifExit)
+		if style ~= "Glisser" and Library.Animations and not sign and h > 4 then
+			local dur
+			if style == "Trou noir" then
+				V6.hole(slot, card, cardScale, h, notifKindColor(kind) or T.Accent)
+				dur = 1.15
+			else
+				dur = V6.exit(style, slot, card, cardScale, h)
+			end
+			task.delay(dur / math.max(Library.AnimSpeed or 1, 0.05) + 0.05, function()
 				dropCorner()
 				slot:Destroy()
 			end)
@@ -2966,6 +3283,7 @@ function Library:GetTheme()
 		ToggleStyle = Library.ToggleStyle,
 		NotifPos = Library.NotifPos,
 		NotifDuration = Library.NotifDuration,
+		NotifExit = Library.NotifExit,
 	}
 end
 
@@ -3031,6 +3349,7 @@ function Library:ApplyTheme(t)
 		{ "ToggleStyle", "ui.togglestyle", nil, function(v) Library:SetToggleStyle(v) end },
 		{ "NotifPos", "ui.notifpos", function(v) return N.NotifPos[v] or v end, function(v) Library:SetNotifPosition(v) end },
 		{ "NotifDuration", "ui.notifdur", nil, function(v) Library:SetNotifDuration(v) end },
+		{ "NotifExit", "ui.notifexit", nil, function(v) Library:SetNotifExit(v) end },
 	}
 	for _, e in ipairs(S) do
 		local v = t[e[1]]
@@ -6359,9 +6678,10 @@ function Window:CreateSettingsTab(name, icon, docked)
 	C:CreateToggle({ Name = "Pastille +N au-delà du max", Flag = "ui.notifpill", Default = Library.NotifOverflow == "Pill",
 		Tooltip = "Au-delà du maximum, les plus anciennes sont masquées derrière une pastille « +3 » au lieu d'être fermées. Clic sur la pastille = tout vider.",
 		Callback = function(v) Library:SetNotifOverflow(v and "Pill" or "Close") end })
-	C:CreateToggle({ Name = "Effet trou noir à la fermeture", Flag = "ui.notifhole", Default = Library.NotifBlackHole,
-		Tooltip = "La notification est aspirée par un mini trou noir quand elle se ferme.",
-		Callback = function(v) Library:SetNotifBlackHole(v) end })
+	C:CreateDropdown({ Name = "Style de fermeture", Flag = "ui.notifexit", Items = Library.NotifExitStyles,
+		Default = Library.NotifExit, Search = false,
+		Tooltip = "Comment la notification disparaît : trou noir, fondu, tourbillon, briser, casser, effacer vers un côté... « Aléatoire » en choisit un différent à chaque fois.",
+		Callback = function(v) Library:SetNotifExit(v) end })
 	C:CreateToggle({ Name = "Ne pas déranger", Flag = "ui.notifmute", Default = Library.NotifMuted,
 		Tooltip = "Masque les notifications (les erreurs passent quand même). Elles restent dans l'historique.",
 		Callback = function(v) Library:SetNotifMuted(v) end })
@@ -6369,6 +6689,26 @@ function Window:CreateSettingsTab(name, icon, docked)
 	C:CreateButton({ Name = "Tester une notification", Favorite = false, Callback = function()
 		Library:Notify({ Title = "Test", Content = "Voilà à quoi ressemblent les notifications.", Type = "Info" })
 	end })
+	C:CreateButton({ Name = "Aperçu du style de fermeture", Favorite = false,
+		Tooltip = "Envoie une notification courte avec le style choisi.",
+		Callback = function()
+			Library:Notify({ Title = "Style : " .. tostring(Library.NotifExit), Content = "Regarde-la disparaître.",
+				Type = "Info", Duration = 1.5, Stack = false })
+		end })
+	C:CreateButton({ Name = "Parcourir tous les styles", Favorite = false,
+		Tooltip = "Envoie une notification par style, l'une après l'autre.",
+		Callback = function()
+			local i = 0
+			for _, s in ipairs(Library.NotifExitStyles) do
+				if s ~= "Aléatoire" then
+					i += 1
+					task.delay((i - 1) * 1.6, function()
+						Library:Notify({ Title = s, Content = "Style de fermeture", Type = "Info", Duration = 1,
+							Exit = s, Stack = false })
+					end)
+				end
+			end
+		end })
 	C:CreateButton({ Name = "Tester les 4 types", Favorite = false, Callback = function()
 		Library:NotifyInfo("Information", "Un message tout simple.", 5)
 		Library:NotifySuccess("Succès", "Action effectuée.", 5)
