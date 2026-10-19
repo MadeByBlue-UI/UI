@@ -1723,6 +1723,7 @@ function Library:Notify(o)
 		Size = UDim2.fromOffset(Library.NotifLogoSize or NOTIF_LOGO_SIZE, Library.NotifLogoSize or NOTIF_LOGO_SIZE),
 		BackgroundTransparency = 1, BorderSizePixel = 0, Image = Library.NotifLogo or NOTIF_LOGO,
 		ScaleType = Enum.ScaleType.Fit, Visible = false }, ico)
+	local icoImgCorner = new("UICorner", { CornerRadius = UDim.new(0, 0) }, icoImg)   -- rond quand on affiche un avatar (o.Icon)
 	local spinRing = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(18, 18), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, ico)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, spinRing)
@@ -1799,8 +1800,17 @@ function Library:Notify(o)
 		ico.BackgroundColor3 = ac            -- pastille pleine : blanche (ou couleur du type si NotifColored)
 		icoText.Text = NOTIF_ICON[k] or ""
 		icoText.Visible = false              -- plus de lettre : le logo prend la place
-		icoImg.Image = Library.NotifLogo or NOTIF_LOGO
-		icoImg.Size = UDim2.fromOffset(Library.NotifLogoSize or NOTIF_LOGO_SIZE, Library.NotifLogoSize or NOTIF_LOGO_SIZE)
+		if o.Icon and o.Icon ~= "" then   -- image perso (ex. avatar d'un joueur) : petit rond à la place du logo
+			icoImg.Image = tostring(o.Icon)
+			icoImg.Size = UDim2.fromOffset(32, 32)
+			icoImg.ScaleType = Enum.ScaleType.Crop
+			icoImgCorner.CornerRadius = UDim.new(1, 0)
+		else
+			icoImg.Image = Library.NotifLogo or NOTIF_LOGO
+			icoImg.Size = UDim2.fromOffset(Library.NotifLogoSize or NOTIF_LOGO_SIZE, Library.NotifLogoSize or NOTIF_LOGO_SIZE)
+			icoImg.ScaleType = Enum.ScaleType.Fit
+			icoImgCorner.CornerRadius = UDim.new(0, 0)
+		end
 		icoImg.Visible = k ~= "Loading"       -- chargement : on garde la pastille + l'anneau qui tourne
 		ico.BackgroundTransparency = (k == "Loading") and 0 or 1
 		icoText.TextColor3 = Color3.fromRGB(10, 10, 12)
@@ -5799,6 +5809,268 @@ function Window:CreateFavoritesTab(name, icon)
 	return tab
 end
 
+-- ============================================================================
+-- ALERTES JOUEURS : notifications quand un ami (ou un joueur surveillé) rejoint / quitte le serveur, quand tu meurs...
+--   Réglages : Paramètres > « Alertes joueurs » (sauvegardés automatiquement, flags « ui.alert.* »).
+--   Limite Roblox : seuls les joueurs du MÊME serveur sont détectables (pas les amis qui rejoignent un autre jeu).
+--   Library:_startPlayerAlerts() est lancé tout seul par l'onglet Paramètres.
+-- ============================================================================
+local function aflag(k, d)
+	local v = Library.Flags["ui.alert." .. k]
+	if v == nil then return d end
+	return v
+end
+
+function Library:_startPlayerAlerts()
+	if Library._alertsOn then return end
+	Library._alertsOn = true
+	local friendCache = {}
+	local function dur() return tonumber(aflag("dur", 5)) or 5 end
+	local function nameOf(p)
+		if p.DisplayName ~= p.Name then return p.DisplayName .. " (@" .. p.Name .. ")" end
+		return p.Name
+	end
+	local function watched(p)
+		local list = tostring(aflag("watch", ""))
+		if list == "" then return false end
+		local n, d = string.lower(p.Name), string.lower(p.DisplayName)
+		for w in string.gmatch(list, "[^,;]+") do
+			w = string.lower(string.match(w, "^%s*(.-)%s*$"))
+			if w ~= "" and (w == n or w == d) then return true end
+		end
+		return false
+	end
+	local function alert(p, joined)
+		if not aflag("master", true) then return end
+		local key = joined and "join" or "leave"
+		local title, kind
+		if watched(p) then
+			title = joined and "Joueur surveillé : arrivée" or "Joueur surveillé : départ"
+			kind = joined and "Warning" or "Info"
+		elseif friendCache[p.UserId] and aflag("friend" .. key, true) then
+			title = joined and "Ami connecté" or "Ami parti"
+			kind = joined and "Success" or "Warning"
+		elseif aflag("any" .. key, false) then
+			title = joined and "Joueur arrivé" or "Joueur parti"
+			kind = "Info"
+		else
+			return
+		end
+		Library:Notify({ Title = title, Content = nameOf(p), Type = kind, Duration = dur(),
+			Icon = "rbxthumb://type=AvatarHeadShot&id=" .. p.UserId .. "&w=150&h=150" })
+	end
+	local function onAdded(p, quiet)
+		if p == LP then return end
+		task.spawn(function()
+			local ok, f = pcall(function() return LP:IsFriendsWith(p.UserId) end)
+			friendCache[p.UserId] = (ok and f) and true or false
+			if not quiet then alert(p, true) end
+		end)
+	end
+	for _, p in ipairs(Players:GetPlayers()) do onAdded(p, true) end   -- déjà présents : pas d'alerte
+	track(Players.PlayerAdded:Connect(function(p) onAdded(p, false) end))
+	track(Players.PlayerRemoving:Connect(function(p)
+		if p == LP then return end
+		alert(p, false)
+		task.defer(function() friendCache[p.UserId] = nil end)
+	end))
+
+	local function hook(char)
+		local hum = char:WaitForChild("Humanoid", 5)
+		if hum then
+			hum.Died:Connect(function()
+				if aflag("master", true) and aflag("death", false) then
+					Library:Notify({ Title = "Tu es mort", Content = "Ton personnage a été éliminé.", Type = "Error",
+						Duration = dur() })
+				end
+			end)
+		end
+	end
+	if LP.Character then task.spawn(hook, LP.Character) end
+	track(LP.CharacterAdded:Connect(function(c) task.spawn(hook, c) end))
+end
+
+-- ============================================================================
+-- AMIS SURVEILLÉS : liste de tes amis Roblox, tu choisis ceux dont tu veux être prévenu quand ils passent en ligne.
+--   Utilise Players:GetFriendsAsync (champ IsOnline) relevé toutes les N secondes + la présence dans ton serveur.
+--   Réglages : Paramètres > « Amis surveillés » (flags « ui.alert.* », sauvegardés automatiquement).
+--   Library:RefreshFriends() recharge la liste à la main.
+-- ============================================================================
+local function fetchFriends()
+	local out = {}
+	local ok = pcall(function()
+		local pages = Players:GetFriendsAsync(LP.UserId)
+		while true do
+			for _, f in ipairs(pages:GetCurrentPage()) do out[#out + 1] = f end
+			if pages.IsFinished then break end
+			pages:AdvanceToNextPageAsync()
+		end
+	end)
+	return out, ok
+end
+
+function Library:_startFriendWatch(listBlock, setStatus)
+	if Library._friendWatchOn then return end
+	Library._friendWatchOn = true
+	local tok = (Library._fwTok or 0) + 1
+	Library._fwTok = tok
+	local ONLINE, OFFLINE = Color3.fromRGB(61, 220, 151), Color3.fromRGB(110, 110, 118)
+	local state, seeded, busy, sig = {}, false, false, nil
+	local selected = {}          -- [userId] = true : amis dont tu veux être prévenu
+	local rows, dots, lastList = {}, {}, {}
+
+	local function flagList()
+		local out = {}
+		for id in pairs(selected) do out[#out + 1] = id end
+		table.sort(out)
+		return out
+	end
+	local function saveSel() Library.Flags["ui.alert.friends"] = flagList() end
+	local function headshot(id) return "rbxthumb://type=AvatarHeadShot&id=" .. id .. "&w=150&h=150" end
+	local function labelOf(f)
+		local dn = f.DisplayName
+		if dn and dn ~= "" and dn ~= f.Username then return f.Username .. " (" .. dn .. ")" end
+		return f.Username
+	end
+
+	-- la sélection est enregistrée avec les réglages (liste d'IDs) et restaurée même avant que les amis soient chargés
+	saveSel()
+	Library.Defaults["ui.alert.friends"] = {}
+	Library.Items["ui.alert.friends"] = {
+		Get = flagList,
+		Set = function(_, list)
+			selected = {}
+			if type(list) == "table" then
+				for _, id in ipairs(list) do
+					local n = tonumber(id)
+					if n then selected[n] = true end
+				end
+			end
+			saveSel()
+			for id, it in pairs(rows) do pcall(it.Set, it, selected[id] == true) end
+		end,
+	}
+
+	local function buildRows(list)
+		for _, c in ipairs(listBlock.Body:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		table.clear(listBlock.Entries)
+		table.clear(rows)
+		table.clear(dots)
+		if #list == 0 then
+			listBlock:CreateParagraph({ Title = "Aucun ami", Content = "Ta liste d'amis Roblox est vide ou n'a pas pu être chargée." })
+			return
+		end
+		for _, f in ipairs(list) do
+			local id = f.Id
+			local it = listBlock:CreateToggle({ Name = labelOf(f), Default = selected[id] == true, Favorite = false,
+				Palette = false, HUD = false,
+				Callback = function(v)
+					if v then selected[id] = true else selected[id] = nil end
+					saveSel()
+				end })
+			rows[id] = it
+			local e = listBlock.Entries[#listBlock.Entries]
+			local fr = e and e.Frame
+			if fr then
+				-- petit avatar rond à gauche + pastille de statut (vert = en ligne)
+				local av = new("ImageLabel", { Position = UDim2.fromOffset(10, 5), Size = UDim2.fromOffset(24, 24),
+					BackgroundColor3 = T.Off, BorderSizePixel = 0, Image = headshot(id), ScaleType = Enum.ScaleType.Crop,
+					ZIndex = 2 }, fr)
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, av)
+				local dot = new("Frame", { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 3, 1, 3),
+					Size = UDim2.fromOffset(10, 10), BackgroundColor3 = (state[id] and ONLINE or OFFLINE),
+					BorderSizePixel = 0, ZIndex = 3 }, av)
+				dot:SetAttribute("NoAccent", true)
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+				new("UIStroke", { Color = T.Second, Thickness = 1.5, ApplyStrokeMode = BORDER }, dot)
+				dots[id] = dot
+				-- le nom se décale pour laisser la place à l'avatar
+				for _, c in ipairs(fr:GetChildren()) do
+					if c:IsA("TextLabel") then
+						c.Position = UDim2.new(0, 46, 0, 0)
+						c.Size = UDim2.new(1, -46 - 60, 1, 0)
+						break
+					end
+				end
+			end
+		end
+	end
+
+	local function refresh()
+		if busy then return end
+		busy = true
+		task.spawn(function()
+			local list, ok = fetchFriends()
+			busy = false
+			if Library._fwTok ~= tok then return end
+			if not ok and #list == 0 then
+				setStatus("Liste indisponible", "Impossible de récupérer tes amis pour l'instant. Réessaie dans un moment.")
+				return
+			end
+			table.sort(list, function(a, b) return string.lower(a.Username) < string.lower(b.Username) end)
+			lastList = list
+			-- état en ligne (avant de construire les lignes, pour que les pastilles soient justes tout de suite)
+			local prevState = state
+			state = {}
+			for _, f in ipairs(list) do
+				state[f.Id] = (f.IsOnline == true) or (Players:GetPlayerByUserId(f.Id) ~= nil)
+			end
+			local names = {}
+			for _, f in ipairs(list) do names[#names + 1] = f.Id .. ":" .. f.Username end
+			local newSig = table.concat(names, "|")
+			if newSig ~= sig then
+				sig = newSig
+				buildRows(list)
+			end
+			local nOnline = 0
+			for _, f in ipairs(list) do
+				local id = f.Id
+				local on = state[id]
+				if on then nOnline += 1 end
+				local dot = dots[id]
+				if dot and dot.Parent then tween(dot, { BackgroundColor3 = on and ONLINE or OFFLINE }, 0.3) end
+				local prev = prevState[id]
+				if seeded and prev ~= nil and prev ~= on and selected[id]
+					and aflag("master", true) and aflag("watchfriends", true) then
+					local d = tonumber(aflag("dur", 5)) or 5
+					if on then
+						Library:Notify({ Title = "Ami en ligne", Content = labelOf(f), Type = "Success", Duration = d, Icon = headshot(id) })
+					elseif aflag("watchoff", false) then
+						Library:Notify({ Title = "Ami hors ligne", Content = labelOf(f), Type = "Info", Duration = d, Icon = headshot(id) })
+					end
+				end
+			end
+			seeded = true
+			local nSel = 0
+			for _ in pairs(selected) do nSel += 1 end
+			setStatus(#list .. (#list > 1 and " amis chargés" or " ami chargé"),
+				nSel .. " surveillé(s) · " .. nOnline .. " en ligne actuellement. Dernière vérification : " .. os.date("%H:%M:%S") .. ".")
+		end)
+	end
+	Library.RefreshFriends = refresh
+	Library.WatchAllFriends = function(on)
+		selected = {}
+		if on then
+			for _, f in ipairs(lastList) do selected[f.Id] = true end
+		end
+		saveSel()
+		for id, it in pairs(rows) do pcall(it.Set, it, selected[id] == true) end
+	end
+
+	task.spawn(function()
+		task.wait(3)
+		refresh()
+		while Library._friendWatchOn and Library._fwTok == tok do
+			task.wait(math.clamp(tonumber(aflag("poll", 60)) or 60, 30, 600))
+			if Library._friendWatchOn and Library._fwTok == tok and aflag("master", true) and aflag("watchfriends", true) then
+				refresh()
+			end
+		end
+	end)
+end
+
 -- Onglet « Paramètres » prêt à l'emploi
 function Window:CreateSettingsTab(name, icon, docked)
 	local win = self
@@ -6184,8 +6456,61 @@ function Window:CreateSettingsTab(name, icon, docked)
 	end
 	rebuildSilenced()
 
+	-- ───────────── Alertes joueurs ─────────────
+	local AL = tab:CreateBlock({ Name = "Alertes joueurs", Side = "Left", Collapsed = true })
+	AL:CreateToggle({ Name = "Alertes activées", Flag = "ui.alert.master", Default = true,
+		Tooltip = "Interrupteur général de toutes les alertes ci-dessous." })
+	AL:CreateSection("Amis")
+	AL:CreateToggle({ Name = "Un ami rejoint le serveur", Flag = "ui.alert.friendjoin", Default = true })
+	AL:CreateToggle({ Name = "Un ami quitte le serveur", Flag = "ui.alert.friendleave", Default = true })
+	AL:CreateSection("Tous les joueurs")
+	AL:CreateToggle({ Name = "Un joueur rejoint", Flag = "ui.alert.anyjoin", Default = false })
+	AL:CreateToggle({ Name = "Un joueur quitte", Flag = "ui.alert.anyleave", Default = false })
+	AL:CreateSection("Joueurs surveillés")
+	AL:CreateInput({ Name = "Pseudos", Flag = "ui.alert.watch", Placeholder = "pseudo1, pseudo2", Favorite = false,
+		Tooltip = "Noms d'utilisateur ou pseudos affichés, séparés par des virgules : tu es alerté quand l'un d'eux arrive ou part." })
+	AL:CreateSection("Toi")
+	AL:CreateToggle({ Name = "Quand tu meurs", Flag = "ui.alert.death", Default = false })
+	AL:CreateSection("Affichage")
+	AL:CreateSlider({ Name = "Durée des alertes", Flag = "ui.alert.dur", Min = 2, Max = 12, Step = 0.5, Suffix = " s",
+		Default = 5 })
+	AL:CreateParagraph({ Title = "À savoir",
+		Content = "Roblox ne permet de voir que les joueurs du même serveur que toi : tu ne peux pas être prévenu quand un ami rejoint un autre jeu. Les sons suivent le type de notification (réglables dans « Sons des notifications »)." })
+	AL:CreateButton({ Name = "Tester les alertes", Favorite = false, Callback = function()
+		Library:Notify({ Title = "Ami connecté", Content = "Pseudo (@exemple)", Type = "Success", Duration = 4 })
+		task.delay(0.6, function()
+			Library:Notify({ Title = "Ami parti", Content = "Pseudo (@exemple)", Type = "Warning", Duration = 4 })
+		end)
+	end })
+	Library:_startPlayerAlerts()
+
+	-- ───────────── Amis surveillés ─────────────
+	local AF = tab:CreateBlock({ Name = "Amis surveillés", Side = "Right", Collapsed = true })
+	AF:CreateToggle({ Name = "Prévenir quand un ami surveillé est en ligne", Flag = "ui.alert.watchfriends", Default = true,
+		Tooltip = "Coche ci-dessous les amis dont tu veux recevoir une notification quand ils passent en ligne." })
+	AF:CreateToggle({ Name = "Aussi quand il se déconnecte", Flag = "ui.alert.watchoff", Default = false })
+	AF:CreateSlider({ Name = "Vérifier toutes les", Flag = "ui.alert.poll", Min = 30, Max = 300, Step = 10, Suffix = " s",
+		Default = 60, Tooltip = "Fréquence de relevé de la liste d'amis (plus bas = plus réactif, mais plus de requêtes)." })
+	local friendStatus = AF:CreateParagraph({ Title = "Chargement des amis...", Content = "La liste apparaît dans quelques secondes." })
+	AF:CreateButton({ Name = "Actualiser la liste d'amis", Favorite = false, Callback = function()
+		if Library.RefreshFriends then Library.RefreshFriends() end
+	end })
+	AF:CreateButton({ Name = "Tout surveiller", Favorite = false, Callback = function()
+		if Library.WatchAllFriends then Library.WatchAllFriends(true) end
+	end })
+	AF:CreateButton({ Name = "Ne rien surveiller", Favorite = false, Callback = function()
+		if Library.WatchAllFriends then Library.WatchAllFriends(false) end
+	end })
+	AF:CreateParagraph({ Title = "À savoir",
+		Content = "Le statut « en ligne » vient de Roblox et peut être en retard ou masqué selon la confidentialité de l'ami (pastille verte = en ligne). Un ami présent dans ton serveur est toujours détecté. Ta sélection est enregistrée avec tes réglages." })
+	local FL = tab:CreateBlock({ Name = "Mes amis", Side = "Right", Collapsed = true })
+	FL:CreateParagraph({ Title = "Chargement...", Content = "Ta liste d'amis apparaît dans quelques secondes." })
+	Library:_startFriendWatch(FL, function(title, content)
+		friendStatus.Set({ Title = title, Content = content })
+	end)
+
 	-- ───────────── Sons des notifications ─────────────
-	local SN = tab:CreateBlock({ Name = "Sons des notifications", Side = "Right", Collapsed = true })
+	local SN =tab:CreateBlock({ Name = "Sons des notifications", Side = "Right", Collapsed = true })
 	SN:CreateToggle({ Name = "Sons activés", Flag = "ui.sndon", Default = Library.NotifSound,
 		Callback = function(v) Library:SetNotifSoundEnabled(v) end })
 	SN:CreateSlider({ Name = "Volume des notifications", Flag = "ui.sndvol", Min = 0, Max = 100, Step = 5, Suffix = "%",
@@ -9337,6 +9662,10 @@ function Library:Destroy()
 		blurFx = nil
 	end
 	Library._autoDone = false
+	Library._alertsOn = nil
+	Library._friendWatchOn = nil
+	Library.WatchAllFriends = nil
+	Library.RefreshFriends = nil
 end
 
 return Library
