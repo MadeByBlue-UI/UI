@@ -4396,9 +4396,7 @@ function Block:CreateToggle(o)
 					listening = false
 					Library._listening = false
 					tween(cst, { Transparency = Sty.InputStroke }, 0.3)
-					if i.KeyCode == Enum.KeyCode.Escape then
-						chip.Text = shortKey(key) or "—"
-					elseif i.KeyCode == Enum.KeyCode.Backspace or i.KeyCode == Enum.KeyCode.Delete then
+					if i.KeyCode == Enum.KeyCode.Escape or i.KeyCode == Enum.KeyCode.Backspace or i.KeyCode == Enum.KeyCode.Delete then
 						setKey(Enum.KeyCode.Unknown)
 					else
 						setKey(i.KeyCode)
@@ -5048,7 +5046,7 @@ function Block:CreateKeybind(o)
 	label(f, o.Name or "Keybind", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -112, 1, 0) })
 	local btn = new("TextButton", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.new(0, 88, 0, 24),
-		BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = key.Name,
+		BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = (key == Enum.KeyCode.Unknown) and "Aucune" or key.Name,
 		TextColor3 = T.Text, TextSize = 12, Font = F_MED, AutoButtonColor = false,
 	}, f)
 	corner(btn, 6)
@@ -5058,7 +5056,7 @@ function Block:CreateKeybind(o)
 
 	local function apply(k, silent)
 		key = k
-		btn.Text = k.Name
+		btn.Text = (k == Enum.KeyCode.Unknown) and "Aucune" or k.Name
 		if o.Flag then Library.Flags[o.Flag] = k.Name end
 		if Library._hudRefresh then Library._hudRefresh() end
 		if Library.RefreshKeybindConflicts then Library:RefreshKeybindConflicts() end
@@ -5083,7 +5081,7 @@ function Block:CreateKeybind(o)
 				listening = false
 				Library._listening = false
 				tween(bst, { Transparency = Sty.InputStroke }, 0.3)
-				if i.KeyCode == Enum.KeyCode.Escape then btn.Text = key.Name else apply(i.KeyCode) end
+				if i.KeyCode == Enum.KeyCode.Escape then apply(Enum.KeyCode.Unknown) else apply(i.KeyCode) end
 			end
 		end)
 	end)
