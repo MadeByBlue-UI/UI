@@ -31,6 +31,16 @@
 		  même si une config est auto-chargée. Library.AutoSaveSettings = false (ou Paramètres > Fenêtre) pour couper ;
 		  Library:SaveSettings() / Library:LoadSettings() pour le faire à la main.
 
+	DISPOSITION DES BLOCS  (déplacer les blocs, sauvegardée automatiquement)
+		• Paramètres > « Disposition des blocs » > « Mode édition » : l'en-tête de chaque bloc (onglets ET Paramètres)
+		  devient une poignée. Glisse-le vers le haut / le bas, ou vers une autre colonne ; un emplacement s'affiche
+		  à l'endroit où le bloc va tomber. Le défilement se fait tout seul près des bords de la colonne.
+		• La disposition est mémorisée PAR nombre de colonnes (2 colonnes, 3 colonnes...) et par onglet / sous-onglet,
+		  dans <ConfigFolder>/_settings.json (clé « ui.blocklayout »), donc restaurée au lancement suivant, même pour
+		  les blocs que ton script crée après CreateWindow. Un bloc nouveau (jamais déplacé) va en bas de sa colonne.
+		• API : Library:SetLayoutEdit(bool) / Library.LayoutEdit  ·  Library:ResetBlockLayout([nomOnglet])
+		  Library.BlockLayout = les données  ·  Nécessite la sauvegarde auto des paramètres pour persister.
+
 	RACCOURCIS CLAVIER (Paramètres > « Raccourcis clavier »)
 		• Liste tous les keybinds de l'interface (Block:CreateKeybind). Bouton « Aller » à droite : 1er clic = confirmer,
 		  2e clic = ouvre l'onglet, déplie le bloc, défile jusqu'au keybind et le fait clignoter.
@@ -220,6 +230,8 @@ local Library = {
 	TitleFont         = "Michroma",
 	TitleFonts        = { "Michroma", "Gotham Black", "Fredoka", "Oswald", "Bangers", "Jura", "Sci-Fi", "Arcade", "Normale" },
 	TitleShine        = true,
+	LayoutEdit        = false, -- mode édition : les en-têtes de blocs se déplacent à la souris
+	BlockLayout       = {},    -- [onglet][nbColonnes][bloc] = { c = colonne, o = ordre }  (sauvegardé : « ui.blocklayout »)
 }
 
 -- Relance du script : on détruit proprement l'ancienne instance (UI + connexions)
@@ -4971,6 +4983,224 @@ function Tab:_columnFor(idx, side, n)
 	return ((idx - 1) % n) + 1
 end
 
+
+-- ---------------------------------------------------------------------------
+-- DISPOSITION DES BLOCS : où va chaque bloc, selon la disposition sauvegardée
+-- ---------------------------------------------------------------------------
+function Tab:_savedFor(n)
+	local t = Library.BlockLayout[tostring(self.Name)]
+	local s = type(t) == "table" and t[tostring(n)]
+	if type(s) == "table" and next(s) then return s end
+	return nil
+end
+
+-- renvoie (colonne, LayoutOrder) d'un bloc pour n colonnes
+function Tab:_placeOf(b, n)
+	n = n or self.NumCols
+	local s = self:_savedFor(n)
+	if s then
+		local e = s[b.Key]
+		if type(e) == "table" and tonumber(e.c) and tonumber(e.o) then
+			return math.clamp(math.floor(e.c), 1, n), math.floor(e.o)
+		end
+		return self:_columnFor(b.Index, b.Side, n), 100000 + b.DefOrder   -- bloc jamais déplacé : en bas
+	end
+	return self:_columnFor(b.Index, b.Side, n), b.DefOrder
+end
+
+function Tab:_reapplyLayout()
+	local n = self.NumCols
+	if n < 1 then return end
+	for _, b in ipairs(self.Blocks) do
+		local ci, o = self:_placeOf(b, n)
+		local col = self.Cols[ci]
+		if col then
+			if b.Frame.Parent ~= col then b.Frame.Parent = col end
+			b.Frame.LayoutOrder = o
+			b.Scroll = col
+		end
+	end
+end
+
+-- écrit la disposition actuelle de l'onglet (pour le nombre de colonnes affiché)
+function Tab:_commitLayout()
+	local n = self.NumCols
+	local L = Library.BlockLayout
+	local tk, ns = tostring(self.Name), tostring(n)
+	if type(L[tk]) ~= "table" then L[tk] = {} end
+	if type(L[tk][ns]) ~= "table" then L[tk][ns] = {} end
+	local store = L[tk][ns]
+	for ci, col in ipairs(self.Cols) do
+		local list = {}
+		for _, b in ipairs(self.Blocks) do
+			if b.Frame.Parent == col then list[#list + 1] = b end
+		end
+		table.sort(list, function(a, c)
+			if a.Frame.LayoutOrder ~= c.Frame.LayoutOrder then return a.Frame.LayoutOrder < c.Frame.LayoutOrder end
+			return a.Index < c.Index
+		end)
+		for j, b in ipairs(list) do
+			b.Frame.LayoutOrder = j
+			b.Scroll = col
+			store[b.Key] = { c = ci, o = j }
+		end
+	end
+end
+
+function Library:_reapplyLayouts()
+	local w = Library.Window
+	if not (w and w.Tabs) then return end
+	for _, t in ipairs(w.Tabs) do
+		t:_reapplyLayout()
+		for _, s in ipairs(t.SubTabs or {}) do s:_reapplyLayout() end
+	end
+end
+
+-- appelé par la restauration des réglages (clé « ui.blocklayout »)
+function Library:_setBlockLayout(d)
+	local L = Library.BlockLayout
+	for k in pairs(L) do L[k] = nil end
+	if type(d) == "table" then
+		for tk, tv in pairs(d) do
+			if type(tk) == "string" and type(tv) == "table" then L[tk] = copyVal(tv) end
+		end
+	end
+	Library:_reapplyLayouts()
+end
+
+function Library:ResetBlockLayout(tabName)
+	local L = Library.BlockLayout
+	if tabName == nil then
+		for k in pairs(L) do L[k] = nil end
+	else
+		L[tostring(tabName)] = nil
+	end
+	Library:_reapplyLayouts()
+end
+
+function Library:SetLayoutEdit(v)
+	v = v and true or false
+	Library.LayoutEdit = v
+	local w = Library.Window
+	if not (w and w.Tabs) then return end
+	for _, t in ipairs(w.Tabs) do
+		for _, b in ipairs(t:_allBlocks()) do
+			if b._setEdit then b._setEdit(v) end
+		end
+	end
+end
+
+-- Glisser un bloc par son en-tête : un emplacement suit le curseur, le bloc « fantôme » est le curseur
+function Library:_dragBlock(blk, startPos)
+	local win, tab = Library.Window, blk.Tab
+	if not (win and win.Gui) or Library._blockDragging then return end
+	Library._blockDragging = true
+
+	local inset = guiInset()
+	local sc = pxScale()
+	local frame = blk.Frame
+	local fAbs, fSize = frame.AbsolutePosition, frame.AbsoluteSize
+	local gx = math.clamp(startPos.X - fAbs.X, 12, math.max(12, fSize.X - 12))
+	local headH = 34 * sc
+
+	local last = startPos
+	local moved = false
+	local ghost, placeholder, hb
+	local curCol, curAt
+
+	local function create()
+		moved = true
+		placeholder = new("Frame", { Name = "BlockPlaceholder", Size = UDim2.new(1, 0, 0, 40),
+			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, BorderSizePixel = 0 })
+		new("UICorner", { CornerRadius = UDim.new(0, 10) }, placeholder)
+		new("UIStroke", { Color = T.Accent, Transparency = 0.45, Thickness = 1.5, ApplyStrokeMode = BORDER }, placeholder)
+		ghost = new("Frame", { Name = "BlockGhost", Size = UDim2.fromOffset(fSize.X, headH), ZIndex = 500,
+			BackgroundColor3 = T.Second, BackgroundTransparency = 0.12, BorderSizePixel = 0 }, win.Gui)
+		new("UICorner", { CornerRadius = UDim.new(0, math.floor(10 * sc)) }, ghost)
+		new("UIStroke", { Color = T.Accent, Transparency = 0.2, Thickness = 1.5, ApplyStrokeMode = BORDER }, ghost)
+		local lb = label(ghost, blk.Name, 13, { Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -28, 1, 0),
+			Font = F_BOLD, ZIndex = 501 })
+		lb.TextSize = math.max(9, math.floor(13 * sc * (Library.FontScale or 1) + 0.5))
+		frame.Visible = false
+		uiSnd("fold")
+	end
+
+	local function step()
+		Library._busyUntil = os.clock() + 0.3
+		if not moved then
+			if (last - startPos).Magnitude > 5 then create() else return end
+		end
+		local cur = Vector2.new(last.X, last.Y + inset.Y)
+		ghost.Position = UDim2.fromOffset(cur.X - gx, cur.Y - headH / 2)
+
+		-- colonne visée : la plus proche horizontalement
+		local best, bd = 1, nil
+		for i, col in ipairs(tab.Cols) do
+			local ap, as = col.AbsolutePosition, col.AbsoluteSize
+			local d = 0
+			if cur.X < ap.X then d = ap.X - cur.X elseif cur.X > ap.X + as.X then d = cur.X - ap.X - as.X end
+			if not bd or d < bd then best, bd = i, d end
+		end
+		local col = tab.Cols[best]
+
+		-- défilement automatique près des bords
+		local ap, as = col.AbsolutePosition, col.AbsoluteSize
+		local edge = 46
+		if cur.Y < ap.Y + edge then
+			col.CanvasPosition = Vector2.new(0, math.max(0, col.CanvasPosition.Y - 14))
+		elseif cur.Y > ap.Y + as.Y - edge then
+			col.CanvasPosition = Vector2.new(0, col.CanvasPosition.Y + 14)
+		end
+
+		-- position d'insertion parmi les blocs visibles de la colonne
+		local sibs = {}
+		for _, b in ipairs(tab.Blocks) do
+			if b ~= blk and b.Frame.Parent == col and b.Frame.Visible then sibs[#sibs + 1] = b end
+		end
+		table.sort(sibs, function(a, c)
+			if a.Frame.LayoutOrder ~= c.Frame.LayoutOrder then return a.Frame.LayoutOrder < c.Frame.LayoutOrder end
+			return a.Index < c.Index
+		end)
+		local at = #sibs + 1
+		for k, b in ipairs(sibs) do
+			local f = b.Frame
+			if cur.Y < f.AbsolutePosition.Y + f.AbsoluteSize.Y / 2 then at = k break end
+		end
+		if col ~= curCol or at ~= curAt then
+			curCol, curAt = col, at
+			placeholder.Parent = col
+			for k, b in ipairs(sibs) do b.Frame.LayoutOrder = (k < at) and k or (k + 1) end
+			placeholder.LayoutOrder = at
+		end
+	end
+
+	hb = RunService.Heartbeat:Connect(step)
+
+	startDrag(function(p) last = p end, blk.Scroll, startPos, function()
+		if hb then hb:Disconnect() hb = nil end
+		Library._blockDragging = false
+		if not moved then return end
+		local pp, ps = placeholder.AbsolutePosition, placeholder.AbsoluteSize
+		if curCol then
+			frame.Parent = curCol
+			frame.LayoutOrder = curAt
+			blk.Scroll = curCol
+		end
+		frame.Visible = true
+		placeholder:Destroy()
+		tab:_commitLayout()
+		-- le fantôme glisse vers l'emplacement puis disparaît
+		tween(ghost, { Position = UDim2.fromOffset(pp.X, pp.Y), Size = UDim2.fromOffset(ps.X, ps.Y),
+			BackgroundTransparency = 1 }, 0.2)
+		for _, d in ipairs(ghost:GetDescendants()) do
+			if d:IsA("TextLabel") then tween(d, { TextTransparency = 1 }, 0.18) end
+			if d:IsA("UIStroke") then tween(d, { Transparency = 1 }, 0.18) end
+		end
+		local g = ghost
+		task.delay(0.25, function() g:Destroy() end)
+	end)
+end
+
 function Tab:_layoutColumns()
 	local n, gap = self.NumCols, 10
 	for i, c in ipairs(self.Cols) do
@@ -4988,8 +5218,10 @@ function Tab:SetColumns(n)
 	self.TwoCols = n >= 2
 	while #self.Cols < n do self.Cols[#self.Cols + 1] = self._newColumn() end
 	for _, b in ipairs(self.Blocks) do
-		local col = self.Cols[self:_columnFor(b.Index, b.Side, n)]
+		local ci, o = self:_placeOf(b, n)
+		local col = self.Cols[ci]
 		if b.Frame.Parent ~= col then b.Frame.Parent = col end
+		b.Frame.LayoutOrder = o
 		b.Scroll = col
 	end
 	while #self.Cols > n do table.remove(self.Cols):Destroy() end
@@ -5001,12 +5233,22 @@ function Tab:CreateBlock(o)
 	o = o or {}
 	local side = tostring(o.Side):lower() == "right" and "right" or "left"
 	local idx = #self.Blocks + 1
-	local col = self.Cols[self:_columnFor(idx, side)]
 	self.Order = (self.Order or 0) + 1
+	-- clé stable du bloc (nom ; « #2 » si deux blocs portent le même nom dans l'onglet)
+	local bkey = tostring(o.Name or "Block")
+	do
+		local used = {}
+		for _, b in ipairs(self.Blocks) do used[b.Key] = true end
+		local base, k = bkey, 1
+		while used[bkey] do k += 1 bkey = base .. "#" .. k end
+	end
+	local defOrder = self.Order
+	local colIdx, layoutOrder = self:_placeOf({ Key = bkey, Index = idx, Side = side, DefOrder = defOrder })
+	local col = self.Cols[colIdx]
 
 	local frame = new("Frame", {
 		Name = "BlockBackground", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY,
-		BackgroundColor3 = T.Second, BackgroundTransparency = 0.35, BorderSizePixel = 0, LayoutOrder = self.Order,
+		BackgroundColor3 = T.Second, BackgroundTransparency = 0.35, BorderSizePixel = 0, LayoutOrder = layoutOrder,
 	}, col)
 	corner(frame, 10)
 	trackStyled(frame, stroke(frame, 0.9), "block")
@@ -5063,7 +5305,10 @@ function Tab:CreateBlock(o)
 			end)
 		end
 	end
-	head.MouseButton1Click:Connect(function() uiSnd("fold") setCollapsed(not collapsed) end)
+	head.MouseButton1Click:Connect(function()
+		if Library.LayoutEdit then return end   -- en mode édition l'en-tête sert à déplacer le bloc
+		uiSnd("fold") setCollapsed(not collapsed)
+	end)
 	if o.Collapsed then
 		collapsed = true
 		clip.AutomaticSize = AN
@@ -5073,6 +5318,7 @@ function Tab:CreateBlock(o)
 
 	local blk = setmetatable({
 		Frame = frame, Body = body, Scroll = col, Tab = self, Name = o.Name or "Block", Side = side, Index = idx,
+		Key = bkey, DefOrder = defOrder,
 		Entries = {}, _collapse = setCollapsed, _isCollapsed = function() return collapsed end,
 	}, Block)
 	self.Blocks[#self.Blocks + 1] = blk
@@ -5081,6 +5327,34 @@ function Tab:CreateBlock(o)
 		Get = function() return collapsed end,
 		Set = function(_, v) setCollapsed(v and true or false) end,
 	}
+
+	-- Mode édition de la disposition : poignée ⠿ à la place de la flèche + en-tête surligné, glisser pour déplacer
+	do
+		local overlay = new("Frame", { Name = "EditOverlay", Position = UDim2.fromOffset(3, 3), Size = UDim2.new(1, -6, 1, -6),
+			BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false, ZIndex = 0 }, head)
+		new("UICorner", { CornerRadius = UDim.new(0, 8) }, overlay)
+		local grip = new("Frame", { Name = "Grip", BackgroundTransparency = 1, Size = UDim2.fromOffset(16, 16),
+			Position = UDim2.new(1, -28, 0.5, -8), Visible = false }, head)
+		for cx = 0, 1 do
+			for ry = 0, 2 do
+				local dot = new("Frame", { Size = UDim2.fromOffset(3, 3), Position = UDim2.fromOffset(3 + cx * 7, 2 + ry * 5),
+					BackgroundColor3 = T.Text, BorderSizePixel = 0 }, grip)
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+			end
+		end
+		blk._setEdit = function(on)
+			overlay.BackgroundColor3 = T.Accent
+			overlay.Visible = true
+			tween(overlay, { BackgroundTransparency = on and 0.9 or 1 }, 0.25)
+			task.delay(on and 0 or 0.26, function() if Library.LayoutEdit == on then overlay.Visible = on end end)
+			grip.Visible = on
+			arrow.Visible = not on
+		end
+		head.InputBegan:Connect(function(i)
+			if Library.LayoutEdit and isPress(i) then Library:_dragBlock(blk, i.Position) end
+		end)
+		if Library.LayoutEdit then blk._setEdit(true) end
+	end
 	return blk
 end
 
@@ -5598,6 +5872,27 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Callback = function(v) Library:SetShape(v) end })
 	F:CreateToggle({ Name = "Respiration du contour", Flag = "ui.breath", Default = Library.Breathing,
 		Callback = opt("Breathing") })
+
+	-- ───────────── Disposition des blocs ─────────────
+	local LY = tab:CreateBlock({ Name = "Disposition des blocs", Side = "Left" })
+	LY:CreateSection("Déplacer les blocs")
+	LY:CreateToggle({ Name = "Mode édition", Default = false, Favorite = false,
+		Tooltip = "Active : glisse l'en-tête d'un bloc (dans n'importe quel onglet, Paramètres compris) pour le déplacer.",
+		Callback = function(v)
+			Library:SetLayoutEdit(v)
+			if v then
+				Library:Notify({ Title = "Disposition", Type = "Info", Duration = 4,
+					Content = "Glisse l'en-tête d'un bloc pour le déplacer. Désactive le mode pour replier / déplier à nouveau." })
+			end
+		end })
+	LY:CreateParagraph({ Title = "Comment ça marche",
+		Content = "1. Active « Mode édition ».\n2. Glisse l'en-tête d'un bloc : vers le haut / bas, ou vers une autre colonne.\n3. Relâche : la position est sauvegardée toute seule (avec les autres paramètres) et retrouvée au prochain lancement.\nLa disposition est retenue séparément pour chaque nombre de colonnes." })
+	LY:CreateButton({ Name = "Réinitialiser la disposition", Confirm = true, Favorite = false,
+		Tooltip = "Remet tous les blocs de tous les onglets à leur place d'origine.",
+		Callback = function()
+			Library:ResetBlockLayout()
+			Library:Notify({ Title = "Disposition", Content = "Tous les blocs sont revenus à leur place.", Type = "Success", Duration = 3 })
+		end })
 
 	-- ───────────── Trou noir & fond ─────────────
 	local H = tab:CreateBlock({ Name = "Trou noir & fond", Side = "Left", Collapsed = true })
@@ -8849,6 +9144,14 @@ function Library:CreateWindow(cfg)
 		end,
 	}
 	if Library.HudPos then Library.Flags["ui.hudpos"] = Library.HudPos end
+	-- disposition des blocs : sauvegardée / restaurée avec les réglages (clé « ui.blocklayout »)
+	Library.LayoutEdit = false
+	for k in pairs(Library.BlockLayout) do Library.BlockLayout[k] = nil end
+	Library.Flags["ui.blocklayout"] = Library.BlockLayout
+	Library.Items["ui.blocklayout"] = {
+		Get = function() return Library.BlockLayout end,
+		Set = function(_, d) Library:_setBlockLayout(d) end,
+	}
 
 	if cfg.Settings ~= false then
 		win._noSelect = true
