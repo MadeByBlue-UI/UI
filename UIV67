@@ -161,65 +161,6 @@ local LP           = Players.LocalPlayer
 local Stats        = game:GetService("Stats")
 local Lighting     = game:GetService("Lighting")
 
--- 🔊 SYSTÈME DE SONS (adapté d'Enhanced_UI)
-local Sounds = {
-	Click = {Id = "rbxassetid://6895079853", Volume = 0.3, Pitch = 1.0, Cooldown = 0.03},
-	Hover = {Id = "rbxassetid://10066936758", Volume = 0.15, Pitch = 1.2, Cooldown = 0.08},
-	Toggle = {Id = "rbxassetid://6895079853", Volume = 0.25, Pitch = 1.1, Cooldown = 0.03},
-	Slide = {Id = "rbxassetid://10066936758", Volume = 0.12, Pitch = 0.9, Cooldown = 0.05},
-	Open = {Id = "rbxassetid://6895079853", Volume = 0.35, Pitch = 0.9, Cooldown = 0.1},
-	Close = {Id = "rbxassetid://6895079853", Volume = 0.3, Pitch = 0.8, Cooldown = 0.1},
-	Success = {Id = "rbxassetid://6026984224", Volume = 0.35, Pitch = 1.0, Cooldown = 0.1},
-	Error = {Id = "rbxassetid://1864343113", Volume = 0.3, Pitch = 1.0, Cooldown = 0.1}
-}
-local POOL_SIZE = 4
-local soundPool = {}
-local soundsEnabled = true
-
-local function PlaySound(soundName)
-	if not soundsEnabled then return end
-	local data = Sounds[soundName]
-	if not data then return end
-
-	local now = os.clock()
-	if now - (data.Last or 0) < (data.Cooldown or 0.03) then return end
-	data.Last = now
-
-	-- Pool de sons réutilisables
-	if not soundPool[soundName] then
-		soundPool[soundName] = {}
-	end
-
-	local pool = soundPool[soundName]
-	local sound = nil
-
-	-- Chercher un son libre dans le pool
-	for i = 1, #pool do
-		if not pool[i].IsPlaying then
-			sound = pool[i]
-			break
-		end
-	end
-
-	-- Créer un nouveau son si nécessaire
-	if not sound or not sound.Parent then
-		sound = Instance.new("Sound")
-		sound.SoundId = data.Id
-		sound.Volume = data.Volume
-		sound.PlaybackSpeed = data.Pitch
-		sound.Parent = CoreGui
-		table.insert(pool, sound)
-		
-		-- Limiter la taille du pool
-		if #pool > POOL_SIZE then
-			local oldest = table.remove(pool, 1)
-			if oldest and oldest.Parent then oldest:Destroy() end
-		end
-	end
-
-	sound:Play()
-end
-
 local Library = {
 	Flags             = {},
 	Items             = {},
@@ -227,7 +168,6 @@ local Library = {
 	GlobalCornerValue = 10,    -- 10 = rayon normal (le script le change via son slider)
 	FireDefaults      = false, -- true = appelle les Callback avec la valeur Default à la création
 	StarCount         = 40,    -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 pour désactiver)
-	SoundsEnabled     = true,  -- 🔊 Active/désactive les sons
 	ConfigFolder      = "Ui-Lib",
 	Scale             = 1,
 	Animations        = true,  -- false = aucune animation (PC faibles)
@@ -1162,12 +1102,6 @@ end
 function Library:SetNotifSoundEnabled(v) Library.NotifSound = v and true or false end
 function Library:SetNotifVolume(v) Library.NotifVolume = math.clamp(tonumber(v) or 0.6, 0, 1) end
 
--- 🔊 Activer/désactiver les sons d'interface (hover, click, toggle, slide)
-function Library:SetSoundsEnabled(v)
-	Library.SoundsEnabled = v and true or false
-	soundsEnabled = v and true or false
-end
-
 -- ───────────── Pastille « +N » (notifications masquées au-delà du maximum) ─────────────
 local pillHost, pillBtn, pillScale, pillGrad
 local pillCount = 0
@@ -1865,7 +1799,6 @@ function Library:Notify(o)
 			new("UICorner", { CornerRadius = UDim.new(0, 13) }, btn)
 			new("UIPadding", { PaddingLeft = UDim.new(0, 13), PaddingRight = UDim.new(0, 13) }, btn)
 			btn.MouseEnter:Connect(function()
-		PlaySound("Hover")  -- 🔊 Son au survol
 				tween(btn, { BackgroundTransparency = 0.76 }, 0.15)
 				hoverChange(1)
 			end)
@@ -3186,7 +3119,6 @@ function Block:CreateButton(o)
 	local armed, armToken = false, 0
 	local baseText = o.Name or "Button"
 	b.MouseButton1Click:Connect(function()
-		PlaySound("Click")  -- 🔊 Son au clic
 		if o.Confirm then
 			if not armed then
 				armed = true
@@ -3543,10 +3475,7 @@ function Block:CreateToggle(o)
 		if o.Flag then Library.Flags[o.Flag] = v end
 		paint(v)
 		if Library._hudRefresh then Library._hudRefresh() end
-		if not silent then
-			PlaySound("Toggle")  -- 🔊 Son toggle
-			fire(o.Callback, v)
-		end
+		if not silent then fire(o.Callback, v) end
 	end
 	local item = {}
 	item.Set = function(...) apply((unself(item, ...)) and true or false) end
@@ -3718,7 +3647,6 @@ function Block:CreateSlider(o)
 	hit.InputBegan:Connect(function(i)
 		if isPress(i) then
 			tween(knob, { Size = UDim2.new(0, 17, 0, 17) }, 0.2, BACK)
-			PlaySound("Slide")  -- 🔊 Son au début du glissement
 			startDrag(function(p)
 				local t = math.clamp((p.X - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1)
 				apply(min + t * (max - min), false, true)
@@ -4082,8 +4010,7 @@ function Block:CreateDropdown(o)
 			b.MouseLeave:Connect(function()
 				if not isOn(text) then tween(b, { BackgroundTransparency = 1 }, 0.2) end
 			end)
-			b.MouseButton1Click:Connect(function()
-		PlaySound("Click")  -- 🔊 Son au clic pick(text) end)
+			b.MouseButton1Click:Connect(function() pick(text) end)
 		end
 		restyle()
 		layout()
@@ -5083,7 +5010,6 @@ function Window:CreateTab(name, _, icon)
 	end
 	tab.Bar, tab.Label, tab.Dot = bar, txt, dot
 	btn.MouseEnter:Connect(function()
-		PlaySound("Hover")  -- 🔊 Son au survol
 		if win.Current ~= tab then tween(btn, { BackgroundTransparency = 0.95 }, 0.2) end
 		if not txt:GetAttribute("BaseX") then txt:SetAttribute("BaseX", txt.Position.X.Offset) end
 		tween(txt, { Position = UDim2.new(0, txt:GetAttribute("BaseX") + 4, 0, 0) }, 0.25)
@@ -5530,9 +5456,6 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Callback = function(v) Library:SetAnimSpeed(speeds[v] or 1) end })
 	B:CreateToggle({ Name = "Onde au clic", Flag = "ui.ripple", Default = Library.Ripple,
 		Tooltip = "Une onde part du point de clic sur les boutons, interrupteurs et onglets.", Callback = opt("Ripple") })
-	B:CreateToggle({ Name = "Sons d'interface", Flag = "ui.sounds", Default = Library.SoundsEnabled,
-		Tooltip = "Sons doux au survol, clic, toggle, slide. Désactive si tu préfères le silence.",
-		Callback = function(v) Library:SetSoundsEnabled(v) end })
 	B:CreateToggle({ Name = "Indicateur FPS / ping", Flag = "ui.fps", Default = win.StatsVisible,
 		Callback = function(v) win:SetStats(v) end })
 
@@ -5677,8 +5600,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 					Text = "Réactiver", TextColor3 = T.Text, TextSize = 12, Font = F_MED, AutoButtonColor = false }, f)
 				corner(b, 6)
 				trackStyled(b, stroke(b, 0.9), "input")
-				b.MouseButton1Click:Connect(function()
-		PlaySound("Click")  -- 🔊 Son au clic Library:UnsilenceNotif(e.Key) end)
+				b.MouseButton1Click:Connect(function() Library:UnsilenceNotif(e.Key) end)
 			end
 			NS:CreateButton({ Name = "Tout réactiver", Favorite = false, Callback = function() Library:UnsilenceAllNotifs() end })
 		end
@@ -6405,8 +6327,7 @@ do
 				TextColor3 = T.Text, TextSize = 14, Font = F_BOLD, AutoButtonColor = false, BorderSizePixel = 0, ZIndex = 4 }, P.core)
 			new("UICorner", { CornerRadius = UDim.new(1, 0) }, b)
 			new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.6, ApplyStrokeMode = BORDER }, b)
-			b.MouseButton1Click:Connect(function()
-		PlaySound("Click")  -- 🔊 Son au clic changePage(delta) end)
+			b.MouseButton1Click:Connect(function() changePage(delta) end)
 			return b
 		end
 		P.prev = navBtn("<", -44, -1)
@@ -6476,7 +6397,6 @@ do
 			local slot = { btn = btn, st = st, sc = sc, badge = badge, num = num, name = name, sub = sub, dot = dot, pos = pos }
 			P.slots[i] = slot
 			btn.MouseEnter:Connect(function()
-		PlaySound("Hover")  -- 🔊 Son au survol
 				tween(st, { Transparency = 0.08 }, 0.15)
 				tween(sc, { Scale = 1.07 }, 0.2, BACK)
 				local it = P.shown[i]
@@ -7330,7 +7250,6 @@ local spotOk, spotErr = pcall(function()
 			b.MouseEnter:Connect(function() tween(b, { Size = UDim2.fromOffset(28, 28) }, 0.15, BACK) end)
 			b.MouseLeave:Connect(function() tween(b, { Size = UDim2.fromOffset(24, 24) }, 0.2) end)
 			b.MouseButton1Click:Connect(function()
-		PlaySound("Click")  -- 🔊 Son au clic
 				pcall(it.Set, it, c)
 				show()
 				remember(e)
