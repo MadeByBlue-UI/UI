@@ -95,7 +95,7 @@
 		Position + taille de la fenêtre et état replié des blocs sont enregistrés dans les configs.
 	INTERFACE
 		• Double-clic sur la barre de titre : réduit à la barre seule / restaure (Paramètres > Fenêtre > « Barre réduite visible » :
-		  désactivé = la barre disparaît, la touche d'ouverture rouvre la fenêtre).   • Ctrl+R : recentre.
+		  activé = la barre réduite reste toujours à l'écran, masquée ou non ; masquer une fenêtre dépliée la réduit en barre).   • Ctrl+R : recentre.
 		• Bouton « = » dans la barre de titre : tout replier / déplier (Tab:CollapseAll / Tab:ExpandAll).
 		• Poignées de redimensionnement sur tous les bords et coins.
 		• Tooltips : { Tooltip = "texte" } sur Button/Toggle/Slider/Dropdown/Input/Keybind/ColorPicker.
@@ -194,7 +194,7 @@ local Library = {
 	AnimSpeed         = 1,     -- multiplicateur de vitesse des animations
 	WindowAnim        = true,  -- false = la fenêtre s'ouvre / se ferme instantanément (sans effet smooth)
 	LockPosition      = false, -- true = la fenêtre ne peut plus être déplacée ni redimensionnée à la souris
-	MiniBarVisible    = true,  -- false = la barre réduite (double-clic sur le titre) disparaît au lieu de rester affichée
+	MiniBarVisible    = false, -- true = la barre réduite reste toujours affichée (masquer la fenêtre dépliée la réduit en barre, la rouvrir la redéplie)
 	FontScale         = 1,
 	NotifPos          = "BottomRight",
 	NotifDuration     = 4,
@@ -2669,7 +2669,12 @@ end
 function Library:SetAnimSpeed(v) Library.AnimSpeed = math.clamp(tonumber(v) or 1, 0.25, 4) end
 function Library:SetWindowAnim(v) Library.WindowAnim = (v ~= false) end
 function Library:SetLockPosition(v) Library.LockPosition = v and true or false end
-function Library:SetMiniBarVisible(v) Library.MiniBarVisible = (v ~= false) end
+function Library:SetMiniBarVisible(v)
+	Library.MiniBarVisible = (v == true)
+	local w = Library.Window
+	if w and w.Main and not w.Open and not Library.MiniBarVisible then w.Main.Visible = false end   -- réglage coupé alors que l'interface est masquée : la barre s'en va
+	if w and w.Main and not w.Open and Library.MiniBarVisible and w.IsMinimized and w:IsMinimized() then w.Main.Visible = true end
+end
 function Library:ToggleLockPosition() Library.LockPosition = not Library.LockPosition return Library.LockPosition end
 
 local function guiRoots()
@@ -6229,8 +6234,8 @@ function Window:CreateSettingsTab(name, icon, docked)
 	D:CreateToggle({ Name = "Verrouiller la position", Flag = "ui.lockpos", Default = Library.LockPosition == true,
 		Tooltip = "La fenêtre ne peut plus être déplacée ni redimensionnée à la souris (le double-clic pour réduire et Ctrl+R restent possibles).",
 		Callback = function(v) Library:SetLockPosition(v) end })
-	D:CreateToggle({ Name = "Barre réduite visible", Flag = "ui.minibar", Default = Library.MiniBarVisible ~= false,
-		Tooltip = "Activé : la barre réduite (double-clic sur le titre) reste affichée pendant que tu joues. Désactivé : elle disparaît, la touche d'ouverture rouvre la fenêtre.",
+	D:CreateToggle({ Name = "Barre réduite visible", Flag = "ui.minibar", Default = Library.MiniBarVisible == true,
+		Tooltip = "Activé : la barre réduite reste toujours à l'écran, que tu masques l'interface ou non (si la fenêtre est dépliée, la masquer la réduit en barre ; la rouvrir la redéplie). Désactivé : tout se masque normalement.",
 		Callback = function(v) Library:SetMiniBarVisible(v) end })
 	D:CreateButton({ Name = "Réinitialiser la fenêtre", Favorite = false,
 		Tooltip = "Recentre la fenêtre et remet sa taille d'origine (Ctrl+R).",
@@ -8604,14 +8609,9 @@ function Library:CreateWindow(cfg)
 			tgtSize = preSize or Vector2.new(W0, H0)
 		end
 		for _, h in ipairs(handles) do h.Visible = not v end
-		if v then
-			-- option « Barre réduite visible » désactivée : la barre se cache (comme une fermeture), la touche d'ouverture rouvre la fenêtre
-			task.delay(0.45, function()
-				if collapsed and Library.MiniBarVisible == false and win.Open then win:Toggle(false) end
-			end)
-		end
 		Library._busyUntil = os.clock() + 0.6
 		task.delay(0.7, saveWin)
+		if not v and not win.Open then win:Toggle(true) end   -- barre gardée à l'écran puis dépliée : l'interface repasse en « ouverte »
 	end
 
 	local function evenSize(n) return math.floor(n / 2 + 0.5) * 2 end
@@ -8727,6 +8727,7 @@ function Library:CreateWindow(cfg)
 		fpsLabel.Visible = statsOn
 	end
 	function win:SetMinimized(v) setMinimized(v) end
+	function win:IsMinimized() return collapsed end
 
 	foldBtn.MouseButton1Click:Connect(function()
 		local tab = win.Current
@@ -8840,9 +8841,6 @@ function Library:CreateWindow(cfg)
 		v = v and true or false
 		if v == self.Open then return end
 		self.Open = v
-		if v and collapsed and Library.MiniBarVisible == false then
-			setMinimized(false)   -- on rouvre en grand, pas en barre réduite
-		end
 		if not Library._quietWin then uiSnd(v and "winopen" or "winclose") end
 		if Library._hudRefresh then Library._hudRefresh() end
 		local noAnim = Library.WindowAnim == false   -- réglage « Animation ouverture / fermeture » désactivé
@@ -8855,6 +8853,13 @@ function Library:CreateWindow(cfg)
 		-- coupe les animations d'ouverture / fermeture encore en cours
 		if self._twA then pcall(function() self._twA:Cancel() end) self._twA = nil end
 		if self._twB then pcall(function() self._twB:Cancel() end) self._twB = nil end
+		-- « Barre réduite visible » : masquer l'interface ne retire jamais la barre. Si la fenêtre était dépliée,
+		-- elle se réduit en barre (et se redéplie à la réouverture) ; si elle était déjà réduite, elle ne bouge pas.
+		local keepBar = (not v) and Library.MiniBarVisible == true and (collapsed or not Library._quietWin)
+		if keepBar then
+			self._autoMini = not collapsed
+			if not collapsed then setMinimized(true) end
+		end
 		if v then
 			main.Visible = true
 			if noAnim then
@@ -8864,10 +8869,18 @@ function Library:CreateWindow(cfg)
 				self._twA = tween(uiScale, { Scale = scaleBase }, 0.55, BACK)
 				if useCanvas then self._twB = tween(main, { GroupTransparency = 0 }, 0.35) end
 			end
+			local auto = self._autoMini
+			self._autoMini = false
+			if auto and collapsed then setMinimized(false) end   -- réduite automatiquement au masquage : on la redéplie
 		else
 			if Library._openDD then Library._openDD(false) end
 			self:RefreshShape()
-			if noAnim then
+			if keepBar then
+				-- « Barre réduite visible » : la barre réduite reste à l'écran, on coupe seulement le reste (flou, étoiles)
+				uiScale.Scale = scaleBase
+				if useCanvas then main.GroupTransparency = 0 end
+				main.Visible = true
+			elseif noAnim then
 				uiScale.Scale = scaleBase
 				if useCanvas then main.GroupTransparency = 1 end
 				main.Visible = false
@@ -8905,7 +8918,7 @@ function Library:CreateWindow(cfg)
 
 	hideBtn.MouseButton1Click:Connect(function()
 		win:Toggle(false)
-		if not hintShown and not (UIS.TouchEnabled and not UIS.KeyboardEnabled) then
+		if not hintShown and not (Library.MiniBarVisible and collapsed) and not (UIS.TouchEnabled and not UIS.KeyboardEnabled) then
 			hintShown = true
 			Library:Notify({ Title = "Interface masquée",
 				Content = "Appuie sur " .. tostring(toggleKey.Name or toggleKey) .. " pour la rouvrir.",
