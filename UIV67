@@ -131,6 +131,17 @@
 		  / = recherche, Échap = retour. Boutons lancés, toggles basculés, curseurs / listes / champs / couleurs / touches
 		  réglés sans ouvrir la fenêtre. Library:OpenPalette() / ClosePalette() / TogglePalette(). { Palette = false } exclut un élément.
 
+	─────────────  V8 : CONFLITS DE TOUCHES, HUD, SOUS-ONGLETS, CONSOLE, « NE PLUS AFFICHER »  ─────────────
+		• Conflits de keybinds : Paramètres > Raccourcis clavier affiche un avertissement ⚠ (liste des touches partagées),
+		  les lignes concernées passent en orange ; pastille « ! » sur les éléments, notification quand tu en crées un.
+		• HUD des actifs : Paramètres > HUD des actifs (afficher, touches, seulement fenêtre fermée, taille, replacer).
+		  Il se déplace à la souris / au doigt et sa position est sauvegardée avec les réglages.
+		• Slider à deux poignées : Block:CreateRangeSlider({ Name, Min, Max, Step, MinGap, Default = { Low, High }, Callback = function(lo, hi) })
+		• Sous-onglets : local subs = Tab:CreateSubTabs({ "A", "B" }) puis subs[1]:CreateBlock({...}) (voir plus bas).
+		• Console : Window:CreateConsoleTab("Console") affiche les print / warn / erreurs ; Library:ConsoleLog(texte, type).
+		• « Ne plus afficher » : une notification répétée (x2) reçoit un bouton qui la masque ; liste + réactivation dans
+		  Paramètres > Notifications masquées (Library:SilenceNotif / UnsilenceNotif / UnsilenceAllNotifs).
+
 	─────────────  V7 : TITRE ÉTIRÉ, BARRE DE RECHERCHE (Ctrl+T)  ─────────────
 		• Titre étiré + en gras (Library.TitleStretch / TitleBold, Réglages > Apparence). Le texte se réduit tout seul
 		  pour tenir dans la barre de titre. Si tu vois des carrés entre les lettres : Library.TitleSpacing = " ".
@@ -1252,6 +1263,8 @@ function Library:Notify(o)
 	local stackable = (o.Stack ~= false) and o.Progress == nil and not o.Loading
 		and kind ~= "Loading" and not o.Actions
 	local key = kind .. "|" .. tostring(o.Title or "") .. "|" .. tostring(o.Content or "")
+	-- « ne plus afficher » : cette notification a été masquée par l'utilisateur
+	if Library.NotifSilenced[key] and not o.Force then return noopHandle() end
 	if stackable and Library.NotifStack then
 		for _, e in ipairs(notifEntries) do
 			if not e.dead and e.stackable and e.key == key then
@@ -1764,9 +1777,35 @@ function Library:Notify(o)
 			if hov == 0 then resumeTimer() end
 		end
 	end
+	-- bouton « Ne plus afficher » : apparaît quand la même notification se répète (stackable seulement)
+	local silenceBtn
+	local function addSilenceBtn()
+		if silenceBtn or not stackable or Library.NotifSilenceButton == false then return end
+		actRow.Visible = true
+		silenceBtn = new("TextButton", { Size = UDim2.new(0, 0, 0, 26), AutomaticSize = Enum.AutomaticSize.X,
+			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, Text = "Ne plus afficher",
+			TextColor3 = T.Text, TextSize = 12, Font = F_MED, AutoButtonColor = false, BorderSizePixel = 0,
+			LayoutOrder = 99, ZIndex = 6 }, actRow)
+		new("UICorner", { CornerRadius = UDim.new(0, 13) }, silenceBtn)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 13), PaddingRight = UDim.new(0, 13) }, silenceBtn)
+		silenceBtn.MouseEnter:Connect(function()
+			tween(silenceBtn, { BackgroundTransparency = 0.76 }, 0.15)
+			hoverChange(1)
+		end)
+		silenceBtn.MouseLeave:Connect(function()
+			tween(silenceBtn, { BackgroundTransparency = 0.9 }, 0.2)
+			hoverChange(-1)
+		end)
+		silenceBtn.MouseButton1Click:Connect(function()
+			Library:SilenceNotif(key, { Type = kind, Title = tostring(o.Title or "Notification"),
+				Content = tostring(o.Content or "") })
+			dismiss(nil, "silenced")
+		end)
+	end
 	entry.bump = function()
 		if dead then return end
 		count += 1
+		if count >= (Library.NotifSilenceAfter or 2) then addSilenceBtn() end
 		badgeL.Text = "x" .. count
 		badge.Visible = true
 		badgeScale.Scale = 1.6
@@ -1820,6 +1859,53 @@ function Library:Notify(o)
 	return handle
 end
 
+-- « Ne plus afficher » : Library:SilenceNotif(clé, { Type, Title, Content }) / UnsilenceNotif(clé) / UnsilenceAllNotifs()
+-- Library.NotifSilenceButton = false : pas de bouton · Library.NotifSilenceAfter = nombre de répétitions avant le bouton (2)
+-- La liste est enregistrée avec les réglages (flag « ui.silenced ») et gérée dans Paramètres > Notifications masquées.
+Library.NotifSilenceButton = true
+Library.NotifSilenceAfter  = 2
+local function silencedFlag()
+	local out = {}
+	for k, v in pairs(Library.NotifSilenced) do
+		out[#out + 1] = { Key = k, Type = v.Type, Title = v.Title, Content = v.Content }
+	end
+	table.sort(out, function(a, b) return a.Key < b.Key end)
+	Library.Flags["ui.silenced"] = out
+	if Library._onSilencedChanged then pcall(Library._onSilencedChanged) end
+end
+function Library:SilenceNotif(key, info)
+	if type(key) ~= "string" then return end
+	Library.NotifSilenced[key] = info or {}
+	silencedFlag()
+end
+function Library:UnsilenceNotif(key)
+	Library.NotifSilenced[key] = nil
+	silencedFlag()
+end
+function Library:UnsilenceAllNotifs()
+	table.clear(Library.NotifSilenced)
+	silencedFlag()
+end
+Library._registerSilenced = function()
+	Library.Flags["ui.silenced"] = {}
+	Library.Items["ui.silenced"] = {
+		Get = function() return Library.Flags["ui.silenced"] end,
+		Set = function(_, list)
+			table.clear(Library.NotifSilenced)
+			if type(list) == "table" then
+				for _, e in ipairs(list) do
+					if type(e) == "table" and type(e.Key) == "string" then
+						Library.NotifSilenced[e.Key] = { Type = e.Type, Title = e.Title, Content = e.Content }
+					end
+				end
+			end
+			silencedFlag()
+		end,
+	}
+	Library.Defaults["ui.silenced"] = {}
+	silencedFlag()
+end
+
 -- Raccourcis : Library:NotifySuccess("Titre", "Contenu", 5)
 for _, k in ipairs({ "Info", "Success", "Warning", "Error" }) do
 	Library["Notify" .. k] = function(_, title, content, duration, extra)
@@ -1837,6 +1923,174 @@ function Library:NotifyProgress(o)
 	o = o or {}
 	o.Progress = tonumber(o.Progress) or 0
 	return Library:Notify(o)
+end
+
+-- ============================================================================
+-- CONSOLE INTÉGRÉE : affiche les print / warn (et erreurs) dans un onglet
+--   Window:CreateConsoleTab("Console")  ->  onglet avec filtre (Tout / Print / Warn / Erreurs), pause, défilement
+--   auto, vider, copier. Tout ce que le client Roblox écrit dans la sortie est capté via LogService (donc aussi les
+--   print / warn de ton script), dès le chargement de la lib.
+--   Library:ConsoleLog("texte", "Print" | "Warn" | "Error" | "Info")   écrire à la main dans la console
+--   Library.Console.Lines (historique, 500 max) · Library:ClearConsole() · Library:GetConsoleText()
+-- ============================================================================
+do
+	local LogService = game:GetService("LogService")
+	local C = { Lines = {}, Max = 500, Paused = false, Filter = "Tout", AutoScroll = true, Listeners = {} }
+	Library.Console = C
+	local MT = Enum.MessageType
+
+	local function push(text, kind, when)
+		local e = { Time = when or os.time(), Text = tostring(text), Kind = kind }
+		C.Lines[#C.Lines + 1] = e
+		while #C.Lines > C.Max do table.remove(C.Lines, 1) end
+		for k, fn in pairs(C.Listeners) do
+			local ok = pcall(fn, e)
+			if not ok then C.Listeners[k] = nil end
+		end
+	end
+	local function kindOf(mt)
+		if mt == MT.MessageWarning then return "Warn" end
+		if mt == MT.MessageError then return "Error" end
+		if mt == MT.MessageInfo then return "Info" end
+		return "Print"
+	end
+
+	-- historique déjà écrit avant le chargement (100 dernières lignes)
+	pcall(function()
+		local h = LogService:GetLogHistory()
+		for i = math.max(1, #h - 99), #h do
+			local m = h[i]
+			push(m.message, kindOf(m.messageType), m.timestamp)
+		end
+	end)
+	pcall(function()
+		track(LogService.MessageOut:Connect(function(msg, mt)
+			if not C.Capture and C.Capture ~= nil then return end
+			push(msg, kindOf(mt))
+		end))
+	end)
+
+	function Library:ConsoleLog(text, kind)
+		if kind ~= "Warn" and kind ~= "Error" and kind ~= "Info" then kind = "Print" end
+		push(text, kind)
+	end
+	function Library:ClearConsole()
+		table.clear(C.Lines)
+		for _, fn in pairs(C.Listeners) do pcall(fn, nil) end
+	end
+	function Library:GetConsoleText()
+		local out = {}
+		for _, e in ipairs(C.Lines) do
+			out[#out + 1] = os.date("%H:%M:%S", e.Time) .. " [" .. e.Kind .. "] " .. e.Text
+		end
+		return table.concat(out, "\n")
+	end
+
+	local function matches(e)
+		local f = C.Filter
+		if f == "Print" then return e.Kind == "Print" or e.Kind == "Info" end
+		if f == "Warn" then return e.Kind == "Warn" end
+		if f == "Erreurs" then return e.Kind == "Error" end
+		return true
+	end
+	local function colorOf(kind)
+		if kind == "Warn" then return Library.NotifColors.Warning end
+		if kind == "Error" then return Library.NotifColors.Error end
+		if kind == "Info" then return T.ElementAccent end
+		return T.Text
+	end
+
+	function Window:CreateConsoleTab(name, icon)
+		local tab = self:CreateTab(name or "Console", nil, icon)
+		local blk = tab:CreateBlock({ Name = "Console", Side = "Left" })
+		blk._noFav = true
+		local FILTERS = { "Tout", "Print", "Warn", "Erreurs" }
+		local VIEW_MAX = 300
+
+		blk:CreateDropdown({ Name = "Filtre", Items = FILTERS, Default = C.Filter, Search = false, Favorite = false,
+			Palette = false, Callback = function(v)
+				C.Filter = v
+				if tab._consoleRebuild then tab._consoleRebuild() end
+			end })
+		blk:CreateToggle({ Name = "Pause", Default = C.Paused, Favorite = false, Palette = false, HUD = false,
+			Tooltip = "Fige l'affichage (les lignes continuent d'être enregistrées).",
+			Callback = function(v)
+				C.Paused = v
+				if not v and tab._consoleRebuild then tab._consoleRebuild() end
+			end })
+		blk:CreateToggle({ Name = "Défilement automatique", Default = C.AutoScroll, Favorite = false, Palette = false,
+			HUD = false, Callback = function(v) C.AutoScroll = v end })
+
+		-- zone de texte
+		local host = new("Frame", { Size = UDim2.new(1, 0, 0, 300), BackgroundColor3 = T.Panel,
+			BackgroundTransparency = 0.1, BorderSizePixel = 0, ClipsDescendants = true }, blk.Body)
+		corner(host, 8)
+		trackStyled(host, stroke(host, 0.9), "panel")
+		blk:_reg(host, "console journal print warn")
+		local view = new("ScrollingFrame", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+			BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.Accent, ScrollBarImageTransparency = 0.5,
+			CanvasSize = UDim2.new(), AutomaticCanvasSize = AY }, host)
+		new("UIListLayout", { Padding = UDim.new(0, 1), SortOrder = BYORDER }, view)
+		new("UIPadding", { PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6), PaddingLeft = UDim.new(0, 8),
+			PaddingRight = UDim.new(0, 8) }, view)
+		local rows, seq = {}, 0
+
+		local function addRow(e)
+			seq += 1
+			local l = new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
+				Text = os.date("%H:%M:%S", e.Time) .. "  " .. e.Text, TextColor3 = colorOf(e.Kind), TextSize = 11,
+				Font = Enum.Font.Code, TextWrapped = true, TextXAlignment = LEFT, TextYAlignment = Enum.TextYAlignment.Top,
+				TextTruncate = Enum.TextTruncate.None, LayoutOrder = seq }, view)
+			l:SetAttribute("FontRole", nil)   -- police à chasse fixe : on ne la touche pas
+			l:SetAttribute("NoAccent", true)
+			rows[#rows + 1] = l
+			while #rows > VIEW_MAX do table.remove(rows, 1):Destroy() end
+		end
+		local function toBottom()
+			task.defer(function()
+				if view.Parent and C.AutoScroll then
+					view.CanvasPosition = Vector2.new(0, math.max(view.AbsoluteCanvasSize.Y, 0))
+				end
+			end)
+		end
+		local function rebuild()
+			for _, r in ipairs(rows) do r:Destroy() end
+			table.clear(rows)
+			local shown = {}
+			for _, e in ipairs(C.Lines) do
+				if matches(e) then shown[#shown + 1] = e end
+			end
+			for i = math.max(1, #shown - VIEW_MAX + 1), #shown do addRow(shown[i]) end
+			toBottom()
+		end
+		tab._consoleRebuild = rebuild
+
+		C.Listeners[tab] = function(e)
+			if not view.Parent then error("gone") end   -- onglet détruit : le listener se retire tout seul
+			if e == nil then
+				rebuild()
+			elseif not C.Paused and matches(e) then
+				addRow(e)
+				toBottom()
+			end
+		end
+
+		blk:CreateButton({ Name = "Vider la console", Favorite = false, Palette = false,
+			Callback = function() Library:ClearConsole() end })
+		blk:CreateButton({ Name = "Copier tout", Favorite = false, Palette = false, Callback = function()
+			local ok = Library:CopyText(Library:GetConsoleText())
+			Library:Notify({ Title = "Console", Type = ok and "Success" or "Warning", Duration = 3,
+				Content = ok and "Contenu copié dans le presse-papiers." or "Presse-papiers indisponible." })
+		end })
+		blk:CreateButton({ Name = "Tester (print + warn)", Favorite = false, Palette = false, Callback = function()
+			print("[Console] Ceci est un print de test.")
+			warn("[Console] Ceci est un warn de test.")
+		end })
+
+		tab.OnSelect = rebuild
+		rebuild()
+		return tab
+	end
 end
 
 -- Onglet « Historique » : les 50 dernières notifications
@@ -4071,8 +4325,17 @@ function Tab:ClearBlocks()
 	self.DefaultBlock = nil
 	self.Order = 0
 end
+-- tous les blocs de l'onglet, sous-onglets compris (recherche, tout replier...)
+function Tab:_allBlocks()
+	local out = {}
+	for _, b in ipairs(self.Blocks) do out[#out + 1] = b end
+	for _, s in ipairs(self.SubTabs or {}) do
+		for _, b in ipairs(s.Blocks) do out[#out + 1] = b end
+	end
+	return out
+end
 function Tab:CollapseAll(c)
-	for _, b in ipairs(self.Blocks) do b:SetCollapsed(c ~= false) end
+	for _, b in ipairs(self:_allBlocks()) do b:SetCollapsed(c ~= false) end
 end
 function Tab:ExpandAll() self:CollapseAll(false) end
 
@@ -4098,6 +4361,7 @@ end
 -- Change le nombre de colonnes (1 à 4) et replace tous les blocs déjà créés
 function Tab:SetColumns(n)
 	n = math.clamp(math.floor(tonumber(n) or 1), 1, 4)
+	for _, s in ipairs(self.SubTabs or {}) do s:SetColumns(n) end   -- les sous-onglets suivent
 	if n == self.NumCols then return end
 	self.NumCols = n
 	self.TwoCols = n >= 2
@@ -4206,7 +4470,7 @@ local function applySearch(win, q)
 	local firstHit, curHit
 	for _, tab in ipairs(win.Tabs) do
 		local total = 0
-		for _, blk in ipairs(tab.Blocks) do
+		for _, blk in ipairs(tab:_allBlocks()) do
 			local blockHit = active and string.find(string.lower(blk.Name), q, 1, true) ~= nil
 			local n = 0
 			for _, e in ipairs(blk.Entries) do
@@ -4254,7 +4518,7 @@ function Window:CreateTab(name, _, icon)
 
 	local function newColumn()
 		local sf = new("ScrollingFrame", {
-			Size = UDim2.new(1, 0, 1, 0),
+			Size = UDim2.new(1, 0, 1, 0), Visible = not page:GetAttribute("HasSubs"),
 			BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageColor3 = T.Accent,
 			ScrollBarImageTransparency = 0.5, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY,
 		}, page)
@@ -4318,6 +4582,108 @@ function Window:CreateTab(name, _, icon)
 	table.insert(self.Tabs, tab)
 	if not self.Current and not self._noSelect then tab:Select() end
 	return tab
+end
+
+-- ============================================================================
+-- SOUS-ONGLETS : une barre de pastilles en haut d'un onglet, chaque pastille ouvre sa propre page de blocs
+--   local subs = tab:CreateSubTabs({ "Combat", "Visuel", { Name = "Divers", Icon = "rbxassetid://..." } })
+--   subs[1]:CreateBlock({ Name = "...", Side = "Left" })   -- ou subs.Combat / tab:GetSubTab("Combat")
+--   Chaque sous-onglet se comporte comme un onglet (CreateBlock, CreateToggle direct, ClearBlocks...).
+--   subs[2]:Select() / tab:SelectSub("Visuel").  Les blocs des sous-onglets sont inclus dans la recherche,
+--   « tout replier » et les favoris. Les blocs créés directement sur l'onglet parent ne sont plus affichés.
+-- ============================================================================
+function Tab:CreateSubTabs(list)
+	local parent = self
+	if parent.SubTabs and #parent.SubTabs > 0 then return parent.SubTabs end
+	parent.SubTabs = {}
+	parent.Page:SetAttribute("HasSubs", true)
+	for _, c in ipairs(parent.Cols) do c.Visible = false end
+
+	local strip = new("ScrollingFrame", { Name = "SubTabs", Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1,
+		BorderSizePixel = 0, ScrollBarThickness = 0, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.X,
+		ScrollingDirection = Enum.ScrollingDirection.X }, parent.Page)
+	new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6),
+		SortOrder = BYORDER, VerticalAlignment = Enum.VerticalAlignment.Center }, strip)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 6), PaddingTop = UDim.new(0, 1) }, strip)
+
+	local function select(sub)
+		for _, s in ipairs(parent.SubTabs) do
+			local on = s == sub
+			if on then
+				if not s.Page.Visible then
+					s.Page.Position = UDim2.new(0, 12, 0, 36)
+					tween(s.Page, { Position = UDim2.new(0, 0, 0, 36) }, 0.4)
+				end
+				s.Page.Visible = true
+			else
+				s.Page.Visible = false
+			end
+			tween(s.Pill, { BackgroundTransparency = on and 0.8 or 0.94 }, 0.2)
+			tween(s.PillStroke, { Transparency = on and 0.35 or 0.9 }, 0.2)
+			tween(s.PillLabel, { TextColor3 = on and T.Text or T.ElementAccent }, 0.2)
+		end
+		parent.CurrentSub = sub
+		Library._busyUntil = os.clock() + 0.5
+		if Library._openDD then Library._openDD(false) end
+	end
+
+	for idx, d in ipairs(list or {}) do
+		local name = type(d) == "table" and tostring(d.Name or d[1] or ("Page " .. idx)) or tostring(d)
+		local icon = type(d) == "table" and d.Icon or nil
+		local pill = new("TextButton", { Size = UDim2.new(0, 0, 0, 24), AutomaticSize = Enum.AutomaticSize.X,
+			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.94, Text = "", AutoButtonColor = false,
+			BorderSizePixel = 0, LayoutOrder = idx, ClipsDescendants = true }, strip)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, pill)
+		local pst = new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.9, ApplyStrokeMode = BORDER }, pill)
+		new("UIPadding", { PaddingLeft = UDim.new(0, icon and 28 or 13), PaddingRight = UDim.new(0, 13) }, pill)
+		if icon and icon ~= "" then
+			new("ImageLabel", { BackgroundTransparency = 1, Image = icon, ImageColor3 = T.Text,
+				Size = UDim2.fromOffset(14, 14), Position = UDim2.new(0, -17, 0.5, -7) }, pill)
+		end
+		local pl = new("TextLabel", { Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X,
+			BackgroundTransparency = 1, Text = name, TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED }, pill)
+
+		local page = new("Frame", { Name = "Sub_" .. name, Position = UDim2.new(0, 0, 0, 36), Size = UDim2.new(1, 0, 1, -36),
+			BackgroundTransparency = 1, Visible = false }, parent.Page)
+		local function newColumn()
+			local sf = new("ScrollingFrame", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+				ScrollBarThickness = 2, ScrollBarImageColor3 = T.Accent, ScrollBarImageTransparency = 0.5,
+				CanvasSize = UDim2.new(), AutomaticCanvasSize = AY }, page)
+			new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, sf)
+			new("UIPadding", { PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 10), PaddingTop = UDim.new(0, 2) }, sf)
+			return sf
+		end
+		local sub = setmetatable({ Name = tostring(parent.Name) .. " / " .. name, SubName = name, Page = page,
+			Button = parent.Button, Blocks = {}, Cols = {}, NumCols = 0, _newColumn = newColumn, Parent = parent,
+			Pill = pill, PillStroke = pst, PillLabel = pl }, Tab)
+		sub:SetColumns(parent.NumCols)
+		function sub:Select()
+			local win = Library.Window
+			if win and win.Current ~= parent then parent:Select() end
+			select(sub)
+		end
+		pill.MouseEnter:Connect(function()
+			if parent.CurrentSub ~= sub then tween(pill, { BackgroundTransparency = 0.88 }, 0.15) end
+		end)
+		pill.MouseLeave:Connect(function()
+			if parent.CurrentSub ~= sub then tween(pill, { BackgroundTransparency = 0.94 }, 0.2) end
+		end)
+		pill.MouseButton1Click:Connect(function()
+			ripple(pill)
+			select(sub)
+		end)
+		parent.SubTabs[#parent.SubTabs + 1] = sub
+		parent.SubTabs[name] = sub
+	end
+	if parent.SubTabs[1] then select(parent.SubTabs[1]) end
+	return parent.SubTabs
+end
+
+function Tab:GetSubTab(name) return self.SubTabs and self.SubTabs[name] end
+function Tab:SelectSub(name)
+	local s = self:GetSubTab(name)
+	if s then s:Select() end
+	return s
 end
 
 -- Interface de gestion des configs (utilisée par l'onglet Config et par l'onglet Paramètres)
@@ -4721,6 +5087,54 @@ function Window:CreateSettingsTab(name, icon, docked)
 		end })
 	C:CreateButton({ Name = "Tout fermer", Favorite = false, Callback = function() Library:ClearNotifications() end })
 
+	-- ───────────── Notifications masquées (« Ne plus afficher ») ─────────────
+	local NS = tab:CreateBlock({ Name = "Notifications masquées", Side = "Left", Collapsed = true })
+	NS._noFav = true
+	local nsBuilding, nsQueued = false, false
+	local function rebuildSilenced()
+		if nsBuilding then return end
+		nsBuilding = true
+		for _, c in ipairs(NS.Body:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		table.clear(NS.Entries)
+		NS:CreateToggle({ Name = "Bouton « Ne plus afficher »", Flag = "ui.notifsilbtn", Favorite = false, Palette = false,
+			Default = Library.NotifSilenceButton ~= false,
+			Tooltip = "Propose de masquer une notification qui se répète (à partir de la 2e fois).",
+			Callback = function(v) Library.NotifSilenceButton = v and true or false end })
+		local list = Library.Flags["ui.silenced"] or {}
+		if #list == 0 then
+			NS:CreateParagraph({ Title = "Aucune notification masquée",
+				Content = "Quand une notification se répète (x2), un bouton « Ne plus afficher » apparaît dessus." })
+		else
+			NS:CreateParagraph({ Title = #list .. (#list > 1 and " notifications masquées" or " notification masquée"),
+				Content = "Clique sur « Réactiver » pour les revoir." })
+			for _, e in ipairs(list) do
+				local f = makeRow(NS, 42, e.Title)
+				label(f, tostring(e.Title or "Notification"), 13, { Position = UDim2.new(0, 12, 0, 4), Size = UDim2.new(1, -108, 0, 18) })
+				label(f, tostring(e.Content or ""), 10, { Position = UDim2.new(0, 12, 0, 23), Size = UDim2.new(1, -108, 0, 14),
+					TextColor3 = T.ElementAccent, TextTransparency = 0.2 })
+				local b = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
+					Size = UDim2.new(0, 84, 0, 26), BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0,
+					Text = "Réactiver", TextColor3 = T.Text, TextSize = 12, Font = F_MED, AutoButtonColor = false }, f)
+				corner(b, 6)
+				trackStyled(b, stroke(b, 0.9), "input")
+				b.MouseButton1Click:Connect(function() Library:UnsilenceNotif(e.Key) end)
+			end
+			NS:CreateButton({ Name = "Tout réactiver", Favorite = false, Callback = function() Library:UnsilenceAllNotifs() end })
+		end
+		nsBuilding = false
+	end
+	Library._onSilencedChanged = function()
+		if nsQueued then return end
+		nsQueued = true
+		task.defer(function()
+			nsQueued = false
+			rebuildSilenced()
+		end)
+	end
+	rebuildSilenced()
+
 	-- ───────────── Sons des notifications ─────────────
 	local SN = tab:CreateBlock({ Name = "Sons des notifications", Side = "Right", Collapsed = true })
 	SN:CreateToggle({ Name = "Sons activés", Flag = "ui.sndon", Default = Library.NotifSound,
@@ -4790,6 +5204,20 @@ function Window:CreateSettingsTab(name, icon, docked)
 	SP:CreateParagraph({ Title = "Utilisation",
 		Content = "Ctrl+T ouvre la barre au milieu de l'écran, sans la fenêtre : juste le trou noir et les étoiles.\nTape pour trouver n'importe quel bouton, interrupteur, curseur, liste, champ, couleur ou touche, et règle-le directement.\nEntrée : lance / bascule le premier résultat.   Échap : efface puis ferme.   Clic dehors : ferme." })
 
+	-- ───────────── HUD des actifs ─────────────
+	local HU = tab:CreateBlock({ Name = "HUD des actifs", Side = "Left", Collapsed = true })
+	HU:CreateToggle({ Name = "Afficher le HUD", Flag = "ui.hud", Default = Library.HudEnabled,
+		Tooltip = "Petit panneau déplaçable (glisse-le à la souris ou au doigt) qui liste les toggles activés.",
+		Callback = function(v) Library:SetHud(v) end })
+	HU:CreateToggle({ Name = "Afficher les touches", Flag = "ui.hudkeys", Default = Library.HudShowKeys,
+		Tooltip = "Affiche la touche liée à chaque toggle (CreateToggle({ Keybind = ... })).",
+		Callback = function(v) Library:SetHudKeys(v) end })
+	HU:CreateToggle({ Name = "Seulement quand la fenêtre est fermée", Flag = "ui.hudclosed", Default = Library.HudOnlyClosed,
+		Callback = function(v) Library:SetHudOnlyClosed(v) end })
+	HU:CreateSlider({ Name = "Taille du HUD", Flag = "ui.hudscale", Min = 60, Max = 160, Step = 5, Suffix = "%",
+		Default = pct(Library.HudScale or 1), Callback = function(v) Library:SetHudScale(v / 100) end })
+	HU:CreateButton({ Name = "Replacer le HUD", Favorite = false, Callback = function() Library:ResetHudPosition() end })
+
 	-- ───────────── Fenêtre ─────────────
 	local D = tab:CreateBlock({ Name = "Fenêtre", Side = "Right", Collapsed = true })
 	D:CreateToggle({ Name = "Sauvegarde auto des paramètres", Flag = "ui.autosave", Default = Library.AutoSaveSettings ~= false,
@@ -4818,12 +5246,41 @@ function Window:CreateSettingsTab(name, icon, docked)
 		local ok, k = pcall(function() return it.Get() end)
 		return (ok and typeof(k) == "EnumItem") and k.Name or "—"
 	end
+	local conflictMarks = {}   -- [entrée] = true quand sa touche est partagée
+	local warnItem
 	local function subText(e)
-		return "Touche : " .. keyText(e.Item) .. "  ·  " .. tostring(e.Tab and e.Tab.Name or "") .. " › " .. tostring(e.Block and e.Block.Name or "")
+		return (conflictMarks[e] and "⚠ " or "") .. "Touche : " .. keyText(e.Item) .. "  ·  " .. tostring(e.Tab and e.Tab.Name or "") .. " › " .. tostring(e.Block and e.Block.Name or "")
+	end
+	-- recalcule les conflits : marque les lignes concernées et met à jour l'avertissement en haut du bloc
+	local function refreshConflicts()
+		table.clear(conflictMarks)
+		local conf = (Library.KeybindConflictWarn ~= false) and Library:GetKeybindConflicts() or {}
+		local lines = {}
+		for keyName, list in pairs(conf) do
+			local names = {}
+			for _, e in ipairs(list) do
+				conflictMarks[e] = true
+				names[#names + 1] = "« " .. tostring(e.Name) .. " »"
+			end
+			lines[#lines + 1] = keyName .. " : " .. table.concat(names, ", ")
+		end
+		table.sort(lines)
+		if warnItem then
+			if #lines == 0 then
+				warnItem.Set({ Title = "Aucun conflit", Content = "Chaque touche n'est utilisée que par un seul élément." })
+			else
+				warnItem.Set({ Title = "⚠ " .. #lines .. (#lines > 1 and " touches utilisées plusieurs fois" or " touche utilisée plusieurs fois"),
+					Content = table.concat(lines, "\n") })
+			end
+		end
 	end
 	local function refreshSubs()
+		refreshConflicts()
 		for _, r in ipairs(kbRows) do
-			if r.sub.Parent then r.sub.Text = subText(r.e) end
+			if r.sub.Parent then
+				r.sub.Text = subText(r.e)
+				r.sub.TextColor3 = conflictMarks[r.e] and Library.NotifColors.Warning or T.ElementAccent
+			end
 		end
 	end
 	local function buildKbRow(e)
@@ -4882,7 +5339,10 @@ function Window:CreateSettingsTab(name, icon, docked)
 		else
 			KB:CreateParagraph({ Title = #list .. (#list > 1 and " keybinds" or " keybind"),
 				Content = "Clique une 1re fois sur « Aller » pour confirmer, une 2e fois pour être emmené à l'emplacement du keybind." })
+			warnItem = KB:CreateParagraph({ Title = "Conflits", Content = "" })
+			refreshConflicts()
 			for _, e in ipairs(list) do buildKbRow(e) end
+			refreshSubs()
 		end
 		kbBuilding = false
 	end
@@ -7641,6 +8101,19 @@ function Library:CreateWindow(cfg)
 		end,
 	}
 	registerFavItem()
+	Library._registerSilenced()
+	-- position du HUD : restaurée avec les réglages
+	Library.Items["ui.hudpos"] = {
+		Get = function() return Library.HudPos end,
+		Set = function(_, p)
+			if type(p) == "table" and tonumber(p.X) and tonumber(p.Y) then
+				Library.HudPos = { X = tonumber(p.X), Y = tonumber(p.Y) }
+				Library.Flags["ui.hudpos"] = Library.HudPos
+				if Library._hudPlace then Library:_hudPlace() end
+			end
+		end,
+	}
+	if Library.HudPos then Library.Flags["ui.hudpos"] = Library.HudPos end
 
 	if cfg.Settings ~= false then
 		win._noSelect = true
