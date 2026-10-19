@@ -94,7 +94,8 @@
 		réinitialiser la fenêtre, config auto-chargée (Library:SetAutoLoad / Library:AutoLoad).
 		Position + taille de la fenêtre et état replié des blocs sont enregistrés dans les configs.
 	INTERFACE
-		• Double-clic sur la barre de titre : réduit à la barre seule / restaure.   • Ctrl+R : recentre.
+		• Double-clic sur la barre de titre : réduit à la barre seule / restaure (Paramètres > Fenêtre > « Barre réduite visible » :
+		  désactivé = la barre disparaît, la touche d'ouverture rouvre la fenêtre).   • Ctrl+R : recentre.
 		• Bouton « = » dans la barre de titre : tout replier / déplier (Tab:CollapseAll / Tab:ExpandAll).
 		• Poignées de redimensionnement sur tous les bords et coins.
 		• Tooltips : { Tooltip = "texte" } sur Button/Toggle/Slider/Dropdown/Input/Keybind/ColorPicker.
@@ -193,6 +194,7 @@ local Library = {
 	AnimSpeed         = 1,     -- multiplicateur de vitesse des animations
 	WindowAnim        = true,  -- false = la fenêtre s'ouvre / se ferme instantanément (sans effet smooth)
 	LockPosition      = false, -- true = la fenêtre ne peut plus être déplacée ni redimensionnée à la souris
+	MiniBarVisible    = true,  -- false = la barre réduite (double-clic sur le titre) disparaît au lieu de rester affichée
 	FontScale         = 1,
 	NotifPos          = "BottomRight",
 	NotifDuration     = 4,
@@ -935,6 +937,7 @@ local notifCount = 0
 local activeNotifs = {}
 local notifEntries = {}
 local NOTIF_ICON = { Info = "i", Success = "+", Warning = "!", Error = "x", Loading = "" }
+local NOTIF_LOGO = "rbxassetid://5436396975"   -- logo affiché à la place de la pastille blanche (Library.NotifLogo pour le changer)
 local NOTIF_POS = { TopLeft = true, TopRight = true, TopCenter = true,
 	BottomLeft = true, BottomRight = true, BottomCenter = true, Custom = true }
 
@@ -1087,9 +1090,9 @@ function Library:StartNotifPlacement()
 	local sc = new("UIScale", { Scale = 0.85 }, card)
 	tween(sc, { Scale = 1 }, 0.5, BACK)
 	local ico = new("Frame", { Position = UDim2.fromOffset(14, 13), Size = UDim2.fromOffset(28, 28),
-		BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, card)
-	new("UICorner", { CornerRadius = UDim.new(1, 0) }, ico)
-	label(ico, "i", 14, { Font = F_BOLD, TextXAlignment = CENTER, TextColor3 = Color3.fromRGB(10, 10, 12) })
+		BackgroundTransparency = 1, BorderSizePixel = 0 }, card)
+	new("ImageLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+		Image = Library.NotifLogo or NOTIF_LOGO, ScaleType = Enum.ScaleType.Fit }, ico)
 	label(card, "Notification test", 14, { Font = F_BOLD, Position = UDim2.fromOffset(56, 13), Size = UDim2.new(1, -72, 0, 18) })
 	label(card, "Les notifications apparaîtront ici.", 12, { Position = UDim2.fromOffset(56, 33), Size = UDim2.new(1, -72, 0, 16),
 		TextColor3 = T.ElementAccent })
@@ -1703,6 +1706,9 @@ function Library:Notify(o)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, ico)
 	local icoScale = new("UIScale", { Scale = 0 }, ico)
 	local icoText = label(ico, "i", 14, { Font = F_BOLD, TextXAlignment = CENTER })
+	local icoImg = new("ImageLabel", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, Image = Library.NotifLogo or NOTIF_LOGO,
+		ScaleType = Enum.ScaleType.Fit, Visible = false }, ico)
 	local spinRing = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(18, 18), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, ico)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, spinRing)
@@ -1777,9 +1783,11 @@ function Library:Notify(o)
 		local c = notifKindColor(k)
 		local ac = c or T.Accent
 		ico.BackgroundColor3 = ac            -- pastille pleine : blanche (ou couleur du type si NotifColored)
-		ico.BackgroundTransparency = 0
 		icoText.Text = NOTIF_ICON[k] or ""
-		icoText.Visible = k ~= "Loading"
+		icoText.Visible = false              -- plus de lettre : le logo prend la place
+		icoImg.Image = Library.NotifLogo or NOTIF_LOGO
+		icoImg.Visible = k ~= "Loading"       -- chargement : on garde la pastille + l'anneau qui tourne
+		ico.BackgroundTransparency = (k == "Loading") and 0 or 1
 		icoText.TextColor3 = Color3.fromRGB(10, 10, 12)
 		strip.BackgroundColor3 = ac
 		strip.Visible = false                -- plus de liseré : la carte est une pilule
@@ -2657,6 +2665,7 @@ end
 function Library:SetAnimSpeed(v) Library.AnimSpeed = math.clamp(tonumber(v) or 1, 0.25, 4) end
 function Library:SetWindowAnim(v) Library.WindowAnim = (v ~= false) end
 function Library:SetLockPosition(v) Library.LockPosition = v and true or false end
+function Library:SetMiniBarVisible(v) Library.MiniBarVisible = (v ~= false) end
 function Library:ToggleLockPosition() Library.LockPosition = not Library.LockPosition return Library.LockPosition end
 
 local function guiRoots()
@@ -2914,6 +2923,7 @@ function Library:GetTheme()
 		AnimSpeed = Library.AnimSpeed,
 		WindowAnim = Library.WindowAnim,
 		LockPosition = Library.LockPosition,
+		MiniBarVisible = Library.MiniBarVisible,
 		ToggleStyle = Library.ToggleStyle,
 		NotifPos = Library.NotifPos,
 		NotifDuration = Library.NotifDuration,
@@ -2978,6 +2988,7 @@ function Library:ApplyTheme(t)
 		{ "AnimSpeed", "ui.animspeed", function(v) return tostring(v) .. "x" end, function(v) Library:SetAnimSpeed(v) end },
 		{ "WindowAnim", "ui.winanim", nil, function(v) Library:SetWindowAnim(v) end },
 		{ "LockPosition", "ui.lockpos", nil, function(v) Library:SetLockPosition(v) end },
+		{ "MiniBarVisible", "ui.minibar", nil, function(v) Library:SetMiniBarVisible(v) end },
 		{ "ToggleStyle", "ui.togglestyle", nil, function(v) Library:SetToggleStyle(v) end },
 		{ "NotifPos", "ui.notifpos", function(v) return N.NotifPos[v] or v end, function(v) Library:SetNotifPosition(v) end },
 		{ "NotifDuration", "ui.notifdur", nil, function(v) Library:SetNotifDuration(v) end },
@@ -6214,6 +6225,9 @@ function Window:CreateSettingsTab(name, icon, docked)
 	D:CreateToggle({ Name = "Verrouiller la position", Flag = "ui.lockpos", Default = Library.LockPosition == true,
 		Tooltip = "La fenêtre ne peut plus être déplacée ni redimensionnée à la souris (le double-clic pour réduire et Ctrl+R restent possibles).",
 		Callback = function(v) Library:SetLockPosition(v) end })
+	D:CreateToggle({ Name = "Barre réduite visible", Flag = "ui.minibar", Default = Library.MiniBarVisible ~= false,
+		Tooltip = "Activé : la barre réduite (double-clic sur le titre) reste affichée pendant que tu joues. Désactivé : elle disparaît, la touche d'ouverture rouvre la fenêtre.",
+		Callback = function(v) Library:SetMiniBarVisible(v) end })
 	D:CreateButton({ Name = "Réinitialiser la fenêtre", Favorite = false,
 		Tooltip = "Recentre la fenêtre et remet sa taille d'origine (Ctrl+R).",
 		Callback = function() win:Reset() end })
@@ -8586,6 +8600,12 @@ function Library:CreateWindow(cfg)
 			tgtSize = preSize or Vector2.new(W0, H0)
 		end
 		for _, h in ipairs(handles) do h.Visible = not v end
+		if v then
+			-- option « Barre réduite visible » désactivée : la barre se cache (comme une fermeture), la touche d'ouverture rouvre la fenêtre
+			task.delay(0.45, function()
+				if collapsed and Library.MiniBarVisible == false and win.Open then win:Toggle(false) end
+			end)
+		end
 		Library._busyUntil = os.clock() + 0.6
 		task.delay(0.7, saveWin)
 	end
@@ -8816,6 +8836,9 @@ function Library:CreateWindow(cfg)
 		v = v and true or false
 		if v == self.Open then return end
 		self.Open = v
+		if v and collapsed and Library.MiniBarVisible == false then
+			setMinimized(false)   -- on rouvre en grand, pas en barre réduite
+		end
 		if not Library._quietWin then uiSnd(v and "winopen" or "winclose") end
 		if Library._hudRefresh then Library._hudRefresh() end
 		local noAnim = Library.WindowAnim == false   -- réglage « Animation ouverture / fermeture » désactivé
