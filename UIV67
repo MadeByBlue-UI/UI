@@ -228,6 +228,16 @@ local Library = {
 	FireDefaults      = false, -- true = appelle les Callback avec la valeur Default à la création
 	StarCount         = 40,    -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 pour désactiver)
 	SoundsEnabled     = true,  -- 🔊 Active/désactive les sons
+	
+	-- 📜 Historique des actions
+	ActionHistory     = {},    -- Liste des actions effectuées
+	HistoryMaxSize    = 100,   -- Nombre max d'actions dans l'historique
+	HistoryEnabled    = true,  -- Active/désactive l'enregistrement
+	
+	-- 🤖 Système de Macros
+	Macros            = {},    -- Macros enregistrées
+	RunningMacros     = {},    -- Macros en cours d'exécution
+	MacroRecording    = nil,   -- Macro en cours d'enregistrement
 	ConfigFolder      = "Ui-Lib",
 	Scale             = 1,
 	Animations        = true,  -- false = aucune animation (PC faibles)
@@ -1166,6 +1176,341 @@ function Library:SetNotifVolume(v) Library.NotifVolume = math.clamp(tonumber(v) 
 function Library:SetSoundsEnabled(v)
 	Library.SoundsEnabled = v and true or false
 	soundsEnabled = v and true or false
+end
+
+-- ============================================================================
+-- 📜 SYSTÈME D'HISTORIQUE DES ACTIONS
+-- ============================================================================
+
+-- Ajoute une action à l'historique
+function Library:LogAction(actionType, data)
+	if not Library.HistoryEnabled then return end
+	
+	local action = {
+		Type = actionType,
+		Data = data or {},
+		Timestamp = os.time(),
+		Time = os.date("%H:%M:%S"),
+		Reversible = data.Reversible ~= false,
+	}
+	
+	table.insert(Library.ActionHistory, 1, action)
+	
+	-- Limiter la taille de l'historique
+	while #Library.ActionHistory > Library.HistoryMaxSize do
+		table.remove(Library.ActionHistory)
+	end
+	
+	-- Callback pour rafraîchir l'UI de l'historique
+	if Library._onHistoryChanged then
+		pcall(Library._onHistoryChanged)
+	end
+end
+
+-- Annule la dernière action (Undo)
+function Library:UndoAction()
+	for i, action in ipairs(Library.ActionHistory) do
+		if action.Reversible and not action.Undone then
+			-- Marquer comme annulée
+			action.Undone = true
+			
+			-- Exécuter l'annulation selon le type
+			if action.Type == "Toggle" then
+				local item = Library.Items[action.Data.Flag]
+				if item and item.Set then
+					item.Set(action.Data.OldValue)
+				end
+			elseif action.Type == "Slider" then
+				local item = Library.Items[action.Data.Flag]
+				if item and item.Set then
+					item.Set(action.Data.OldValue)
+				end
+			elseif action.Type == "Dropdown" then
+				local item = Library.Items[action.Data.Flag]
+				if item and item.Set then
+					item.Set(action.Data.OldValue)
+				end
+			elseif action.Type == "Input" then
+				local item = Library.Items[action.Data.Flag]
+				if item and item.Set then
+					item.Set(action.Data.OldValue)
+				end
+			elseif action.Type == "ColorPicker" then
+				local item = Library.Items[action.Data.Flag]
+				if item and item.Set then
+					item.Set(action.Data.OldValue)
+				end
+			end
+			
+			if Library._onHistoryChanged then
+				pcall(Library._onHistoryChanged)
+			end
+			
+			Library:Notify({
+				Title = "Historique",
+				Content = "Action annulée: " .. action.Data.Name,
+				Type = "Info",
+				Duration = 2
+			})
+			
+			return true
+		end
+	end
+	
+	Library:Notify({
+		Title = "Historique",
+		Content = "Aucune action à annuler",
+		Type = "Warning",
+		Duration = 2
+	})
+	return false
+end
+
+-- Efface l'historique
+function Library:ClearHistory()
+	Library.ActionHistory = {}
+	if Library._onHistoryChanged then
+		pcall(Library._onHistoryChanged)
+	end
+end
+
+-- Obtient l'historique
+function Library:GetHistory()
+	return Library.ActionHistory
+end
+
+-- Active/désactive l'enregistrement de l'historique
+function Library:SetHistoryEnabled(v)
+	Library.HistoryEnabled = v and true or false
+end
+
+-- ============================================================================
+-- 🤖 SYSTÈME DE MACROS
+-- ============================================================================
+
+-- Crée une nouvelle macro
+function Library:CreateMacro(name, steps)
+	if type(name) ~= "string" or name == "" then return false, "Nom invalide" end
+	if type(steps) ~= "table" then return false, "Steps invalides" end
+	
+	Library.Macros[name] = {
+		Name = name,
+		Steps = steps,
+		Created = os.time(),
+	}
+	
+	return true
+end
+
+-- Supprime une macro
+function Library:DeleteMacro(name)
+	if Library.Macros[name] then
+		Library.Macros[name] = nil
+		return true
+	end
+	return false
+end
+
+-- Liste toutes les macros
+function Library:ListMacros()
+	local list = {}
+	for name, _ in pairs(Library.Macros) do
+		table.insert(list, name)
+	end
+	table.sort(list)
+	return list
+end
+
+-- Exécute une macro
+function Library:RunMacro(name, loop)
+	local macro = Library.Macros[name]
+	if not macro then return false, "Macro introuvable" end
+	
+	-- Éviter les duplicatas
+	if Library.RunningMacros[name] then
+		return false, "Macro déjà en cours"
+	end
+	
+	Library.RunningMacros[name] = true
+	
+	task.spawn(function()
+		local function execute()
+			for i, step in ipairs(macro.Steps) do
+				if not Library.RunningMacros[name] then break end
+				
+				if step.Type == "Toggle" then
+					local item = Library.Items[step.Target]
+					if item and item.Set then
+						item.Set(step.Value)
+					end
+				elseif step.Type == "Button" then
+					local item = Library.Items[step.Target]
+					if item and item.Callback then
+						pcall(item.Callback)
+					end
+				elseif step.Type == "Slider" then
+					local item = Library.Items[step.Target]
+					if item and item.Set then
+						item.Set(step.Value)
+					end
+				elseif step.Type == "Dropdown" then
+					local item = Library.Items[step.Target]
+					if item and item.Set then
+						item.Set(step.Value)
+					end
+				elseif step.Type == "Wait" then
+					task.wait(step.Duration or 1)
+				elseif step.Type == "Notify" then
+					Library:Notify({
+						Title = step.Title or "Macro",
+						Content = step.Content or "",
+						Type = step.NotifType or "Info",
+						Duration = step.Duration or 3
+					})
+				elseif step.Type == "Custom" and step.Callback then
+					pcall(step.Callback)
+				end
+			end
+		end
+		
+		if loop then
+			while Library.RunningMacros[name] do
+				execute()
+				if not loop then break end
+			end
+		else
+			execute()
+			Library.RunningMacros[name] = nil
+		end
+	end)
+	
+	return true
+end
+
+-- Arrête une macro en cours
+function Library:StopMacro(name)
+	if Library.RunningMacros[name] then
+		Library.RunningMacros[name] = nil
+		return true
+	end
+	return false
+end
+
+-- Arrête toutes les macros
+function Library:StopAllMacros()
+	for name in pairs(Library.RunningMacros) do
+		Library.RunningMacros[name] = nil
+	end
+end
+
+-- Commence l'enregistrement d'une macro
+function Library:StartMacroRecording(name)
+	if type(name) ~= "string" or name == "" then return false, "Nom invalide" end
+	
+	Library.MacroRecording = {
+		Name = name,
+		Steps = {},
+		StartTime = os.clock(),
+		LastStepTime = os.clock()
+	}
+	
+	Library:Notify({
+		Title = "Macro",
+		Content = "🔴 Enregistrement: " .. name,
+		Type = "Info",
+		Duration = 3
+	})
+	
+	return true
+end
+
+-- Arrête l'enregistrement et sauvegarde la macro
+function Library:StopMacroRecording()
+	if not Library.MacroRecording then return false, "Aucun enregistrement en cours" end
+	
+	local name = Library.MacroRecording.Name
+	local steps = Library.MacroRecording.Steps
+	
+	Library.Macros[name] = {
+		Name = name,
+		Steps = steps,
+		Created = os.time(),
+	}
+	
+	Library.MacroRecording = nil
+	
+	Library:Notify({
+		Title = "Macro",
+		Content = "✅ Enregistré: " .. name .. " (" .. #steps .. " étapes)",
+		Type = "Success",
+		Duration = 3
+	})
+	
+	return true
+end
+
+-- Ajoute une étape à l'enregistrement en cours
+function Library:RecordMacroStep(stepType, data)
+	if not Library.MacroRecording then return end
+	
+	local now = os.clock()
+	local waitTime = now - Library.MacroRecording.LastStepTime
+	
+	-- Ajouter un wait si nécessaire (délai > 0.1s)
+	if waitTime > 0.1 and #Library.MacroRecording.Steps > 0 then
+		table.insert(Library.MacroRecording.Steps, {
+			Type = "Wait",
+			Duration = math.floor(waitTime * 10) / 10
+		})
+	end
+	
+	table.insert(Library.MacroRecording.Steps, {
+		Type = stepType,
+		Target = data.Target,
+		Value = data.Value,
+		Duration = data.Duration,
+		Title = data.Title,
+		Content = data.Content,
+		NotifType = data.NotifType,
+		Callback = data.Callback
+	})
+	
+	Library.MacroRecording.LastStepTime = now
+end
+
+-- Exporte une macro en JSON
+function Library:ExportMacro(name)
+	local macro = Library.Macros[name]
+	if not macro then return nil, "Macro introuvable" end
+	
+	local ok, json = pcall(function()
+		return HttpService:JSONEncode(macro)
+	end)
+	
+	if ok then
+		return "UILIB-MACRO:" .. json
+	else
+		return nil, "Erreur d'encodage"
+	end
+end
+
+-- Importe une macro depuis JSON
+function Library:ImportMacro(data)
+	if type(data) ~= "string" then return false, "Données invalides" end
+	
+	data = data:gsub("^%s+", ""):gsub("%s+$", "")
+	if not data:match("^UILIB%-MACRO:") then return false, "Format invalide" end
+	
+	local json = data:sub(14)
+	local ok, macro = pcall(function()
+		return HttpService:JSONDecode(json)
+	end)
+	
+	if not ok or type(macro) ~= "table" then return false, "Décodage échoué" end
+	
+	Library.Macros[macro.Name] = macro
+	
+	return true, macro.Name
 end
 
 -- ───────────── Pastille « +N » (notifications masquées au-delà du maximum) ─────────────
@@ -3539,12 +3884,33 @@ function Block:CreateToggle(o)
 		toggleSkins = keep
 	end
 	local function apply(v, silent)
+		local oldValue = state
 		state = v
 		if o.Flag then Library.Flags[o.Flag] = v end
 		paint(v)
 		if Library._hudRefresh then Library._hudRefresh() end
 		if not silent then
 			PlaySound("Toggle")  -- 🔊 Son toggle
+			
+			-- 📜 Enregistrer dans l'historique
+			if o.Flag and oldValue ~= v then
+				Library:LogAction("Toggle", {
+					Name = o.Name or "Toggle",
+					Flag = o.Flag,
+					OldValue = oldValue,
+					NewValue = v,
+					Reversible = true
+				})
+			end
+			
+			-- 🤖 Enregistrer dans la macro si en cours
+			if Library.MacroRecording and o.Flag then
+				Library:RecordMacroStep("Toggle", {
+					Target = o.Flag,
+					Value = v
+				})
+			end
+			
 			fire(o.Callback, v)
 		end
 	end
@@ -3691,9 +4057,11 @@ function Block:CreateSlider(o)
 	hover(f, st)
 
 	local value
+	local oldValue  -- Pour l'historique
 	local function apply(v, silent, instant)
 		v = snap(v)
 		if v == value and not silent then return end
+		oldValue = value  -- Sauvegarder l'ancienne valeur
 		value = v
 		local span = max - min
 		local ratio = span == 0 and 0 or (v - min) / span
@@ -3706,7 +4074,28 @@ function Block:CreateSlider(o)
 		end
 		if not valBox:IsFocused() then valBox.Text = fmt(v) end
 		if o.Flag then Library.Flags[o.Flag] = v end
-		if not silent then fire(o.Callback, v) end
+		if not silent then
+			-- 📜 Enregistrer dans l'historique (uniquement à la fin du glissement, pas pendant)
+			if not instant and oldValue and oldValue ~= v and o.Flag then
+				Library:LogAction("Slider", {
+					Name = o.Name or "Slider",
+					Flag = o.Flag,
+					OldValue = oldValue,
+					NewValue = v,
+					Reversible = true
+				})
+			end
+			
+			-- 🤖 Enregistrer dans la macro (uniquement la valeur finale)
+			if not instant and Library.MacroRecording and o.Flag then
+				Library:RecordMacroStep("Slider", {
+					Target = o.Flag,
+					Value = v
+				})
+			end
+			
+			fire(o.Callback, v)
+		end
 	end
 	local item = {}
 	item.Set = function(...)
@@ -5939,6 +6328,245 @@ function Window:CreateSettingsTab(name, icon, docked)
 			Size = UDim2.fromOffset(4, 4), BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, ico)
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
 	end
+	return tab
+end
+
+function Window:CreateHistoryTab()
+	local tab = self:CreateTab({ Name = "Historique", Icon = "rbxassetid://7734053495" })
+	
+	tab:CreateLabel("Historique des actions")
+	tab:CreateLabel("Les 100 dernières actions sont enregistrées ici.")
+	
+	local historyList = tab:CreateBlock("Actions récentes")
+	
+	local function refreshHistory()
+		-- Nettoyer le bloc
+		for _, child in ipairs(historyList:GetChildren()) do
+			if child:IsA("TextLabel") or child:IsA("TextButton") then
+				child:Destroy()
+			end
+		end
+		
+		-- Afficher les actions (les plus récentes en premier)
+		local history = Library.ActionHistory
+		if #history == 0 then
+			local noAction = Instance.new("TextLabel")
+			noAction.Text = "Aucune action enregistrée"
+			noAction.Size = UDim2.new(1, -20, 0, 30)
+			noAction.Position = UDim2.new(0, 10, 0, 10)
+			noAction.BackgroundTransparency = 1
+			noAction.TextColor3 = Color3.fromRGB(150, 150, 150)
+			noAction.TextSize = 14
+			noAction.Font = Enum.Font.Gotham
+			noAction.TextXAlignment = Enum.TextXAlignment.Left
+			noAction.Parent = historyList
+			return
+		end
+		
+		for i = #history, math.max(1, #history - 20), -1 do
+			local action = history[i]
+			local timeStr = os.date("%H:%M:%S", action.timestamp)
+			local text = string.format("[%s] %s: %s → %s", timeStr, action.type, action.name, tostring(action.newValue))
+			
+			local actionLabel = Instance.new("TextLabel")
+			actionLabel.Text = text
+			actionLabel.Size = UDim2.new(1, -20, 0, 25)
+			actionLabel.Position = UDim2.new(0, 10, 0, 10 + (#history - i) * 27)
+			actionLabel.BackgroundTransparency = 1
+			actionLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+			actionLabel.TextSize = 12
+			actionLabel.Font = Enum.Font.Gotham
+			actionLabel.TextXAlignment = Enum.TextXAlignment.Left
+			actionLabel.TextTruncate = Enum.TextTruncate.AtEnd
+			actionLabel.Parent = historyList
+		end
+	end
+	
+	local undoBtn = tab:CreateButton({
+		Name = "Annuler la dernière action",
+		Callback = function()
+			local success, msg = Library:UndoAction()
+			if success then
+				Library:Notify("Succès", "Action annulée: " .. msg, 3)
+				refreshHistory()
+			else
+				Library:Notify("Erreur", msg or "Aucune action à annuler", 3)
+			end
+		end
+	})
+	
+	local clearBtn = tab:CreateButton({
+		Name = "Effacer l'historique",
+		Callback = function()
+			Library:ClearHistory()
+			refreshHistory()
+			Library:Notify("Info", "Historique effacé", 2)
+		end
+	})
+	
+	tab:CreateButton({
+		Name = "Rafraîchir l'affichage",
+		Callback = refreshHistory
+	})
+	
+	-- Rafraîchir au démarrage
+	task.defer(refreshHistory)
+	
+	return tab
+end
+
+function Window:CreateMacroTab()
+	local tab = self:CreateTab({ Name = "Macros", Icon = "rbxassetid://7734053376" })
+	
+	tab:CreateLabel("Système de Scripts/Macros")
+	tab:CreateLabel("Enregistrez et rejouez des séquences d'actions.")
+	
+	-- Section Enregistrement
+	local recordBlock = tab:CreateBlock("Enregistrement")
+	
+	local isRecording = false
+	local currentMacroName = ""
+	
+	local macroNameInput = recordBlock:CreateInput({
+		Name = "Nom de la macro",
+		Placeholder = "Ma macro...",
+		Callback = function(value)
+			currentMacroName = value
+		end
+	})
+	
+	local recordBtn = recordBlock:CreateButton({
+		Name = "⏺ Démarrer l'enregistrement",
+		Callback = function()
+			if isRecording then
+				local macro = Library:StopMacroRecording()
+				if macro then
+					Library:Notify("Succès", "Macro '" .. macro.name .. "' enregistrée (" .. #macro.steps .. " étapes)", 3)
+					isRecording = false
+					recordBtn.Name = "⏺ Démarrer l'enregistrement"
+				end
+			else
+				if currentMacroName == "" then
+					Library:Notify("Erreur", "Veuillez entrer un nom de macro", 3)
+					return
+				end
+				Library:StartMacroRecording(currentMacroName)
+				isRecording = true
+				recordBtn.Name = "⏹ Arrêter l'enregistrement"
+				Library:Notify("Info", "Enregistrement démarré", 2)
+			end
+		end
+	})
+	
+	-- Section Liste des macros
+	local macroBlock = tab:CreateBlock("Macros enregistrées")
+	
+	local macroDropdown
+	local function refreshMacroList()
+		local macroNames = {}
+		for name, _ in pairs(Library.Macros) do
+			table.insert(macroNames, name)
+		end
+		table.sort(macroNames)
+		
+		if macroDropdown then
+			-- Mettre à jour la dropdown si elle existe
+			macroDropdown:Refresh(macroNames)
+		end
+		
+		return macroNames
+	end
+	
+	macroDropdown = macroBlock:CreateDropdown({
+		Name = "Sélectionner une macro",
+		List = refreshMacroList(),
+		Callback = function(selected)
+			-- Sélection effectuée
+		end
+	})
+	
+	local playBtn = macroBlock:CreateButton({
+		Name = "▶ Exécuter la macro",
+		Callback = function()
+			local selected = macroDropdown.Selected
+			if not selected or selected == "" then
+				Library:Notify("Erreur", "Veuillez sélectionner une macro", 3)
+				return
+			end
+			
+			local macro = Library.Macros[selected]
+			if not macro then
+				Library:Notify("Erreur", "Macro introuvable", 3)
+				return
+			end
+			
+			Library:RunMacro(macro.name)
+		end
+	})
+	
+	local stopBtn = macroBlock:CreateButton({
+		Name = "⏹ Arrêter toutes les macros",
+		Callback = function()
+			for name, _ in pairs(Library.RunningMacros) do
+				Library:StopMacro(name)
+			end
+			Library:Notify("Info", "Toutes les macros arrêtées", 2)
+		end
+	})
+	
+	-- Section Import/Export
+	local ioBlock = tab:CreateBlock("Import / Export")
+	
+	local exportBtn = ioBlock:CreateButton({
+		Name = "📋 Exporter la macro sélectionnée",
+		Callback = function()
+			local selected = macroDropdown.Selected
+			if not selected or selected == "" then
+				Library:Notify("Erreur", "Veuillez sélectionner une macro", 3)
+				return
+			end
+			
+			local json = Library:ExportMacro(selected)
+			if json then
+				setclipboard(json)
+				Library:Notify("Succès", "Macro exportée dans le presse-papier", 3)
+			else
+				Library:Notify("Erreur", "Échec de l'export", 3)
+			end
+		end
+	})
+	
+	local importInput = ioBlock:CreateInput({
+		Name = "JSON de la macro",
+		Placeholder = "Collez le JSON ici...",
+		Callback = function(value)
+			if value and value ~= "" then
+				local success, msg = Library:ImportMacro(value)
+				if success then
+					Library:Notify("Succès", "Macro importée: " .. msg, 3)
+					refreshMacroList()
+				else
+					Library:Notify("Erreur", "Échec de l'import: " .. (msg or "JSON invalide"), 3)
+				end
+			end
+		end
+	})
+	
+	local deleteBtn = ioBlock:CreateButton({
+		Name = "🗑 Supprimer la macro sélectionnée",
+		Callback = function()
+			local selected = macroDropdown.Selected
+			if not selected or selected == "" then
+				Library:Notify("Erreur", "Veuillez sélectionner une macro", 3)
+				return
+			end
+			
+			Library.Macros[selected] = nil
+			Library:Notify("Info", "Macro '" .. selected .. "' supprimée", 2)
+			refreshMacroList()
+		end
+	})
+	
 	return tab
 end
 
