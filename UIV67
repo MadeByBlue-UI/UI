@@ -938,6 +938,7 @@ local activeNotifs = {}
 local notifEntries = {}
 local NOTIF_ICON = { Info = "i", Success = "+", Warning = "!", Error = "x", Loading = "" }
 local NOTIF_LOGO = "rbxassetid://5436396975"   -- logo affiché à la place de la pastille blanche (Library.NotifLogo pour le changer)
+local NOTIF_LOGO_SIZE = 40                      -- taille du logo en pixels (Library.NotifLogoSize pour changer ; ~44 max avant d'être rogné)
 local NOTIF_POS = { TopLeft = true, TopRight = true, TopCenter = true,
 	BottomLeft = true, BottomRight = true, BottomCenter = true, Custom = true }
 
@@ -1091,8 +1092,9 @@ function Library:StartNotifPlacement()
 	tween(sc, { Scale = 1 }, 0.5, BACK)
 	local ico = new("Frame", { Position = UDim2.fromOffset(14, 13), Size = UDim2.fromOffset(28, 28),
 		BackgroundTransparency = 1, BorderSizePixel = 0 }, card)
-	new("ImageLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
-		Image = Library.NotifLogo or NOTIF_LOGO, ScaleType = Enum.ScaleType.Fit }, ico)
+	new("ImageLabel", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(Library.NotifLogoSize or NOTIF_LOGO_SIZE, Library.NotifLogoSize or NOTIF_LOGO_SIZE),
+		BackgroundTransparency = 1, BorderSizePixel = 0, Image = Library.NotifLogo or NOTIF_LOGO, ScaleType = Enum.ScaleType.Fit }, ico)
 	label(card, "Notification test", 14, { Font = F_BOLD, Position = UDim2.fromOffset(56, 13), Size = UDim2.new(1, -72, 0, 18) })
 	label(card, "Les notifications apparaîtront ici.", 12, { Position = UDim2.fromOffset(56, 33), Size = UDim2.new(1, -72, 0, 16),
 		TextColor3 = T.ElementAccent })
@@ -1707,7 +1709,8 @@ function Library:Notify(o)
 	local icoScale = new("UIScale", { Scale = 0 }, ico)
 	local icoText = label(ico, "i", 14, { Font = F_BOLD, TextXAlignment = CENTER })
 	local icoImg = new("ImageLabel", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, Image = Library.NotifLogo or NOTIF_LOGO,
+		Size = UDim2.fromOffset(Library.NotifLogoSize or NOTIF_LOGO_SIZE, Library.NotifLogoSize or NOTIF_LOGO_SIZE),
+		BackgroundTransparency = 1, BorderSizePixel = 0, Image = Library.NotifLogo or NOTIF_LOGO,
 		ScaleType = Enum.ScaleType.Fit, Visible = false }, ico)
 	local spinRing = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(18, 18), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, ico)
@@ -1786,6 +1789,7 @@ function Library:Notify(o)
 		icoText.Text = NOTIF_ICON[k] or ""
 		icoText.Visible = false              -- plus de lettre : le logo prend la place
 		icoImg.Image = Library.NotifLogo or NOTIF_LOGO
+		icoImg.Size = UDim2.fromOffset(Library.NotifLogoSize or NOTIF_LOGO_SIZE, Library.NotifLogoSize or NOTIF_LOGO_SIZE)
 		icoImg.Visible = k ~= "Loading"       -- chargement : on garde la pastille + l'anneau qui tourne
 		ico.BackgroundTransparency = (k == "Loading") and 0 or 1
 		icoText.TextColor3 = Color3.fromRGB(10, 10, 12)
