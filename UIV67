@@ -168,6 +168,13 @@ local Library = {
 	FavEntries        = {},
 	CmdEntries        = {},    -- éléments disponibles dans la palette de commandes (Ctrl+K)
 	KeybindEntries    = {},    -- tous les keybinds placés dans l'interface (bloc « Raccourcis clavier » des Paramètres)
+	ToggleEntries     = {},    -- toggles listés par le HUD des actifs
+	NotifSilenced     = {},    -- notifications « ne plus afficher » : [clé] = { Type, Title, Content }
+	KeybindConflictWarn = true, -- signale deux keybinds sur la même touche
+	HudEnabled        = false, -- HUD des actifs (Paramètres > HUD des actifs)
+	HudShowKeys       = true,
+	HudOnlyClosed     = false,
+	HudScale          = 1,
 	TxtEntries        = {},    -- textes (labels / paragraphes) cherchables dans la barre de recherche (Ctrl+T)
 	TitleStretch      = true,  -- titre étiré (lettres espacées)
 	TitleBold         = true,  -- titre en gras
@@ -2722,10 +2729,21 @@ function Block:CreateButton(o)
 	return item
 end
 
+-- Noms de touches raccourcis (puces des toggles et HUD)
+local KEY_SHORT = { LeftShift = "LShift", RightShift = "RShift", LeftControl = "LCtrl", RightControl = "RCtrl",
+	LeftAlt = "LAlt", RightAlt = "RAlt", Return = "Enter", Backspace = "Back", Escape = "Esc" }
+local function shortKey(k)
+	if typeof(k) ~= "EnumItem" or k == Enum.KeyCode.Unknown then return nil end
+	return KEY_SHORT[k.Name] or k.Name
+end
+
+-- Toggle. Option Keybind = Enum.KeyCode.X (ou true) : ajoute une puce de touche (clic = changer, Retour arrière = effacer)
+-- et appuyer sur la touche bascule le toggle. KeyCallback = function(touche). HUD = false : caché du HUD des actifs.
 function Block:CreateToggle(o)
 	o = o or {}
 	local f, st = makeRow(self, 34, o.Name)
-	label(f, o.Name or "Toggle", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -70, 1, 0) })
+	local hasKey = o.Keybind ~= nil and o.Keybind ~= false
+	label(f, o.Name or "Toggle", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, hasKey and -150 or -70, 1, 0) })
 	local sw = new("Frame", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
 		Size = UDim2.new(0, 38, 0, 20), BackgroundColor3 = T.Off, BorderSizePixel = 0,
@@ -2757,6 +2775,7 @@ function Block:CreateToggle(o)
 		state = v
 		if o.Flag then Library.Flags[o.Flag] = v end
 		paint(v)
+		if Library._hudRefresh then Library._hudRefresh() end
 		if not silent then fire(o.Callback, v) end
 	end
 	local item = {}
@@ -2764,6 +2783,87 @@ function Block:CreateToggle(o)
 	item.Get = function() return state end
 	f.ClipsDescendants = true
 	btn.MouseButton1Click:Connect(function() ripple(f) apply(not state) end)
+
+	-- ---- touche liée (option Keybind)
+	if hasKey then
+		local key = (typeof(o.Keybind) == "EnumItem") and o.Keybind or Enum.KeyCode.Unknown
+		local chip = new("TextButton", {
+			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -58, 0.5, 0), Size = UDim2.new(0, 0, 0, 20),
+			AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = T.Off, BackgroundTransparency = 0.4,
+			BorderSizePixel = 0, Text = shortKey(key) or "—", TextColor3 = T.Text, TextSize = 11, Font = F_MED,
+			AutoButtonColor = false, ZIndex = 3,
+		}, f)
+		corner(chip, 6)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, chip)
+		local cst = stroke(chip, 0.9)
+		trackStyled(chip, cst, "input")
+
+		local listening, lastBind = false, 0
+		local keyItem = {}
+		local function setKey(k, silent)
+			key = k
+			chip.Text = shortKey(k) or "—"
+			lastBind = os.clock()
+			if o.Flag then Library.Flags[o.Flag .. ".key"] = k.Name end
+			if Library._hudRefresh then Library._hudRefresh() end
+			if Library.RefreshKeybindConflicts then Library:RefreshKeybindConflicts() end
+			if Library._onKeybindChanged then pcall(Library._onKeybindChanged) end
+			if not silent then
+				if Library._notifyKeyConflict then Library:_notifyKeyConflict(f, k) end
+				fire(o.KeyCallback, k)
+			end
+		end
+		chip.MouseButton1Click:Connect(function()
+			if listening then return end
+			listening = true
+			Library._listening = true
+			chip.Text = "..."
+			tween(cst, { Transparency = 0.25 }, 0.2)
+			local c
+			c = UIS.InputBegan:Connect(function(i)
+				if i.UserInputType == Enum.UserInputType.Keyboard then
+					c:Disconnect()
+					listening = false
+					Library._listening = false
+					tween(cst, { Transparency = Sty.InputStroke }, 0.3)
+					if i.KeyCode == Enum.KeyCode.Escape then
+						chip.Text = shortKey(key) or "—"
+					elseif i.KeyCode == Enum.KeyCode.Backspace or i.KeyCode == Enum.KeyCode.Delete then
+						setKey(Enum.KeyCode.Unknown)
+					else
+						setKey(i.KeyCode)
+					end
+				end
+			end)
+		end)
+		-- appuyer sur la touche bascule le toggle (sauf pendant l'écriture / l'assignation d'une touche)
+		track(UIS.InputBegan:Connect(function(i, gp)
+			if gp or listening or Library._listening then return end
+			if i.UserInputType ~= Enum.UserInputType.Keyboard or key == Enum.KeyCode.Unknown or i.KeyCode ~= key then return end
+			if os.clock() - lastBind < 0.2 or not f.Parent then return end
+			if UIS:GetFocusedTextBox() then return end
+			apply(not state)
+		end))
+
+		keyItem.Set = function(...)
+			local k = unself(keyItem, ...)
+			if type(k) == "string" then
+				local ok, res = pcall(function() return Enum.KeyCode[k] end)
+				k = ok and res or nil
+			end
+			if typeof(k) == "EnumItem" then setKey(k) end
+		end
+		keyItem.Get = function() return key end
+		item.SetKey = function(...) keyItem.Set(...) end
+		item.GetKey = function() return key end
+		if o.Flag then register(o.Flag .. ".key", keyItem, key.Name) end
+		if not self._noFav then
+			Library.KeybindEntries[#Library.KeybindEntries + 1] = { Name = tostring(o.Name or "Toggle") .. " (touche)",
+				Tab = self.Tab, Block = self, Frame = f, Item = keyItem, BadgeX = -124 }
+			if Library._onKeybindAdded then pcall(Library._onKeybindAdded) end
+			if Library.RefreshKeybindConflicts then Library:RefreshKeybindConflicts() end
+		end
+	end
 
 	paint(state, true)
 	register(o.Flag, item, state)
@@ -2870,6 +2970,169 @@ function Block:CreateSlider(o)
 	apply(def, true, true)
 	register(o.Flag, item, value)
 	if Library.FireDefaults then fire(o.Callback, value) end
+	return item
+end
+
+-- Slider à deux poignées (plage min / max). Options : Name, Min, Max, Step, MinGap (écart minimal), Suffix, Rounding,
+-- Default = { Low = a, High = b } (ou DefaultLow / DefaultHigh), Flag, Callback = function(low, high).
+-- item.Get() = { Low, High } · item.Set({ Low, High }) ou item.Set(low, high) · GetLow / GetHigh / SetLow / SetHigh
+function Block:CreateRangeSlider(o)
+	o = o or {}
+	local min, max = o.Min or 0, o.Max or 100
+	local step = o.Step or o.Increment
+	local gap = math.max(tonumber(o.MinGap) or 0, 0)
+	local d = o.Default
+	local dl, dh = o.DefaultLow, o.DefaultHigh
+	if type(d) == "table" then dl, dh = dl or d.Low or d[1], dh or d.High or d[2] end
+	dl, dh = tonumber(dl) or min, tonumber(dh) or max
+	local dec = o.Rounding
+	if dec == nil then
+		local frac = (min % 1 ~= 0) or (max % 1 ~= 0) or (dl % 1 ~= 0) or (dh % 1 ~= 0) or (step and step % 1 ~= 0)
+		dec = frac and 2 or 0
+	end
+	local mult = 10 ^ dec
+	local suffix = o.Suffix and tostring(o.Suffix) or ""
+
+	local function snap(v)
+		v = math.clamp(v, min, max)
+		if step and step > 0 then v = min + math.floor((v - min) / step + 0.5) * step end
+		v = math.floor(v * mult + 0.5) / mult
+		return math.clamp(v, min, max)
+	end
+	local function fmt(v) return tostring(v) .. suffix end
+
+	local f, st = makeRow(self, 56, o.Name)
+	label(f, o.Name or "Plage", 13, { Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -176, 0, 18) })
+	local function mkBox(x)
+		local b = new("TextBox", {
+			Position = UDim2.new(1, x, 0, 6), Size = UDim2.new(0, 62, 0, 18), BackgroundColor3 = T.Off,
+			BackgroundTransparency = 1, Text = "", TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED,
+			TextXAlignment = CENTER, ClearTextOnFocus = false, BorderSizePixel = 0,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+		}, f)
+		corner(b, 5)
+		return b
+	end
+	local lowBox = mkBox(-150)
+	label(f, "–", 12, { Position = UDim2.new(1, -86, 0, 6), Size = UDim2.new(0, 10, 0, 18), TextXAlignment = CENTER,
+		TextColor3 = T.ElementAccent })
+	local highBox = mkBox(-74)
+
+	local bar = new("Frame", { Position = UDim2.new(0, 12, 0, 38), Size = UDim2.new(1, -24, 0, 6),
+		BackgroundColor3 = T.Off, BorderSizePixel = 0 }, f)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
+	local fill = new("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, bar)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
+	local function mkKnob()
+		local k = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+			Size = UDim2.new(0, 12, 0, 12), BackgroundColor3 = T.Accent, BorderSizePixel = 0, ZIndex = 3 }, bar)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, k)
+		stroke(k, 0.6, 2)
+		return k
+	end
+	local kLow, kHigh = mkKnob(), mkKnob()
+	local hit = new("TextButton", { Position = UDim2.new(0, 0, 0, 24), Size = UDim2.new(1, 0, 0, 32),
+		BackgroundTransparency = 1, Text = "" }, f)
+	hover(f, st)
+
+	local low, high = min, max
+	local function ratioOf(v)
+		local span = max - min
+		return span == 0 and 0 or math.clamp((v - min) / span, 0, 1)
+	end
+	local function paint(instant)
+		local rl, rh = ratioOf(low), ratioOf(high)
+		if instant then
+			fill.Position, fill.Size = UDim2.new(rl, 0, 0, 0), UDim2.new(rh - rl, 0, 1, 0)
+			kLow.Position, kHigh.Position = UDim2.new(rl, 0, 0.5, 0), UDim2.new(rh, 0, 0.5, 0)
+		else
+			tween(fill, { Position = UDim2.new(rl, 0, 0, 0), Size = UDim2.new(rh - rl, 0, 1, 0) }, 0.14)
+			tween(kLow, { Position = UDim2.new(rl, 0, 0.5, 0) }, 0.14)
+			tween(kHigh, { Position = UDim2.new(rh, 0, 0.5, 0) }, 0.14)
+		end
+		if not lowBox:IsFocused() then lowBox.Text = fmt(low) end
+		if not highBox:IsFocused() then highBox.Text = fmt(high) end
+	end
+	local function commit(l, h, silent, instant)
+		l, h = snap(l), snap(h)
+		if h < l then l, h = h, l end
+		if h - l < gap then
+			h = math.min(max, l + gap)
+			if h - l < gap then l = math.max(min, h - gap) end
+		end
+		if l == low and h == high and not silent then return end
+		low, high = l, h
+		paint(instant)
+		if o.Flag then Library.Flags[o.Flag] = { Low = low, High = high } end
+		if not silent then fire(o.Callback, low, high) end
+	end
+	local function setLow(v, instant) commit(math.min(snap(v), high - gap), high, false, instant) end
+	local function setHigh(v, instant) commit(low, math.max(snap(v), low + gap), false, instant) end
+
+	local item = {}
+	item.Set = function(...)
+		local a, b = unself(item, ...)
+		local l, h
+		if type(a) == "table" then l, h = tonumber(a.Low or a[1]), tonumber(a.High or a[2])
+		else l, h = tonumber(a), tonumber(b) end
+		if l or h then commit(l or low, h or high) end
+	end
+	item.Get = function() return { Low = low, High = high } end
+	item.GetLow = function() return low end
+	item.GetHigh = function() return high end
+	item.SetLow = function(...)
+		local v = tonumber((unself(item, ...)))
+		if v then setLow(v) end
+	end
+	item.SetHigh = function(...)
+		local v = tonumber((unself(item, ...)))
+		if v then setHigh(v) end
+	end
+
+	hit.InputBegan:Connect(function(i)
+		if not isPress(i) then return end
+		local function valueAt(p)
+			return min + math.clamp((p.X - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1) * (max - min)
+		end
+		local v0 = valueAt(i.Position)
+		local dL, dH = math.abs(v0 - low), math.abs(v0 - high)
+		local which
+		if dL < dH then which = "low" elseif dH < dL then which = "high" else which = (v0 >= high) and "high" or "low" end
+		local function setActive(w)
+			which = w
+			tween(kLow, { Size = UDim2.new(0, w == "low" and 17 or 12, 0, w == "low" and 17 or 12) }, 0.2, BACK)
+			tween(kHigh, { Size = UDim2.new(0, w == "high" and 17 or 12, 0, w == "high" and 17 or 12) }, 0.2, BACK)
+		end
+		setActive(which)
+		startDrag(function(p)
+			local v = valueAt(p)
+			-- les poignées peuvent se croiser : on bascule sur l'autre quand on dépasse
+			if which == "high" and v < low then setActive("low") end
+			if which == "low" and v > high then setActive("high") end
+			if which == "low" then setLow(v, true) else setHigh(v, true) end
+		end, self.Scroll, i.Position, function()
+			tween(kLow, { Size = UDim2.new(0, 12, 0, 12) }, 0.25)
+			tween(kHigh, { Size = UDim2.new(0, 12, 0, 12) }, 0.25)
+		end)
+	end)
+
+	local function boxEvents(box, setter)
+		box.Focused:Connect(function()
+			tween(box, { BackgroundTransparency = 0.5, TextColor3 = T.Text }, 0.2)
+		end)
+		box.FocusLost:Connect(function()
+			tween(box, { BackgroundTransparency = 1, TextColor3 = T.ElementAccent }, 0.25)
+			local n = tonumber(string.match(box.Text, "-?%d+%.?%d*"))
+			if n then setter(n) end
+			paint(true)
+		end)
+	end
+	boxEvents(lowBox, function(n) setLow(n) end)
+	boxEvents(highBox, function(n) setHigh(n) end)
+
+	commit(dl, dh, true, true)
+	register(o.Flag, item, { Low = low, High = high })
+	if Library.FireDefaults then fire(o.Callback, low, high) end
 	return item
 end
 
@@ -3202,8 +3465,12 @@ function Block:CreateKeybind(o)
 		key = k
 		btn.Text = k.Name
 		if o.Flag then Library.Flags[o.Flag] = k.Name end
+		if Library.RefreshKeybindConflicts then Library:RefreshKeybindConflicts() end
 		if Library._onKeybindChanged then pcall(Library._onKeybindChanged) end
-		if not silent then fire(o.Callback, k) end
+		if not silent then
+			if Library._notifyKeyConflict then Library:_notifyKeyConflict(f, k) end
+			fire(o.Callback, k)
+		end
 	end
 	local listening = false
 	btn.MouseButton1Click:Connect(function()
@@ -3447,7 +3714,7 @@ end
 
 -- On enrobe chaque élément interactif : tooltip (o.Tooltip) + étoile de favori (o.Favorite = false pour la retirer)
 local paletteSeq = 0
-local WRAP_KINDS = { "Button", "Toggle", "Slider", "Dropdown", "Input", "Keybind", "ColorPicker" }
+local WRAP_KINDS = { "Button", "Toggle", "Slider", "RangeSlider", "Dropdown", "Input", "Keybind", "ColorPicker" }
 for _, kind in ipairs(WRAP_KINDS) do
 	local base = Block["Create" .. kind]
 	Block["Create" .. kind] = function(self, o)
@@ -3461,6 +3728,13 @@ for _, kind in ipairs(WRAP_KINDS) do
 				Library.KeybindEntries[#Library.KeybindEntries + 1] = { Name = tostring(opts.Name or "Keybind"),
 					Tab = self.Tab, Block = self, Frame = e.Frame, Item = item }
 				if Library._onKeybindAdded then pcall(Library._onKeybindAdded) end
+				Library:RefreshKeybindConflicts()
+			end
+			-- HUD des actifs : { HUD = false } pour cacher un toggle du panneau
+			if kind == "Toggle" and not self._noFav and opts.HUD ~= false and not (self.Tab and self.Tab._isSettings) then
+				Library.ToggleEntries[#Library.ToggleEntries + 1] = { Name = tostring(opts.Name or "Toggle"), Item = item,
+					Frame = e.Frame, Tab = self.Tab, Block = self }
+				if Library._hudRefresh then Library._hudRefresh() end
 			end
 			-- palette de commandes (Ctrl+K) : { Palette = false } pour exclure un élément
 			if not self._noFav and opts.Palette ~= false then
@@ -3493,6 +3767,252 @@ for _, kind in ipairs(WRAP_KINDS) do
 		end
 		return item
 	end
+end
+
+-- ============================================================================
+-- CONFLITS DE KEYBINDS : deux éléments qui utilisent la même touche
+--   Pastille « ! » orange sur les lignes concernées (survol = avec qui), notification quand on change une touche,
+--   résumé dans Paramètres > Raccourcis clavier. Library.KeybindConflictWarn = false pour couper.
+--   Library:GetKeybindConflicts() -> { ["F"] = { entrée, entrée }, ... }
+-- ============================================================================
+function Library:GetKeybindConflicts()
+	local byKey, out = {}, {}
+	for _, e in ipairs(Library.KeybindEntries) do
+		if e.Frame and e.Frame.Parent and e.Item and e.Item.Get then
+			local ok, k = pcall(e.Item.Get)
+			if ok and typeof(k) == "EnumItem" and k ~= Enum.KeyCode.Unknown and k.Name ~= "None" then
+				local l = byKey[k.Name]
+				if not l then
+					l = {}
+					byKey[k.Name] = l
+				end
+				l[#l + 1] = e
+			end
+		end
+	end
+	for name, l in pairs(byKey) do
+		if #l > 1 then out[name] = l end
+	end
+	return out
+end
+
+function Library:RefreshKeybindConflicts()
+	local conf = Library:GetKeybindConflicts()
+	local info = {}
+	if Library.KeybindConflictWarn ~= false then
+		for keyName, list in pairs(conf) do
+			for _, e in ipairs(list) do
+				local others = {}
+				for _, x in ipairs(list) do
+					if x ~= e then others[#others + 1] = tostring(x.Name) end
+				end
+				info[e] = "Même touche (" .. keyName .. ") que : " .. table.concat(others, ", ")
+			end
+		end
+	end
+	for _, e in ipairs(Library.KeybindEntries) do
+		local fr = e.Frame
+		if fr and fr.Parent then
+			local text = info[e]
+			local badge = fr:FindFirstChild("KbConflict")
+			if badge and badge:GetAttribute("Tip") ~= text then
+				badge:Destroy()
+				badge = nil
+			end
+			if text and not badge then
+				badge = new("TextLabel", { Name = "KbConflict", AnchorPoint = Vector2.new(1, 0.5),
+					Position = UDim2.new(1, e.BadgeX or -104, 0.5, 0), Size = UDim2.fromOffset(18, 18),
+					BackgroundColor3 = Library.NotifColors.Warning, Text = "!", TextColor3 = Color3.fromRGB(10, 10, 12),
+					TextSize = 12, Font = F_BOLD, BorderSizePixel = 0, ZIndex = 8 }, fr)
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, badge)
+				badge:SetAttribute("Tip", text)
+				attachTip(badge, text)
+			end
+		end
+	end
+	return conf
+end
+
+-- notification quand la touche qu'on vient de choisir est déjà prise (pas au chargement d'une config)
+function Library:_notifyKeyConflict(frame, k)
+	if Library.KeybindConflictWarn == false then return end
+	if (Library._silentSound or 0) > 0 or (Library._restoring or 0) > 0 then return end
+	if typeof(k) ~= "EnumItem" or k == Enum.KeyCode.Unknown then return end
+	local list = Library:GetKeybindConflicts()[k.Name]
+	if not list then return end
+	local mine, others = nil, {}
+	for _, e in ipairs(list) do
+		if e.Frame == frame then mine = e else others[#others + 1] = "« " .. tostring(e.Name) .. " »" end
+	end
+	if not mine or #others == 0 then return end
+	Library:Notify({ Title = "Conflit de touche", Type = "Warning", Duration = 6, _noMute = true,
+		Content = "« " .. tostring(mine.Name) .. " » et " .. table.concat(others, ", ") .. " utilisent la même touche ("
+			.. k.Name .. ")." })
+end
+
+-- ============================================================================
+-- HUD DES ACTIFS : petit panneau déplaçable (glisser à la souris / au doigt) qui liste les toggles activés,
+-- avec leur touche si le toggle en a une (CreateToggle({ Keybind = Enum.KeyCode.X })).
+--   Toggle { HUD = false } : caché du panneau.  Réglages : Paramètres > HUD des actifs.
+--   Library:SetHud(v) / SetHudKeys(v) / SetHudScale(0.6..1.6) / SetHudOnlyClosed(v) / ResetHudPosition()
+-- ============================================================================
+local hud = { rows = {} }
+
+local function hudShown()
+	if not Library.HudEnabled then return false end
+	local w = Library.Window
+	if Library.HudOnlyClosed and w and w.Open then return false end
+	return true
+end
+
+local function hudPos()
+	local p = Library.HudPos
+	if type(p) == "table" and tonumber(p.X) and tonumber(p.Y) then return Vector2.new(p.X, p.Y) end
+	return Vector2.new(16, 120)
+end
+
+local function hudSetPos(v, save)
+	local card = hud.card
+	if not card then return end
+	local vp, sz = viewport(), card.AbsoluteSize
+	local x = math.clamp(v.X, 0, math.max(vp.X - sz.X, 0))
+	local y = math.clamp(v.Y, 0, math.max(vp.Y - sz.Y, 0))
+	card.Position = UDim2.fromOffset(x, y)
+	if save then
+		Library.HudPos = { X = math.floor(x), Y = math.floor(y) }
+		Library.Flags["ui.hudpos"] = Library.HudPos
+	end
+end
+
+function Library:_hudPlace()
+	if hud.card then hudSetPos(hudPos(), false) end
+end
+
+local function ensureHud()
+	if hud.gui and hud.gui.Parent then return end
+	hud.gui = new("ScreenGui", { Name = "SolarisHud", ResetOnSpawn = false, DisplayOrder = 900,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true, Enabled = false })
+	mount(hud.gui)
+	local card = new("Frame", { Name = "Card", Size = UDim2.new(0, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.XY,
+		BackgroundColor3 = T.Main, BackgroundTransparency = 0.08, BorderSizePixel = 0, Active = true }, hud.gui)
+	new("UICorner", { CornerRadius = UDim.new(0, 16) }, card)
+	new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.84, ApplyStrokeMode = BORDER }, card)
+	hud.scale = new("UIScale", { Scale = Library.HudScale or 1 }, card)
+	new("UIPadding", { PaddingTop = UDim.new(0, 9), PaddingBottom = UDim.new(0, 10), PaddingLeft = UDim.new(0, 13),
+		PaddingRight = UDim.new(0, 13) }, card)
+	new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = BYORDER }, card)
+	hud.title = new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 0, 0, 14),
+		AutomaticSize = Enum.AutomaticSize.X, Text = "ACTIFS", TextColor3 = T.Text, TextTransparency = 0.45,
+		TextSize = 10, Font = F_BOLD, TextXAlignment = LEFT, LayoutOrder = 0 }, card)
+	hud.empty = new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 0, 0, 18),
+		AutomaticSize = Enum.AutomaticSize.X, Text = "Aucun actif", TextColor3 = T.Text, TextTransparency = 0.55,
+		TextSize = 12, Font = F_REG, TextXAlignment = LEFT, LayoutOrder = 1 }, card)
+	hud.card = card
+	-- glisser pour déplacer
+	card.InputBegan:Connect(function(i)
+		if not isPress(i) then return end
+		local start = Vector2.new(i.Position.X, i.Position.Y)
+		local origin = Vector2.new(card.AbsolutePosition.X, card.AbsolutePosition.Y)
+		startDrag(function(p)
+			hudSetPos(origin + (Vector2.new(p.X, p.Y) - start), false)
+		end, nil, i.Position, function()
+			hudSetPos(Vector2.new(card.AbsolutePosition.X, card.AbsolutePosition.Y), true)
+		end)
+	end)
+	hudSetPos(hudPos(), false)
+end
+
+local function hudRow(entry)
+	local row = new("Frame", { Name = "Row", Size = UDim2.new(0, 0, 0, 22), AutomaticSize = Enum.AutomaticSize.X,
+		BackgroundTransparency = 1 }, hud.card)
+	new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8),
+		SortOrder = BYORDER, VerticalAlignment = Enum.VerticalAlignment.Center }, row)
+	local dot = new("Frame", { Size = UDim2.fromOffset(7, 7), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
+		BorderSizePixel = 0, LayoutOrder = 1 }, row)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+	local name = new("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 0, 1, 0),
+		AutomaticSize = Enum.AutomaticSize.X, Text = entry.Name, TextColor3 = T.Text, TextTransparency = 1,
+		TextSize = 13, Font = F_MED, TextXAlignment = LEFT, LayoutOrder = 2 }, row)
+	local chip = new("TextLabel", { BackgroundColor3 = T.Text, BackgroundTransparency = 1, Size = UDim2.new(0, 0, 0, 18),
+		AutomaticSize = Enum.AutomaticSize.X, Text = "", TextColor3 = T.Text, TextTransparency = 1, TextSize = 10,
+		Font = F_BOLD, LayoutOrder = 3, Visible = false, BorderSizePixel = 0 }, row)
+	new("UICorner", { CornerRadius = UDim.new(0, 6) }, chip)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6) }, chip)
+	tween(dot, { BackgroundTransparency = 0 }, 0.25)
+	tween(name, { TextTransparency = 0 }, 0.25)
+	tween(chip, { BackgroundTransparency = 0.88, TextTransparency = 0 }, 0.25)
+	return { f = row, dot = dot, name = name, chip = chip }
+end
+
+local function hudRefresh()
+	local shown = hudShown()
+	if shown then ensureHud() end
+	if not hud.gui then return end
+	hud.gui.Enabled = shown
+	if not shown then return end
+	hud.scale.Scale = Library.HudScale or 1
+
+	local want, count = {}, 0
+	for order, e in ipairs(Library.ToggleEntries) do
+		if e.Frame and e.Frame.Parent then
+			local ok, on = pcall(e.Item.Get)
+			if ok and on then
+				count += 1
+				want[e] = true
+				local r = hud.rows[e]
+				if not r then
+					r = hudRow(e)
+					hud.rows[e] = r
+				end
+				r.f.LayoutOrder = 10 + order
+				local k
+				if Library.HudShowKeys ~= false and e.Item.GetKey then k = shortKey(e.Item.GetKey()) end
+				r.chip.Text = k or ""
+				r.chip.Visible = k ~= nil
+			end
+		end
+	end
+	for e, r in pairs(table.clone(hud.rows)) do
+		if not want[e] then
+			hud.rows[e] = nil
+			tween(r.dot, { BackgroundTransparency = 1 }, 0.2)
+			tween(r.name, { TextTransparency = 1 }, 0.2)
+			tween(r.chip, { BackgroundTransparency = 1, TextTransparency = 1 }, 0.2)
+			task.delay(0.22, function() r.f:Destroy() end)
+		end
+	end
+	hud.empty.Visible = count == 0
+	hud.title.Text = count > 0 and ("ACTIFS · " .. count) or "ACTIFS"
+	task.delay(0.08, function()
+		if hud.card then hudSetPos(Vector2.new(hud.card.AbsolutePosition.X, hud.card.AbsolutePosition.Y), false) end
+	end)
+end
+
+local hudPending = false
+Library._hudRefresh = function()
+	if hudPending then return end
+	hudPending = true
+	task.defer(function()
+		hudPending = false
+		pcall(hudRefresh)
+	end)
+end
+
+function Library:SetHud(v) Library.HudEnabled = v and true or false Library._hudRefresh() end
+function Library:SetHudKeys(v) Library.HudShowKeys = v and true or false Library._hudRefresh() end
+function Library:SetHudOnlyClosed(v) Library.HudOnlyClosed = v and true or false Library._hudRefresh() end
+function Library:SetHudScale(s)
+	Library.HudScale = math.clamp(tonumber(s) or 1, 0.6, 1.6)
+	Library._hudRefresh()
+end
+function Library:ResetHudPosition()
+	Library.HudPos = nil
+	Library.Flags["ui.hudpos"] = nil
+	if hud.card then hudSetPos(hudPos(), true) end
+end
+Library._destroyHud = function()
+	if hud.gui then pcall(function() hud.gui:Destroy() end) end
+	hud = { rows = {} }
 end
 
 -- Bouton à double confirmation : CreateButton({ Confirm = true }) ou CreateConfirmButton(...)
@@ -3898,11 +4418,15 @@ function Window:CreateFavoritesTab(name, icon)
 		for k, v in pairs(ent.Opts) do o[k] = v end
 		o.Flag = nil
 		o.Favorite = false
+		o.Keybind = nil   -- la touche reste sur l'élément d'origine (sinon le toggle serait basculé deux fois)
 		local item = ent.Item
 		if ent.Kind ~= "Button" then
 			local ok, cur = pcall(function() return item.Get() end)
 			if ok and cur ~= nil then o.Default = cur end
-			o.Callback = function(v) pcall(item.Set, item, v) end
+			o.Callback = function(...)
+				local a, b = ...
+				pcall(item.Set, item, (b ~= nil) and { a, b } or a)   -- plage : (min, max)
+			end
 		end
 		pcall(function() blk["Create" .. ent.Kind](blk, o) end)
 	end
@@ -3938,6 +4462,7 @@ end
 function Window:CreateSettingsTab(name, icon, docked)
 	local win = self
 	local tab = self:CreateTab(name or "Paramètres", nil, icon)
+	tab._isSettings = true   -- ses toggles ne sont pas listés dans le HUD des actifs
 	local N = Library.Names
 	local function pct(v) return math.floor(v * 100 + 0.5) end
 	local function toast(ok, okMsg, errMsg)
@@ -4465,6 +4990,9 @@ do
 			return (s == "") and "(vide)" or s, nil, nil
 		elseif k == "Keybind" then
 			return (typeof(v) == "EnumItem") and v.Name or "—", nil, nil
+		elseif k == "RangeSlider" then
+			if type(v) == "table" then return tostring(v.Low) .. " – " .. tostring(v.High) .. (e.Opts.Suffix or ""), nil, nil end
+			return "", nil, nil
 		elseif k == "ColorPicker" then
 			return "couleur", nil, (typeof(v) == "Color3") and v or nil
 		end
@@ -4668,6 +5196,19 @@ do
 				pushView(colorView(e))
 			elseif k == "Keybind" then
 				pushView(keyView(e))
+			elseif k == "RangeSlider" then
+				local cur = safeGet(e.Item)
+				local init = type(cur) == "table" and (tostring(cur.Low) .. " - " .. tostring(cur.High)) or ""
+				pushView(textInputView(e, init, "min - max", function(txt)
+					local a, b = string.match(txt, "^%s*(-?[%d%.]+)%s*[,;:–%-]%s*(-?[%d%.]+)%s*$")
+					a, b = tonumber(a), tonumber(b)
+					if a and b then
+						pcall(e.Item.Set, e.Item, { a, b })
+						flash(e.Name .. " : " .. tostring(a) .. " - " .. tostring(b))
+					else
+						flash("Format : min - max")
+					end
+				end))
 			elseif k == "Input" then
 				pushView(textInputView(e, tostring(safeGet(e.Item) or ""), e.Opts.Placeholder or "Texte", function(txt)
 					pcall(function() e.Item.Set(txt) end)
@@ -5663,6 +6204,31 @@ local spotOk, spotErr = pcall(function()
 		tb.FocusLost:Connect(function()
 			pcall(it.Set, it, tb.Text)
 			remember(e)
+		end)
+	end
+
+	BUILD.RangeSlider = function(f, e)
+		local it = e.Opts and e.Item
+		local rw = math.min(214, math.floor((S.barW or 560) * 0.5))
+		local hdr = newHeader(f, e, rw)
+		local function cur()
+			local v = safeGet(it)
+			return type(v) == "table" and (tostring(v.Low) .. " - " .. tostring(v.High)) or ""
+		end
+		local tb = new("TextBox", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
+			Size = UDim2.fromOffset(rw - 14, 28), BackgroundColor3 = T.Off, BackgroundTransparency = 0.5, Text = cur(),
+			PlaceholderText = "min - max", PlaceholderColor3 = Color3.fromRGB(125, 125, 132), TextColor3 = T.Text,
+			TextSize = 12, Font = F_REG, ClearTextOnFocus = false, TextXAlignment = LEFT, BorderSizePixel = 0 }, hdr)
+		round(tb, 8)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, tb)
+		tb.FocusLost:Connect(function()
+			local a, b = string.match(tb.Text, "^%s*(-?[%d%.]+)%s*[,;:–%-]%s*(-?[%d%.]+)%s*$")
+			a, b = tonumber(a), tonumber(b)
+			if a and b then
+				pcall(it.Set, it, { a, b })
+				remember(e)
+			end
+			tb.Text = cur()
 		end)
 	end
 
@@ -6782,6 +7348,7 @@ function Library:CreateWindow(cfg)
 		v = v and true or false
 		if v == self.Open then return end
 		self.Open = v
+		if Library._hudRefresh then Library._hudRefresh() end
 		skyTarget = v and 1 or 0
 		if v and refreshSky then refreshSky() end
 		setBlurTarget(v and Library.BlurSize or 0)
@@ -7125,7 +7692,10 @@ function Library:Destroy()
 	table.clear(Library.FavEntries)
 	table.clear(Library.CmdEntries)
 	table.clear(Library.KeybindEntries)
-	Library._onKeybindAdded, Library._onKeybindChanged = nil, nil
+	table.clear(Library.ToggleEntries)
+	table.clear(Library.NotifSilenced)
+	Library._onKeybindAdded, Library._onKeybindChanged, Library._onSilencedChanged = nil, nil, nil
+	if Library._destroyHud then pcall(Library._destroyHud) end
 	if Library._destroyPalette then pcall(Library._destroyPalette) end
 	if Library._destroySpotlight then pcall(Library._destroySpotlight) end
 	table.clear(Library.TxtEntries)
