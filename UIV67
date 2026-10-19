@@ -622,7 +622,7 @@ local function uisndDerive(f)
 	for ev, d in pairs(UISND_BLACKHOLE) do out[ev] = f(table.clone(d)) end
 	return out
 end
-Library.UISoundPackNames = { "Trou noir", "Cristal", "Doux" }
+Library.UISoundPackNames = { "Trou noir", "Cristal", "Doux", "Calme" }
 Library.UISoundPacks = {
 	["Trou noir"] = UISND_BLACKHOLE,
 	-- Cristal : plus aigu et brillant
@@ -637,6 +637,30 @@ Library.UISoundPacks = {
 		return d
 	end),
 }
+-- Calme : sons personnalisés (Click, Hover, Toggle, Dropdown, Open, Close, TabSwitch)
+-- { son, hauteur, volume, cd = cooldown anti-spam, len = durée max }
+do
+	local CLICK, HOVER, TAB = "rbxassetid://6895079853", "rbxassetid://10066936758", "rbxassetid://10066936758"
+	Library.UISoundPacks["Calme"] = {
+		hover     = { HOVER, 1.20, 0.15, cd = 0.08, len = 0.40 },
+		tabhover  = { HOVER, 1.20, 0.15, cd = 0.08, len = 0.40 },
+		focus     = { HOVER, 1.20, 0.15, cd = 0.08, len = 0.40 },
+		tab       = { TAB,   1.40, 0.20, cd = 0.05, len = 0.60 },
+		click     = { CLICK, 1.00, 0.30, cd = 0.03, len = 0.50 },
+		fold      = { CLICK, 1.00, 0.30, cd = 0.03, len = 0.50 },
+		on        = { CLICK, 1.10, 0.25, cd = 0.03, len = 0.50 },
+		off       = { CLICK, 0.90, 0.25, cd = 0.03, len = 0.50 },
+		pick      = { CLICK, 1.30, 0.25, cd = 0.05, len = 0.50 },
+		open      = { CLICK, 0.90, 0.35, cd = 0.10, len = 0.70 },
+		close     = { CLICK, 0.80, 0.30, cd = 0.10, len = 0.70 },
+		winopen   = { CLICK, 0.90, 0.35, cd = 0.10, len = 0.80 },
+		winclose  = { CLICK, 0.80, 0.30, cd = 0.10, len = 0.80 },
+		palopen   = { CLICK, 0.90, 0.35, cd = 0.10, len = 0.80 },
+		palclose  = { CLICK, 0.80, 0.30, cd = 0.10, len = 0.80 },
+		spotopen  = { CLICK, 0.90, 0.35, cd = 0.10, len = 0.80 },
+		spotclose = { CLICK, 0.80, 0.30, cd = 0.10, len = 0.80 },
+	}
+end
 Library.UISound       = true     -- interrupteur général
 Library.UISoundVolume = 0.5      -- 0 à 1
 Library.UISoundHover  = true     -- petits bruits au survol
@@ -665,7 +689,7 @@ local function uiSnd(ev)
 	local d = pack and pack[ev]
 	if not d then return end
 	local now = os.clock()
-	if now - (uiSndLast[ev] or 0) < (hov and 0.07 or 0.035) then return end
+	if now - (uiSndLast[ev] or 0) < (d.cd or (hov and 0.07 or 0.035)) then return end
 	uiSndLast[ev] = now
 	local vol = math.clamp((d[3] or 0.3) * (tonumber(Library.UISoundVolume) or 0.5) * 2, 0, 1)
 	if vol <= 0.003 then return end
