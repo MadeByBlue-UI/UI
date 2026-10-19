@@ -25,6 +25,12 @@
 		• Écran trop petit : le nombre de colonnes affichées est réduit automatiquement.
 		• Library.ColumnMinWidth = largeur minimale d'une colonne (255 par défaut).
 
+	SAUVEGARDE AUTO DES PARAMÈTRES
+		• Tout ce que tu changes dans l'onglet Paramètres (position / durée des notifications, thème, couleurs, colonnes,
+		  sons, trou noir...) est enregistré tout seul dans <ConfigFolder>/_settings.json et restauré au lancement suivant,
+		  même si une config est auto-chargée. Library.AutoSaveSettings = false (ou Paramètres > Fenêtre) pour couper ;
+		  Library:SaveSettings() / Library:LoadSettings() pour le faire à la main.
+
 	RACCOURCIS CLAVIER (Paramètres > « Raccourcis clavier »)
 		• Liste tous les keybinds de l'interface (Block:CreateKeybind). Bouton « Aller » à droite : 1er clic = confirmer,
 		  2e clic = ouvre l'onglet, déplie le bloc, défile jusqu'au keybind et le fait clignoter.
@@ -1949,9 +1955,87 @@ function Library:AutoLoad()
 	local n = Library:GetAutoLoad()
 	if not n then return end
 	local ok, err = Library:LoadConfig(n)
+	if ok and Library.AutoSaveSettings ~= false then Library:LoadSettings() end   -- tes réglages gardent la priorité
 	Library:Notify({ Title = "Config",
 		Content = ok and ("Auto-chargée : " .. n) or ("Auto-load échoué : " .. tostring(err)),
 		Type = ok and "Success" or "Error", Duration = 3 })
+end
+
+-- ---------------------------------------------------------------------------
+-- Sauvegarde AUTOMATIQUE des paramètres : tous les réglages de l'onglet Paramètres (flags « ui.* » : position et
+-- durée des notifications, thème, couleurs, colonnes, sons, trou noir...) sont écrits tout seuls dans
+-- <ConfigFolder>/_settings.json dès qu'ils changent, et restaurés à chaque lancement.
+-- Library.AutoSaveSettings = false pour couper (aussi dans Paramètres > Fenêtre).
+-- ---------------------------------------------------------------------------
+Library.AutoSaveSettings = true
+local function settingsPath() return Library.ConfigFolder .. "/_settings.json" end
+
+local function settingsSnapshot()
+	local snap, keys = {}, {}
+	for k, v in pairs(Library.Flags) do
+		if type(k) == "string" and string.sub(k, 1, 3) == "ui." then
+			if pcall(function() return HttpService:JSONEncode({ v = v }) end) then   -- uniquement des valeurs enregistrables
+				snap[k] = v
+				keys[#keys + 1] = k
+			end
+		end
+	end
+	table.sort(keys)
+	local parts = {}
+	for i, k in ipairs(keys) do parts[i] = k .. "=" .. HttpService:JSONEncode({ v = snap[k] }) end
+	return snap, table.concat(parts, "|")
+end
+
+function Library:SaveSettings()
+	if not writefile then return false, "writefile indisponible" end
+	local snap, sig = settingsSnapshot()
+	local ok, err = pcall(function()
+		if makefolder and isfolder and not isfolder(Library.ConfigFolder) then makefolder(Library.ConfigFolder) end
+		writefile(settingsPath(), HttpService:JSONEncode(snap))
+	end)
+	if ok then Library._settingsSig = sig end
+	return ok, err
+end
+
+function Library:LoadSettings()
+	if not (readfile and isfile) then return false end
+	local data
+	pcall(function()
+		if isfile(settingsPath()) then data = HttpService:JSONDecode(readfile(settingsPath())) end
+	end)
+	if type(data) ~= "table" then return false end
+	local sub = {}
+	for k, v in pairs(data) do
+		if type(k) == "string" and string.sub(k, 1, 3) == "ui." then sub[k] = v end
+	end
+	Library._restoring = (Library._restoring or 0) + 1
+	pcall(Library._applyFlags, Library, sub)
+	Library._restoring = math.max((Library._restoring or 1) - 1, 0)
+	local _, sig = settingsSnapshot()
+	Library._settingsSig = sig   -- ce qui vient d'être restauré est déjà sur le disque
+	return true
+end
+
+-- surveille les réglages : écrit le fichier quand une valeur a changé et s'est stabilisée (~1 s)
+function Library:_startSettingsWatcher(win)
+	if not writefile then return end
+	local token = (Library._settingsToken or 0) + 1
+	Library._settingsToken = token
+	task.spawn(function()
+		local _, seen = settingsSnapshot()
+		local changedAt = os.clock()
+		while Library.Window == win and Library._settingsToken == token do
+			task.wait(0.7)
+			if Library.AutoSaveSettings ~= false and Library.Window == win then
+				local _, sig = settingsSnapshot()
+				if sig ~= seen then
+					seen, changedAt = sig, os.clock()
+				elseif sig ~= Library._settingsSig and os.clock() - changedAt >= 0.8 then
+					Library:SaveSettings()
+				end
+			end
+		end
+	end)
 end
 
 -- ---------------------------------------------------------------------------
@@ -3963,7 +4047,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Callback = function(v)
 			local n = colKeys[v] or 1
 			local eff = win:SetColumns(n)
-			if eff and eff < n then
+			if eff and eff < n and (Library._restoring or 0) == 0 then
 				Library:Notify({ Title = "Colonnes", Type = "Warning", Duration = 3,
 					Content = "Écran trop étroit : " .. eff .. " colonne" .. (eff > 1 and "s" or "") .. " affichée" .. (eff > 1 and "s" or "") .. "." })
 			end
@@ -4183,6 +4267,12 @@ function Window:CreateSettingsTab(name, icon, docked)
 
 	-- ───────────── Fenêtre ─────────────
 	local D = tab:CreateBlock({ Name = "Fenêtre", Side = "Right", Collapsed = true })
+	D:CreateToggle({ Name = "Sauvegarde auto des paramètres", Flag = "ui.autosave", Default = Library.AutoSaveSettings ~= false,
+		Tooltip = "Enregistre tout seul les réglages (position des notifications, thème, colonnes...) et les restaure au prochain lancement.",
+		Callback = function(v)
+			Library.AutoSaveSettings = v and true or false
+			if Library._settingsReady and (Library._restoring or 0) == 0 then Library:SaveSettings() end
+		end })
 	D:CreateButton({ Name = "Réinitialiser la fenêtre", Favorite = false,
 		Tooltip = "Recentre la fenêtre et remet sa taille d'origine (Ctrl+R).",
 		Callback = function() win:Reset() end })
@@ -7001,6 +7091,10 @@ function Library:CreateWindow(cfg)
 	setBlurTarget(Library.BlurSize)
 	Library.DefaultTheme = Library:GetTheme()
 	Library._autoDone = false
+	-- réglages sauvegardés automatiquement : restaurés dès le lancement, puis surveillés
+	Library:LoadSettings()
+	Library._settingsReady = true
+	Library:_startSettingsWatcher(win)
 	if cfg.AutoLoad ~= false then
 		task.delay(tonumber(cfg.AutoLoadDelay) or 1.2, function()
 			if Library.Window == win then Library:AutoLoad() end
@@ -7010,6 +7104,11 @@ function Library:CreateWindow(cfg)
 end
 
 function Library:Destroy()
+	if Library.Window and Library._settingsReady and Library.AutoSaveSettings ~= false then
+		pcall(Library.SaveSettings, Library)
+	end
+	Library._settingsReady = false
+	Library._settingsToken = (Library._settingsToken or 0) + 1
 	for _, c in ipairs(Conns) do pcall(function() c:Disconnect() end) end
 	table.clear(Conns)
 	table.clear(spinners)
