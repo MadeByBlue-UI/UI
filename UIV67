@@ -751,7 +751,16 @@ local activeNotifs = {}
 local notifEntries = {}
 local NOTIF_ICON = { Info = "i", Success = "+", Warning = "!", Error = "x", Loading = "" }
 local NOTIF_POS = { TopLeft = true, TopRight = true, TopCenter = true,
-	BottomLeft = true, BottomRight = true, BottomCenter = true }
+	BottomLeft = true, BottomRight = true, BottomCenter = true, Custom = true }
+
+-- Position personnalisée : coin d'ancrage de la pile (fractions de l'écran) + côté. Réglée en glissant une
+-- notification test (Paramètres > Notifications > « Placer les notifications »).
+--   Library:StartNotifPlacement() · Library:SetNotifCustom({ X, Y, Left, Top }) · Library:ResetNotifCustom()
+local function getCustom()
+	local c = Library.NotifCustom
+	if type(c) == "table" and tonumber(c.X) and tonumber(c.Y) then return c end
+	return { X = 0.985, Y = 0.97, Left = false, Top = false }
+end
 
 Library.NotifColors = {
 	Success = Color3.fromRGB(61, 220, 151),
@@ -769,6 +778,10 @@ Library.NotifHistory      = Library.NotifHistory or {}
 -- Position : "TopLeft" | "TopCenter" | "TopRight" | "BottomLeft" | "BottomCenter" | "BottomRight"
 local function notifSide()
 	local p = tostring(Library.NotifPos or "BottomRight")
+	if p == "Custom" then
+		local c = getCustom()
+		return c.Top ~= false, c.Left == true, false
+	end
 	local top = p:sub(1, 3) == "Top"
 	local center = p:find("Center", 1, true) ~= nil
 	local left = (not center) and p:sub(-4) == "Left"
@@ -778,6 +791,16 @@ end
 local function applyNotifPos()
 	if not (notifHolder and notifList) then return end
 	local top, left, center = notifSide()
+	if Library.NotifPos == "Custom" then
+		local c, vp = getCustom(), viewport()
+		local x, y = math.clamp(c.X, 0, 1) * vp.X, math.clamp(c.Y, 0, 1) * vp.Y
+		notifHolder.Size = UDim2.new(0, Library.NotifWidth or 300, 0, math.max(top and (vp.Y - y) or y, 120))
+		notifHolder.AnchorPoint = Vector2.new(left and 0 or 1, top and 0 or 1)
+		notifHolder.Position = UDim2.fromOffset(x, y)
+		notifList.VerticalAlignment = top and Enum.VerticalAlignment.Top or Enum.VerticalAlignment.Bottom
+		notifList.HorizontalAlignment = left and Enum.HorizontalAlignment.Left or Enum.HorizontalAlignment.Right
+		return
+	end
 	notifHolder.Size = UDim2.new(0, Library.NotifWidth or 300, 1, -32)
 	if center then
 		notifHolder.AnchorPoint = Vector2.new(0.5, top and 0 or 1)
@@ -792,7 +815,10 @@ local function applyNotifPos()
 end
 
 local function ensureNotif()
-	if notifGui and notifGui.Parent then return end
+	if notifGui and notifGui.Parent then
+		if Library.NotifPos == "Custom" then applyNotifPos() end   -- suit la taille de l'écran
+		return
+	end
 	notifGui = new("ScreenGui", { Name = "SolarisNotify", ResetOnSpawn = false, DisplayOrder = 1000,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
 	mount(notifGui)
@@ -808,6 +834,138 @@ function Library:SetNotifPosition(p)
 		Library.NotifPos = p
 		applyNotifPos()
 	end
+end
+
+function Library:SetNotifCustom(c)
+	if type(c) ~= "table" or not (tonumber(c.X) and tonumber(c.Y)) then return false end
+	Library.NotifCustom = { X = math.clamp(tonumber(c.X), 0, 1), Y = math.clamp(tonumber(c.Y), 0, 1),
+		Left = c.Left == true, Top = c.Top ~= false }
+	Library.Flags["ui.notifcustom"] = copyVal(Library.NotifCustom)
+	if notifHolder then applyNotifPos() end
+	return true
+end
+function Library:ResetNotifCustom()
+	Library.NotifCustom = nil
+	Library.Flags["ui.notifcustom"] = nil
+	if notifHolder then applyNotifPos() end
+end
+Library._registerNotifCustom = function()
+	if Library.NotifCustom then Library.Flags["ui.notifcustom"] = copyVal(Library.NotifCustom) end
+	Library.Items["ui.notifcustom"] = {
+		Get = function() return Library.NotifCustom end,
+		Set = function(_, c) Library:SetNotifCustom(c) end,
+	}
+end
+
+-- Placement à la main : une notification test reste à l'écran, tu la glisses où tu veux, puis « Valider ».
+local placeGui
+function Library:StartNotifPlacement()
+	if placeGui and placeGui.Parent then return end
+	local gui = new("ScreenGui", { Name = "SolarisNotifPlace", ResetOnSpawn = false, DisplayOrder = 1003,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
+	mount(gui)
+	placeGui = gui
+	local vp = viewport()
+	local w, h = Library.NotifWidth or 300, 118
+	local BLACK = Color3.new(0, 0, 0)
+
+	local dim = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = BLACK, BackgroundTransparency = 1,
+		BorderSizePixel = 0 }, gui)
+	tween(dim, { BackgroundTransparency = 0.55 }, 0.3)
+	local hint = new("TextLabel", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 28),
+		Size = UDim2.fromOffset(math.min(vp.X - 30, 420), 40), BackgroundTransparency = 1, TextWrapped = true,
+		Text = "Glisse la notification à l'endroit voulu, puis clique sur Valider.", TextColor3 = T.Text,
+		TextSize = 14, Font = F_MED, TextTransparency = 1 }, gui)
+	tween(hint, { TextTransparency = 0 }, 0.4)
+
+	-- position de départ : celle des notifications actuelles
+	local top, left, center = notifSide()
+	local cx = center and vp.X / 2 or (left and (16 + w / 2) or (vp.X - 16 - w / 2))
+	local cy = top and (16 + h / 2) or (vp.Y - 16 - h / 2)
+	if Library.NotifPos == "Custom" then
+		local c = getCustom()
+		local px, py = c.X * vp.X, c.Y * vp.Y
+		cx = left and (px + w / 2) or (px - w / 2)
+		cy = top and (py + h / 2) or (py - h / 2)
+	end
+	local pos = Vector2.new(cx, cy)
+	local function clampPos(p)
+		return Vector2.new(math.clamp(p.X, w / 2, math.max(vp.X - w / 2, w / 2)), math.clamp(p.Y, h / 2, math.max(vp.Y - h / 2, h / 2)))
+	end
+	pos = clampPos(pos)
+
+	local card = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(pos.X, pos.Y),
+		Size = UDim2.fromOffset(w, h), BackgroundColor3 = T.Main, BackgroundTransparency = 0.03, BorderSizePixel = 0,
+		Active = true }, gui)
+	new("UICorner", { CornerRadius = UDim.new(0, 22) }, card)
+	local cst = new("UIStroke", { Color = T.Accent, Thickness = 1.5, Transparency = 0.35, ApplyStrokeMode = BORDER }, card)
+	local sc = new("UIScale", { Scale = 0.85 }, card)
+	tween(sc, { Scale = 1 }, 0.5, BACK)
+	local ico = new("Frame", { Position = UDim2.fromOffset(14, 13), Size = UDim2.fromOffset(28, 28),
+		BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, card)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, ico)
+	label(ico, "i", 14, { Font = F_BOLD, TextXAlignment = CENTER, TextColor3 = Color3.fromRGB(10, 10, 12) })
+	label(card, "Notification test", 14, { Font = F_BOLD, Position = UDim2.fromOffset(56, 13), Size = UDim2.new(1, -72, 0, 18) })
+	label(card, "Les notifications apparaîtront ici.", 12, { Position = UDim2.fromOffset(56, 33), Size = UDim2.new(1, -72, 0, 16),
+		TextColor3 = T.ElementAccent })
+
+	local function btn(text, x, wd)
+		local b = new("TextButton", { Position = UDim2.new(0, x, 1, -38), Size = UDim2.fromOffset(wd, 26),
+			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, Text = text, TextColor3 = T.Text, TextSize = 12,
+			Font = F_MED, AutoButtonColor = false, BorderSizePixel = 0 }, card)
+		new("UICorner", { CornerRadius = UDim.new(0, 13) }, b)
+		b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0.76 }, 0.15) end)
+		b.MouseLeave:Connect(function() tween(b, { BackgroundTransparency = 0.9 }, 0.2) end)
+		return b
+	end
+	local bw = math.floor((w - 28 - 12) / 3)
+	local okB = btn("Valider", 14, bw)
+	okB.BackgroundColor3, okB.BackgroundTransparency, okB.TextColor3 = T.Accent, 0.1, T.Main
+	local resetB = btn("Défaut", 14 + bw + 6, bw)
+	local cancelB = btn("Annuler", 14 + (bw + 6) * 2, bw)
+
+	local closing = false
+	local function close()
+		if closing then return end
+		closing = true
+		tween(dim, { BackgroundTransparency = 1 }, 0.25)
+		tween(hint, { TextTransparency = 1 }, 0.2)
+		tween(sc, { Scale = 0.85 }, 0.25)
+		tween(card, { BackgroundTransparency = 1 }, 0.25)
+		tween(cst, { Transparency = 1 }, 0.25)
+		task.delay(0.3, function() gui:Destroy() end)
+	end
+
+	card.InputBegan:Connect(function(i)
+		if not isPress(i) or closing then return end
+		local start = Vector2.new(i.Position.X, i.Position.Y)
+		local origin = pos
+		tween(cst, { Transparency = 0.05 }, 0.15)
+		startDrag(function(p)
+			pos = clampPos(origin + (Vector2.new(p.X, p.Y) - start))
+			card.Position = UDim2.fromOffset(pos.X, pos.Y)
+		end, nil, i.Position, function() tween(cst, { Transparency = 0.35 }, 0.25) end)
+	end)
+
+	okB.MouseButton1Click:Connect(function()
+		local l, t = pos.X < vp.X / 2, pos.Y < vp.Y / 2
+		local x = l and (pos.X - w / 2) or (pos.X + w / 2)
+		local y = t and (pos.Y - h / 2) or (pos.Y + h / 2)
+		Library:SetNotifCustom({ X = x / vp.X, Y = y / vp.Y, Left = l, Top = t })
+		Library:SetNotifPosition("Custom")
+		local it = Library.Items["ui.notifpos"]
+		if it and it.Set then pcall(it.Set, it, Library.Names.NotifPos.Custom) end
+		close()
+		task.delay(0.35, function()
+			Library:Notify({ Title = "Position enregistrée", Content = "Les notifications apparaîtront ici.",
+				Type = "Success", Duration = 3 })
+		end)
+	end)
+	resetB.MouseButton1Click:Connect(function()
+		pos = clampPos(Vector2.new(vp.X - 16 - w / 2, vp.Y - 16 - h / 2))
+		tween(card, { Position = UDim2.fromOffset(pos.X, pos.Y) }, 0.4)
+	end)
+	cancelB.MouseButton1Click:Connect(close)
 end
 
 function Library:SetNotifDuration(d)
@@ -2518,8 +2676,8 @@ Library.Presets = {
 Library.Names = {
 	Background = { full = "Complet", light = "Léger", off = "Désactivé" },
 	NotifPos   = { TopLeft = "Haut gauche", TopCenter = "Haut centre", TopRight = "Haut droite",
-		BottomLeft = "Bas gauche", BottomCenter = "Bas centre", BottomRight = "Bas droite" },
-	HolePos    = { TopRight = "Haut droite", TopLeft = "Haut gauche", BottomRight = "Bas droite", BottomLeft = "Bas gauche", Center = "Centre" },
+		BottomLeft = "Bas gauche", BottomCenter = "Bas centre", BottomRight = "Bas droite", Custom = "Personnalisée" },
+	HolePos   = { TopRight = "Haut droite", TopLeft = "Haut gauche", BottomRight = "Bas droite", BottomLeft = "Bas gauche", Center = "Centre" },
 }
 
 -- ---------------------------------------------------------------------------
@@ -5013,12 +5171,31 @@ function Window:CreateSettingsTab(name, icon, docked)
 
 	-- ───────────── Notifications ─────────────
 	local C = tab:CreateBlock({ Name = "Notifications", Side = "Left", Collapsed = true })
-	local posItems, posKeys = { "Haut gauche", "Haut centre", "Haut droite", "Bas gauche", "Bas centre", "Bas droite" }, {}
+	local posItems, posKeys = { "Haut gauche", "Haut centre", "Haut droite", "Bas gauche", "Bas centre", "Bas droite", "Personnalisée" }, {}
 	for k, v in pairs(N.NotifPos) do posKeys[v] = k end
 	C:CreateSection("Affichage")
 	C:CreateDropdown({ Name = "Position", Flag = "ui.notifpos", Items = posItems,
 		Default = N.NotifPos[Library.NotifPos] or "Bas droite", Search = false,
-		Callback = function(v) Library:SetNotifPosition(posKeys[v] or "BottomRight") end })
+		Callback = function(v)
+			local k = posKeys[v] or "BottomRight"
+			Library:SetNotifPosition(k)
+			-- « Personnalisée » choisie à la main sans position enregistrée : on lance le placement
+			if k == "Custom" and not Library.NotifCustom and (Library._silentSound or 0) == 0
+				and (Library._restoring or 0) == 0 then
+				Library:StartNotifPlacement()
+			end
+		end })
+	C:CreateButton({ Name = "Placer les notifications (glisser)", Favorite = false,
+		Tooltip = "Affiche une notification test : glisse-la où tu veux, puis Valider. La position est retenue.",
+		Callback = function() Library:StartNotifPlacement() end })
+	C:CreateButton({ Name = "Réinitialiser la position perso", Favorite = false,
+		Callback = function()
+			Library:ResetNotifCustom()
+			if Library.NotifPos == "Custom" then
+				local it = Library.Items["ui.notifpos"]
+				if it and it.Set then pcall(it.Set, it, "Bas droite") else Library:SetNotifPosition("BottomRight") end
+			end
+		end })
 	C:CreateSlider({ Name = "Durée par défaut", Flag = "ui.notifdur", Min = 1, Max = 15, Step = 0.5, Suffix = " s",
 		Default = Library.NotifDuration, Callback = function(v) Library:SetNotifDuration(v) end })
 	C:CreateSlider({ Name = "Largeur", Flag = "ui.notifwidth", Min = 240, Max = 420, Step = 10, Suffix = " px",
@@ -8102,6 +8279,7 @@ function Library:CreateWindow(cfg)
 	}
 	registerFavItem()
 	Library._registerSilenced()
+	Library._registerNotifCustom()
 	-- position du HUD : restaurée avec les réglages
 	Library.Items["ui.hudpos"] = {
 		Get = function() return Library.HudPos end,
