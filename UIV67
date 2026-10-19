@@ -187,7 +187,8 @@ local Library = {
 	CornerObjects     = {},
 	GlobalCornerValue = 10,    -- 10 = rayon normal (le script le change via son slider)
 	FireDefaults      = false, -- true = appelle les Callback avec la valeur Default à la création
-	StarCount         = 40,    -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 pour désactiver)
+	NoCanvasGroup     = true,  -- true = fenêtre en simple Frame (beaucoup plus fluide) ; false = fondu d'ouverture mais plus lourd
+	StarCount         = 20,    -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 pour désactiver)
 	ConfigFolder      = "Ui-Lib",
 	Scale             = 1,
 	Animations        = true,  -- false = aucune animation (PC faibles)
@@ -528,6 +529,16 @@ local function register(flag, item, value)
 		Library.Flags[flag] = value
 		Library.Items[flag] = item
 		Library.Defaults[flag] = copyVal(value)
+		-- config auto-chargée : les éléments créés APRÈS le chargement reçoivent quand même leur valeur sauvegardée
+		local pend = Library._pendingFlags
+		if pend and pend[flag] ~= nil and string.sub(flag, 1, 3) ~= "ui." and type(item) == "table" and item.Set then
+			local v = copyVal(pend[flag])
+			task.defer(function()
+				Library._silentSound = (Library._silentSound or 0) + 1
+				pcall(item.Set, item, v)
+				Library._silentSound = math.max((Library._silentSound or 1) - 1, 0)
+			end)
+		end
 	end
 end
 
@@ -2518,7 +2529,7 @@ function Library:SaveConfig(name)
 	return ok, err
 end
 
-function Library:LoadConfig(name)
+function Library:LoadConfig(name, keepPending)
 	name = safeName(name)
 	if name == "" then return false, "nom vide" end
 	if not (readfile and isfile) then return false, "readfile indisponible" end
@@ -2527,6 +2538,14 @@ function Library:LoadConfig(name)
 	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
 	if not ok or type(data) ~= "table" then return false, "fichier invalide" end
 	Library:_applyFlags(data)
+	if keepPending then
+		-- garde les valeurs 15 s : les éléments que ton script crée plus tard les récupèrent (voir register)
+		Library._pendingFlags = data
+		local mine = data
+		task.delay(15, function()
+			if Library._pendingFlags == mine then Library._pendingFlags = nil end
+		end)
+	end
 	return true
 end
 
@@ -2570,7 +2589,7 @@ function Library:AutoLoad()
 	Library._autoDone = true
 	local n = Library:GetAutoLoad()
 	if not n then return end
-	local ok, err = Library:LoadConfig(n)
+	local ok, err = Library:LoadConfig(n, true)
 	if ok and Library.AutoSaveSettings ~= false then Library:LoadSettings() end   -- tes réglages gardent la priorité
 	Library:Notify({ Title = "Config",
 		Content = ok and ("Auto-chargée : " .. n) or ("Auto-load échoué : " .. tostring(err)),
@@ -2641,8 +2660,9 @@ function Library:_startSettingsWatcher(win)
 		local _, seen = settingsSnapshot()
 		local changedAt = os.clock()
 		while Library.Window == win and Library._settingsToken == token do
-			task.wait(0.7)
-			if Library.AutoSaveSettings ~= false and Library.Window == win then
+			task.wait(1.5)
+			-- inutile de comparer tous les réglages quand l'interface est masquée (rien ne peut changer)
+			if Library.AutoSaveSettings ~= false and Library.Window == win and win.Open then
 				local _, sig = settingsSnapshot()
 				if sig ~= seen then
 					seen, changedAt = sig, os.clock()
@@ -5649,14 +5669,28 @@ local function buildConfigUI(blk)
 	end })
 
 	blk:CreateSection("Démarrage")
+	local autoInfo = blk:CreateParagraph({ Title = "Config auto-chargée", Content = "" })
+	local function refreshAuto()
+		local a = Library:GetAutoLoad()
+		autoInfo.Set({ Title = a and ("Auto-chargement : " .. a) or "Auto-chargement : aucun",
+			Content = a and "Cette config s'applique toute seule à chaque lancement du script."
+				or "Choisis une config puis clique sur « Charger automatiquement cette config »." })
+	end
+	refreshAuto()
 	blk:CreateButton({ Name = "Charger automatiquement cette config", Favorite = false, Callback = function()
 		local n = currentName()
 		if n == nil or safeName(n) == "" then toast(false, "", "Choisis d'abord une config.") return end
+		if not table.find(Library:ListConfigs(), safeName(n)) then
+			toast(false, "", "Cette config n'existe pas encore : sauvegarde-la d'abord.")
+			return
+		end
 		Library:SetAutoLoad(n)
+		refreshAuto()
 		toast(true, "Auto-chargement : " .. tostring(n), "")
 	end })
 	blk:CreateButton({ Name = "Désactiver l'auto-chargement", Favorite = false, Callback = function()
 		Library:SetAutoLoad("")
+		refreshAuto()
 		toast(true, "Auto-chargement désactivé", "")
 	end })
 
@@ -5951,6 +5985,23 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Tooltip = "Une onde part du point de clic sur les boutons, interrupteurs et onglets.", Callback = opt("Ripple") })
 	B:CreateToggle({ Name = "Indicateur FPS / ping", Flag = "ui.fps", Default = win.StatsVisible,
 		Callback = function(v) win:SetStats(v) end })
+	B:CreateButton({ Name = "Mode performance (FPS max)", Favorite = false, Confirm = true,
+		ConfirmText = "Couper fond, étoiles et flou ?",
+		Tooltip = "Coupe le fond animé, les étoiles, le flou, le reflet du titre et la respiration du contour. Tu peux tout réactiver ensuite.",
+		Callback = function()
+			local function set(flag, v)
+				local it = Library.Items[flag]
+				if it and it.Set then pcall(it.Set, it, v) end
+			end
+			set("ui.bg", "Désactivé")
+			set("ui.stars", 0)
+			set("ui.blur", 0)
+			set("ui.titleshine", false)
+			set("ui.breath", false)
+			set("ui.holestars", false)
+			Library:Notify({ Title = "Performance", Type = "Success", Duration = 3,
+				Content = "Fond, étoiles et flou coupés." })
+		end })
 
 	-- ───────────── Style des toggles ─────────────
 	local TG = tab:CreateBlock({ Name = "Style des toggles", Side = "Left", Collapsed = true })
