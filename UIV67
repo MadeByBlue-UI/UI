@@ -4126,6 +4126,7 @@ function Block:CreateDropdown(o)
 		PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }, list)
 
 	local btns = {}
+	local firstLayout = true   -- vrai tant que la liste vient d'être (re)construite : pas d'animation
 	local restyle, layout, setOpen, setItems
 
 	local function getMulti()
@@ -4182,21 +4183,43 @@ function Block:CreateDropdown(o)
 	layout = function()
 		local q = string.lower(search.Text)
 		local count = 0
-		for _, text in ipairs(items) do
+		for idx, text in ipairs(items) do
 			local b = btns[text]
 			if b then
 				local vis = q == "" or string.find(string.lower(text), q, 1, true) ~= nil
-				b.Btn.Visible = vis
 				if vis then count = count + 1 end
+				-- apparition / disparition fluide : la ligne grandit en se révélant, ou se replie en s'effaçant
+				if b.Shown ~= vis then
+					b.Shown = vis
+					b.Tok = (b.Tok or 0) + 1
+					local my, btn = b.Tok, b.Btn
+					if vis then
+						btn.Visible = true
+						if firstLayout then
+							btn.Size = UDim2.new(1, 0, 0, 24)
+							btn.TextTransparency = 0
+						else
+							btn.Size = UDim2.new(1, 0, 0, 0)
+							btn.TextTransparency = 1
+							tween(btn, { Size = UDim2.new(1, 0, 0, 24), TextTransparency = 0 }, 0.28)
+						end
+					else
+						local tw = tween(btn, { Size = UDim2.new(1, 0, 0, 0), TextTransparency = 1 }, 0.2)
+						tw.Completed:Connect(function()
+							if b.Tok == my and not b.Shown then btn.Visible = false end
+						end)
+					end
+				end
 			end
 		end
+		firstLayout = false
 		local showSearch = (o.Search == true) or (o.Search ~= false and #items >= 7)
 		search.Visible = showSearch
 		local sh = showSearch and 36 or 0
 		local lh = math.clamp(math.max(count, 1) * 26 + 8, 34, 150)
 		list.Position = UDim2.new(0, 0, 0, sh)
-		list.Size = UDim2.new(1, 0, 0, lh)
-		panel.Size = UDim2.new(1, 0, 0, sh + lh)
+		tween(list, { Size = UDim2.new(1, 0, 0, lh) }, 0.28)
+		tween(panel, { Size = UDim2.new(1, 0, 0, sh + lh) }, 0.28)
 		dr:Resize(sh + lh)
 	end
 
@@ -4205,6 +4228,7 @@ function Block:CreateDropdown(o)
 			if c:IsA("TextButton") or c:IsA("TextLabel") then c:Destroy() end
 		end
 		table.clear(btns)
+		firstLayout = true
 		if #items == 0 then
 			label(list, "(vide)", 12, { Size = UDim2.new(1, 0, 0, 24), TextColor3 = T.ElementAccent, TextXAlignment = CENTER })
 		end
@@ -4213,7 +4237,7 @@ function Block:CreateDropdown(o)
 				Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
 				Text = text, TextColor3 = T.ElementAccent, TextSize = 12, Font = F_REG,
 				TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd,
-				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = idx,
+				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = idx, ClipsDescendants = true,
 			}, list)
 			new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 26) }, b)
 			new("UICorner", { CornerRadius = UDim.new(0, 5) }, b)
@@ -4230,7 +4254,7 @@ function Block:CreateDropdown(o)
 					BorderSizePixel = 0 }, b)
 				new("UICorner", { CornerRadius = UDim.new(1, 0) }, ind)
 			end
-			btns[text] = { Btn = b, Ind = ind }
+			btns[text] = { Btn = b, Ind = ind, Shown = true }
 			b.MouseEnter:Connect(function()
 				if not isOn(text) then tween(b, { BackgroundTransparency = 0.93 }, 0.15) end
 			end)
