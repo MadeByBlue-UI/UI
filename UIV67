@@ -92,7 +92,7 @@
 		• Block:CreateConfirmButton({...}) ou CreateButton({ Confirm = true, ConfirmText = "..." }) : double confirmation.
 		• Block:CreateSeparator() (alias de CreateDivider). CreateLabel / CreateParagraph / Dropdown Multi existaient déjà.
 		• Indicateur FPS/ping dans la barre de titre (CreateWindow({ ShowStats = false }) pour le cacher).
-		• Library:SetAccent / SetFontScale / SetAnimSpeed / SetAnimations / SetNotifPosition / SetNotifDuration
+		• Library:SetAccent / SetFontScale / SetAnimSpeed / SetAnimations / SetWindowAnim / SetNotifPosition / SetNotifDuration
 
 	─────────────  V4 : FLOU, ÉTOILES QUI REBONDISSENT, STYLES  ─────────────
 		• Les vagues (contour ondulant + vagues intérieures) ont été retirées.
@@ -172,6 +172,7 @@ local Library = {
 	Scale             = 1,
 	Animations        = true,  -- false = aucune animation (PC faibles)
 	AnimSpeed         = 1,     -- multiplicateur de vitesse des animations
+	WindowAnim        = true,  -- false = la fenêtre s'ouvre / se ferme instantanément (sans effet smooth)
 	FontScale         = 1,
 	NotifPos          = "BottomRight",
 	NotifDuration     = 4,
@@ -2470,6 +2471,7 @@ function Library:SetAnimations(v)
 	end
 end
 function Library:SetAnimSpeed(v) Library.AnimSpeed = math.clamp(tonumber(v) or 1, 0.25, 4) end
+function Library:SetWindowAnim(v) Library.WindowAnim = (v ~= false) end
 
 local function guiRoots()
 	local r = {}
@@ -2724,6 +2726,7 @@ function Library:GetTheme()
 		Background = w and w:GetBackground() or "full",
 		Animations = Library.Animations,
 		AnimSpeed = Library.AnimSpeed,
+		WindowAnim = Library.WindowAnim,
 		NotifPos = Library.NotifPos,
 		NotifDuration = Library.NotifDuration,
 	}
@@ -2785,6 +2788,7 @@ function Library:ApplyTheme(t)
 		{ "Background", "ui.bg", function(v) return N.Background[v] or v end, function(v) Library:SetBackground(v) end },
 		{ "Animations", "ui.anim", nil, function(v) Library:SetAnimations(v) end },
 		{ "AnimSpeed", "ui.animspeed", function(v) return tostring(v) .. "x" end, function(v) Library:SetAnimSpeed(v) end },
+		{ "WindowAnim", "ui.winanim", nil, function(v) Library:SetWindowAnim(v) end },
 		{ "NotifPos", "ui.notifpos", function(v) return N.NotifPos[v] or v end, function(v) Library:SetNotifPosition(v) end },
 		{ "NotifDuration", "ui.notifdur", nil, function(v) Library:SetNotifDuration(v) end },
 	}
@@ -5160,6 +5164,9 @@ function Window:CreateSettingsTab(name, icon, docked)
 	B:CreateToggle({ Name = "Animations", Flag = "ui.anim", Default = Library.Animations,
 		Tooltip = "Désactive toutes les transitions (utile sur les PC faibles).",
 		Callback = function(v) Library:SetAnimations(v) end })
+	B:CreateToggle({ Name = "Animation ouverture / fermeture", Flag = "ui.winanim", Default = Library.WindowAnim ~= false,
+		Tooltip = "Désactivé : la fenêtre apparaît et disparaît instantanément, sans effet smooth (zoom, fondu, flou).",
+		Callback = function(v) Library:SetWindowAnim(v) end })
 	local speeds = { ["0.5x"] = 0.5, ["1x"] = 1, ["2x"] = 2 }
 	B:CreateDropdown({ Name = "Vitesse des animations", Flag = "ui.animspeed", Items = { "0.5x", "1x", "2x" },
 		Default = tostring(Library.AnimSpeed) .. "x", Search = false,
@@ -7316,6 +7323,7 @@ function Library:CreateWindow(cfg)
 	Library.ConfigFolder = cfg.ConfigFolder or Library.ConfigFolder or "Ui-Lib"
 	if cfg.Animations ~= nil then Library.Animations = cfg.Animations and true or false end
 	if cfg.AnimSpeed then Library.AnimSpeed = math.clamp(tonumber(cfg.AnimSpeed) or 1, 0.25, 4) end
+	if cfg.WindowAnim ~= nil then Library.WindowAnim = cfg.WindowAnim and true or false end
 
 	-- Nettoie une ancienne instance (relance du script)
 	for _, p in ipairs({ CoreGui, LP:FindFirstChild("PlayerGui") }) do
@@ -7986,23 +7994,39 @@ function Library:CreateWindow(cfg)
 		if v == self.Open then return end
 		self.Open = v
 		if Library._hudRefresh then Library._hudRefresh() end
+		local noAnim = Library.WindowAnim == false   -- réglage « Animation ouverture / fermeture » désactivé
 		skyTarget = v and 1 or 0
+		Library._skyInstant = noAnim
 		if v and refreshSky then refreshSky() end
-		setBlurTarget(v and Library.BlurSize or 0)
+		setBlurTarget(v and Library.BlurSize or 0, noAnim)
 		toggleToken = toggleToken + 1
 		local my = toggleToken
+		-- coupe les animations d'ouverture / fermeture encore en cours
+		if self._twA then pcall(function() self._twA:Cancel() end) self._twA = nil end
+		if self._twB then pcall(function() self._twB:Cancel() end) self._twB = nil end
 		if v then
 			main.Visible = true
-			tween(uiScale, { Scale = scaleBase }, 0.55, BACK)
-			if useCanvas then tween(main, { GroupTransparency = 0 }, 0.35) end
+			if noAnim then
+				uiScale.Scale = scaleBase
+				if useCanvas then main.GroupTransparency = 0 end
+			else
+				self._twA = tween(uiScale, { Scale = scaleBase }, 0.55, BACK)
+				if useCanvas then self._twB = tween(main, { GroupTransparency = 0 }, 0.35) end
+			end
 		else
 			if Library._openDD then Library._openDD(false) end
 			self:RefreshShape()
-			tween(uiScale, { Scale = scaleBase * 0.94 }, 0.3)
-			if useCanvas then tween(main, { GroupTransparency = 1 }, 0.28) end
-			task.delay(0.32 / math.max(Library.AnimSpeed or 1, 0.05) + 0.02, function()
-				if toggleToken == my and not self.Open then main.Visible = false end
-			end)
+			if noAnim then
+				uiScale.Scale = scaleBase
+				if useCanvas then main.GroupTransparency = 1 end
+				main.Visible = false
+			else
+				self._twA = tween(uiScale, { Scale = scaleBase * 0.94 }, 0.3)
+				if useCanvas then self._twB = tween(main, { GroupTransparency = 1 }, 0.28) end
+				task.delay(0.32 / math.max(Library.AnimSpeed or 1, 0.05) + 0.02, function()
+					if toggleToken == my and not self.Open then main.Visible = false end
+				end)
+			end
 		end
 	end
 	function win:Destroy() Library:Destroy() end
@@ -8228,7 +8252,11 @@ function Library:CreateWindow(cfg)
 	end
 
 	track(RunService.Heartbeat:Connect(function(dt)
-		skyFade = skyFade + (skyTarget - skyFade) * (1 - math.exp(-dt * 7))
+		if Library._skyInstant then
+			skyFade = skyTarget
+		else
+			skyFade = skyFade + (skyTarget - skyFade) * (1 - math.exp(-dt * 7))
+		end
 		if skyTarget == 0 and skyFade < 0.01 then
 			skyFade = 0
 			if sky.Visible then sky.Visible = false end
