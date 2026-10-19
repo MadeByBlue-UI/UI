@@ -92,7 +92,7 @@
 		• Block:CreateConfirmButton({...}) ou CreateButton({ Confirm = true, ConfirmText = "..." }) : double confirmation.
 		• Block:CreateSeparator() (alias de CreateDivider). CreateLabel / CreateParagraph / Dropdown Multi existaient déjà.
 		• Indicateur FPS/ping dans la barre de titre (CreateWindow({ ShowStats = false }) pour le cacher).
-		• Library:SetAccent / SetFontScale / SetAnimSpeed / SetAnimations / SetWindowAnim / SetNotifPosition / SetNotifDuration
+		• Library:SetAccent / SetFontScale / SetAnimSpeed / SetAnimations / SetWindowAnim / SetLockPosition / SetToggleStyle / SetNotifPosition / SetNotifDuration
 
 	─────────────  V4 : FLOU, ÉTOILES QUI REBONDISSENT, STYLES  ─────────────
 		• Les vagues (contour ondulant + vagues intérieures) ont été retirées.
@@ -173,6 +173,7 @@ local Library = {
 	Animations        = true,  -- false = aucune animation (PC faibles)
 	AnimSpeed         = 1,     -- multiplicateur de vitesse des animations
 	WindowAnim        = true,  -- false = la fenêtre s'ouvre / se ferme instantanément (sans effet smooth)
+	LockPosition      = false, -- true = la fenêtre ne peut plus être déplacée ni redimensionnée à la souris
 	FontScale         = 1,
 	NotifPos          = "BottomRight",
 	NotifDuration     = 4,
@@ -2472,6 +2473,8 @@ function Library:SetAnimations(v)
 end
 function Library:SetAnimSpeed(v) Library.AnimSpeed = math.clamp(tonumber(v) or 1, 0.25, 4) end
 function Library:SetWindowAnim(v) Library.WindowAnim = (v ~= false) end
+function Library:SetLockPosition(v) Library.LockPosition = v and true or false end
+function Library:ToggleLockPosition() Library.LockPosition = not Library.LockPosition return Library.LockPosition end
 
 local function guiRoots()
 	local r = {}
@@ -2727,6 +2730,8 @@ function Library:GetTheme()
 		Animations = Library.Animations,
 		AnimSpeed = Library.AnimSpeed,
 		WindowAnim = Library.WindowAnim,
+		LockPosition = Library.LockPosition,
+		ToggleStyle = Library.ToggleStyle,
 		NotifPos = Library.NotifPos,
 		NotifDuration = Library.NotifDuration,
 	}
@@ -2789,6 +2794,8 @@ function Library:ApplyTheme(t)
 		{ "Animations", "ui.anim", nil, function(v) Library:SetAnimations(v) end },
 		{ "AnimSpeed", "ui.animspeed", function(v) return tostring(v) .. "x" end, function(v) Library:SetAnimSpeed(v) end },
 		{ "WindowAnim", "ui.winanim", nil, function(v) Library:SetWindowAnim(v) end },
+		{ "LockPosition", "ui.lockpos", nil, function(v) Library:SetLockPosition(v) end },
+		{ "ToggleStyle", "ui.togglestyle", nil, function(v) Library:SetToggleStyle(v) end },
 		{ "NotifPos", "ui.notifpos", function(v) return N.NotifPos[v] or v end, function(v) Library:SetNotifPosition(v) end },
 		{ "NotifDuration", "ui.notifdur", nil, function(v) Library:SetNotifDuration(v) end },
 	}
@@ -3153,6 +3160,286 @@ local function shortKey(k)
 	return KEY_SHORT[k.Name] or k.Name
 end
 
+-- ---------------------------------------------------------------------------
+-- STYLES DES TOGGLES  (Paramètres > Style des toggles) : 15 présentations, changeables en direct
+--   Chaque style dessine son interrupteur dans un conteneur de 38 x 20 et renvoie paint(v, instant).
+--   Library:SetToggleStyle("Carré") / Library:NextToggleStyle() / Library.ToggleStyles (liste des noms).
+-- ---------------------------------------------------------------------------
+Library.ToggleStyle = "Pilule"
+local TOGGLE_ORDER = { "Pilule", "Pilule fine", "Carré", "Case à cocher", "Case pleine", "Rond", "Pastille",
+	"Texte ON/OFF", "Barre", "Segmenté", "Ligne", "Vertical", "Crans", "Remplissage", "Étoile" }
+Library.ToggleStyles = TOGGLE_ORDER
+local TOGGLE_STYLES = {}
+local toggleSkins = {}   -- toggles existants : { f = ligne, skin = fonction qui redessine }
+
+local function tgl(o, props, instant, t, style)
+	tween(o, props, instant and 0 or (t or 0.25), style)
+end
+local function circ(o) new("UICorner", { CornerRadius = UDim.new(1, 0) }, o) end
+local function rnd(o, r) new("UICorner", { CornerRadius = UDim.new(0, r) }, o) end
+local function box(parent, props)
+	props.BorderSizePixel = 0
+	return new("Frame", props, parent)
+end
+local V_HALF = Vector2.new(0.5, 0.5)
+
+-- 1) Pilule : le style d'origine (bouton rond qui glisse, avec un petit étirement)
+TOGGLE_STYLES["Pilule"] = function(sw)
+	local tr = box(sw, { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Off })
+	circ(tr) stroke(tr, 0.8)
+	local knob = box(tr, { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0),
+		Size = UDim2.fromOffset(14, 14), BackgroundColor3 = T.Text })
+	circ(knob)
+	return function(v, instant)
+		if not instant and Library.Animations then
+			knob.Size = UDim2.fromOffset(19, 14)
+			tween(knob, { Size = UDim2.fromOffset(14, 14) }, 0.45, BACK)
+		end
+		tgl(tr, { BackgroundColor3 = v and T.Accent or T.Off }, instant, 0.25)
+		tgl(knob, { Position = v and UDim2.new(1, -17, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+			BackgroundColor3 = v and T.Main or T.Text }, instant, 0.35, BACK)
+	end
+end
+
+-- 2) Pilule fine : rail fin + gros bouton qui dépasse
+TOGGLE_STYLES["Pilule fine"] = function(sw)
+	local tr = box(sw, { AnchorPoint = V_HALF, Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.new(1, -4, 0, 8), BackgroundColor3 = T.Off })
+	circ(tr)
+	local knob = box(sw, { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.fromOffset(20, 20), BackgroundColor3 = T.Text, ZIndex = 2 })
+	circ(knob) stroke(knob, 0.6)
+	return function(v, instant)
+		tgl(tr, { BackgroundColor3 = v and T.Accent or T.Off, BackgroundTransparency = v and 0.35 or 0 }, instant, 0.25)
+		tgl(knob, { Position = v and UDim2.new(1, -20, 0.5, 0) or UDim2.new(0, 0, 0.5, 0),
+			BackgroundColor3 = v and T.Accent or T.Text }, instant, 0.35, BACK)
+	end
+end
+
+-- 3) Carré : interrupteur à coins carrés
+TOGGLE_STYLES["Carré"] = function(sw)
+	local tr = box(sw, { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Off })
+	rnd(tr, 4) stroke(tr, 0.8)
+	local knob = box(tr, { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0),
+		Size = UDim2.fromOffset(14, 14), BackgroundColor3 = T.Text })
+	rnd(knob, 3)
+	return function(v, instant)
+		tgl(tr, { BackgroundColor3 = v and T.Accent or T.Off }, instant, 0.2)
+		tgl(knob, { Position = v and UDim2.new(1, -17, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+			BackgroundColor3 = v and T.Main or T.Text }, instant, 0.3)
+	end
+end
+
+-- 4) Case à cocher : carré qui se remplit avec une coche
+TOGGLE_STYLES["Case à cocher"] = function(sw)
+	local bx = box(sw, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(20, 20), BackgroundColor3 = T.Off })
+	rnd(bx, 5)
+	local st = stroke(bx, 0.8)
+	local function leg(w, h, x, y, rot)
+		local l = box(bx, { AnchorPoint = V_HALF, Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, h),
+			Rotation = rot, BackgroundColor3 = T.Main, BackgroundTransparency = 1 })
+		rnd(l, 1)
+		return l
+	end
+	local a, b = leg(2, 6, 7, 12, -45), leg(2, 11, 11.5, 10, 45)
+	return function(v, instant)
+		tgl(bx, { BackgroundColor3 = v and T.Accent or T.Off }, instant, 0.2)
+		tgl(st, { Transparency = v and 0.2 or 0.8 }, instant, 0.2)
+		tgl(a, { BackgroundTransparency = v and 0 or 1 }, instant, 0.15)
+		tgl(b, { BackgroundTransparency = v and 0 or 1 }, instant, 0.25)
+	end
+end
+
+-- 5) Case pleine : un carré intérieur qui grandit
+TOGGLE_STYLES["Case pleine"] = function(sw)
+	local bx = box(sw, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(20, 20), BackgroundColor3 = T.Off })
+	rnd(bx, 5)
+	local st = stroke(bx, 0.8)
+	local inner = box(bx, { AnchorPoint = V_HALF, Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(0, 0), BackgroundColor3 = T.Accent })
+	rnd(inner, 3)
+	return function(v, instant)
+		tgl(inner, { Size = v and UDim2.fromOffset(12, 12) or UDim2.fromOffset(0, 0) }, instant, 0.3, v and BACK or QUINT)
+		tgl(st, { Transparency = v and 0.15 or 0.8 }, instant, 0.2)
+	end
+end
+
+-- 6) Rond : anneau avec un point au centre (comme un bouton radio)
+TOGGLE_STYLES["Rond"] = function(sw)
+	local bx = box(sw, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(20, 20), BackgroundColor3 = T.Off })
+	circ(bx)
+	local st = stroke(bx, 0.8, 1.5)
+	local dot = box(bx, { AnchorPoint = V_HALF, Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(0, 0), BackgroundColor3 = T.Accent })
+	circ(dot)
+	return function(v, instant)
+		tgl(dot, { Size = v and UDim2.fromOffset(10, 10) or UDim2.fromOffset(0, 0) }, instant, 0.3, v and BACK or QUINT)
+		tgl(st, { Transparency = v and 0.05 or 0.8 }, instant, 0.2)
+	end
+end
+
+-- 7) Pastille : un point qui s'allume avec un halo
+TOGGLE_STYLES["Pastille"] = function(sw)
+	local halo = box(sw, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1 })
+	circ(halo)
+	local hs = stroke(halo, 1, 2)
+	local dot = box(halo, { AnchorPoint = V_HALF, Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(12, 12), BackgroundColor3 = T.Off })
+	circ(dot)
+	return function(v, instant)
+		tgl(dot, { BackgroundColor3 = v and T.Accent or T.Off }, instant, 0.2)
+		tgl(hs, { Transparency = v and 0.55 or 1 }, instant, 0.3)
+		if v and not instant and Library.Animations then
+			dot.Size = UDim2.fromOffset(6, 6)
+			tween(dot, { Size = UDim2.fromOffset(12, 12) }, 0.4, BACK)
+		end
+	end
+end
+
+-- 8) Texte ON/OFF : une étiquette qui change de texte et de couleur
+TOGGLE_STYLES["Texte ON/OFF"] = function(sw)
+	local tl = new("TextLabel", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Off, BorderSizePixel = 0,
+		Text = "OFF", TextColor3 = T.Text, TextSize = 11, Font = F_BOLD }, sw)
+	rnd(tl, 6) stroke(tl, 0.8)
+	return function(v, instant)
+		tl.Text = v and "ON" or "OFF"
+		tgl(tl, { BackgroundColor3 = v and T.Accent or T.Off, TextColor3 = v and T.Main or T.Text }, instant, 0.2)
+	end
+end
+
+-- 9) Barre : une petite barre verticale qui s'allonge et s'allume
+TOGGLE_STYLES["Barre"] = function(sw)
+	local bar = box(sw, { AnchorPoint = V_HALF, Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(6, 10), BackgroundColor3 = T.Off })
+	circ(bar)
+	return function(v, instant)
+		tgl(bar, { Size = v and UDim2.fromOffset(6, 24) or UDim2.fromOffset(6, 10),
+			BackgroundColor3 = v and T.Accent or T.Off }, instant, 0.3, v and BACK or QUINT)
+	end
+end
+
+-- 10) Segmenté : « OFF | ON » avec une zone qui glisse
+TOGGLE_STYLES["Segmenté"] = function(sw)
+	local tr = box(sw, { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Off })
+	rnd(tr, 6) stroke(tr, 0.8)
+	local hl = box(tr, { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 2, 0.5, 0),
+		Size = UDim2.new(0.5, -3, 1, -4), BackgroundColor3 = T.Accent })
+	rnd(hl, 4)
+	local function txt(t, x)
+		return new("TextLabel", { Position = UDim2.fromScale(x, 0), Size = UDim2.fromScale(0.5, 1), BackgroundTransparency = 1,
+			Text = t, TextSize = 9, Font = F_BOLD, TextColor3 = T.Text }, tr)
+	end
+	local l1, l2 = txt("OFF", 0), txt("ON", 0.5)
+	return function(v, instant)
+		tgl(hl, { Position = v and UDim2.new(0.5, 1, 0.5, 0) or UDim2.new(0, 2, 0.5, 0) }, instant, 0.3)
+		tgl(l1, { TextColor3 = v and T.Text or T.Main }, instant, 0.2)
+		tgl(l2, { TextColor3 = v and T.Main or T.Text }, instant, 0.2)
+	end
+end
+
+-- 11) Ligne : un trait qui se remplit depuis le centre
+TOGGLE_STYLES["Ligne"] = function(sw)
+	local tr = box(sw, { AnchorPoint = V_HALF, Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.new(1, 0, 0, 4), BackgroundColor3 = T.Off })
+	circ(tr)
+	local fill = box(tr, { AnchorPoint = V_HALF, Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = T.Accent })
+	circ(fill)
+	return function(v, instant)
+		tgl(fill, { Size = v and UDim2.fromScale(1, 1) or UDim2.new(0, 0, 1, 0) }, instant, 0.35)
+	end
+end
+
+-- 12) Vertical : interrupteur debout (bouton qui monte / descend)
+TOGGLE_STYLES["Vertical"] = function(sw)
+	local tr = box(sw, { AnchorPoint = V_HALF, Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(16, 28), BackgroundColor3 = T.Off })
+	circ(tr) stroke(tr, 0.8)
+	local knob = box(tr, { AnchorPoint = V_HALF, Position = UDim2.new(0.5, 0, 1, -8),
+		Size = UDim2.fromOffset(10, 10), BackgroundColor3 = T.Text })
+	circ(knob)
+	return function(v, instant)
+		tgl(tr, { BackgroundColor3 = v and T.Accent or T.Off }, instant, 0.25)
+		tgl(knob, { Position = v and UDim2.new(0.5, 0, 0, 8) or UDim2.new(0.5, 0, 1, -8),
+			BackgroundColor3 = v and T.Main or T.Text }, instant, 0.35, BACK)
+	end
+end
+
+-- 13) Crans : 4 barres (comme un indicateur de signal) qui s'allument une à une
+TOGGLE_STYLES["Crans"] = function(sw)
+	local bars = {}
+	for i = 1, 4 do
+		bars[i] = box(sw, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 1 + (i - 1) * 10, 1, 0),
+			Size = UDim2.fromOffset(6, 4 + i * 4), BackgroundColor3 = T.Off })
+		rnd(bars[i], 2)
+	end
+	return function(v, instant)
+		for i, b in ipairs(bars) do
+			local function go()
+				if b.Parent then tween(b, { BackgroundColor3 = v and T.Accent or T.Off }, 0.2) end
+			end
+			if instant or not Library.Animations then
+				tgl(b, { BackgroundColor3 = v and T.Accent or T.Off }, true)
+			else
+				task.delay((v and (i - 1) or (4 - i)) * 0.05, go)
+			end
+		end
+	end
+end
+
+-- 14) Remplissage : la pilule se remplit de gauche à droite
+TOGGLE_STYLES["Remplissage"] = function(sw)
+	local tr = box(sw, { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Off, ClipsDescendants = true })
+	circ(tr) stroke(tr, 0.8)
+	local fill = box(tr, { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = T.Accent })
+	circ(fill)
+	local knob = box(tr, { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0),
+		Size = UDim2.fromOffset(14, 14), BackgroundColor3 = T.Text, ZIndex = 2 })
+	circ(knob)
+	return function(v, instant)
+		tgl(fill, { Size = v and UDim2.fromScale(1, 1) or UDim2.new(0, 0, 1, 0) }, instant, 0.4)
+		tgl(knob, { Position = v and UDim2.new(1, -17, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+			BackgroundColor3 = v and T.Main or T.Text }, instant, 0.4)
+	end
+end
+
+-- 15) Étoile : une étoile qui s'allume avec un petit « pop »
+TOGGLE_STYLES["Étoile"] = function(sw)
+	local star = new("TextLabel", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(38, 28), BackgroundTransparency = 1, Text = "★", TextSize = 22, Font = F_BOLD,
+		TextColor3 = T.Off }, sw)
+	return function(v, instant)
+		tgl(star, { TextColor3 = v and T.Accent or T.Off }, instant, 0.25)
+		if v and not instant and Library.Animations then
+			star.TextSize = 30
+			tween(star, { TextSize = 22 }, 0.4, BACK)
+		end
+	end
+end
+
+function Library:SetToggleStyle(name)
+	if not TOGGLE_STYLES[name] then name = "Pilule" end
+	Library.ToggleStyle = name
+	for i = #toggleSkins, 1, -1 do
+		local e = toggleSkins[i]
+		if e.f and e.f.Parent then pcall(e.skin) else table.remove(toggleSkins, i) end
+	end
+end
+
+function Library:NextToggleStyle(step)
+	local idx = table.find(TOGGLE_ORDER, Library.ToggleStyle) or 1
+	idx = ((idx - 1 + (step or 1)) % #TOGGLE_ORDER) + 1
+	local nm = TOGGLE_ORDER[idx]
+	local it = Library.Items and Library.Items["ui.togglestyle"]
+	if it and it.Set then pcall(it.Set, it, nm) else Library:SetToggleStyle(nm) end
+	return nm
+end
+
 -- Toggle. Option Keybind = Enum.KeyCode.X (ou true) : ajoute une puce de touche (clic = changer, Retour arrière = effacer)
 -- et appuyer sur la touche bascule le toggle. KeyCallback = function(touche). HUD = false : caché du HUD des actifs.
 function Block:CreateToggle(o)
@@ -3160,32 +3447,28 @@ function Block:CreateToggle(o)
 	local f, st = makeRow(self, 34, o.Name)
 	local hasKey = o.Keybind ~= nil and o.Keybind ~= false
 	label(f, o.Name or "Toggle", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, hasKey and -150 or -70, 1, 0) })
+	-- conteneur de l'interrupteur : son dessin dépend du style choisi (Paramètres > Style des toggles)
 	local sw = new("Frame", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
-		Size = UDim2.new(0, 38, 0, 20), BackgroundColor3 = T.Off, BorderSizePixel = 0,
+		Size = UDim2.new(0, 38, 0, 20), BackgroundTransparency = 1, BorderSizePixel = 0,
 	}, f)
-	new("UICorner", { CornerRadius = UDim.new(1, 0) }, sw)
-	stroke(sw, 0.8)
-	local knob = new("Frame", {
-		AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0),
-		Size = UDim2.new(0, 14, 0, 14), BackgroundColor3 = T.Text, BorderSizePixel = 0,
-	}, sw)
-	new("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
 	local btn = new("TextButton", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "" }, f)
 	hover(f, st, btn)
 
 	local state = o.Default and true or false
-	local function paint(v, instant)
-		local t = instant and 0 or 0.35
-		if not instant and Library.Animations then
-			knob.Size = UDim2.new(0, 19, 0, 14)
-			tween(knob, { Size = UDim2.new(0, 14, 0, 14) }, 0.45, BACK)
+	local paint
+	local function skin()
+		for _, c in ipairs(sw:GetChildren()) do c:Destroy() end
+		paint = (TOGGLE_STYLES[Library.ToggleStyle] or TOGGLE_STYLES["Pilule"])(sw)
+		paint(state, true)
+	end
+	toggleSkins[#toggleSkins + 1] = { f = f, skin = skin }
+	if #toggleSkins % 200 == 0 then   -- nettoie les lignes détruites
+		local keep = {}
+		for _, e in ipairs(toggleSkins) do
+			if e.f and e.f.Parent then keep[#keep + 1] = e end
 		end
-		tween(sw, { BackgroundColor3 = v and T.Accent or T.Off }, instant and 0 or 0.25)
-		tween(knob, {
-			Position = v and UDim2.new(1, -17, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
-			BackgroundColor3 = v and T.Main or T.Text,
-		}, t, BACK)
+		toggleSkins = keep
 	end
 	local function apply(v, silent)
 		state = v
@@ -3281,7 +3564,7 @@ function Block:CreateToggle(o)
 		end
 	end
 
-	paint(state, true)
+	skin()
 	register(o.Flag, item, state)
 	if Library.FireDefaults then fire(o.Callback, state) end
 	return item
@@ -5176,6 +5459,20 @@ function Window:CreateSettingsTab(name, icon, docked)
 	B:CreateToggle({ Name = "Indicateur FPS / ping", Flag = "ui.fps", Default = win.StatsVisible,
 		Callback = function(v) win:SetStats(v) end })
 
+	-- ───────────── Style des toggles ─────────────
+	local TG = tab:CreateBlock({ Name = "Style des toggles", Side = "Left", Collapsed = true })
+	TG:CreateDropdown({ Name = "Style", Flag = "ui.togglestyle", Items = Library.ToggleStyles, Search = false,
+		Default = Library.ToggleStyle,
+		Tooltip = "15 présentations différentes pour les interrupteurs (pilule, case à cocher, segmenté, crans...). S'applique tout de suite à tous les toggles.",
+		Callback = function(v) Library:SetToggleStyle(v) end })
+	TG:CreateButton({ Name = "Style suivant (pour tester)", Favorite = false,
+		Tooltip = "Passe au style suivant dans la liste : pratique pour comparer les 15 un par un.",
+		Callback = function() Library:NextToggleStyle(1) end })
+	TG:CreateButton({ Name = "Style précédent", Favorite = false,
+		Callback = function() Library:NextToggleStyle(-1) end })
+	TG:CreateToggle({ Name = "Aperçu : allumé", Default = true, Favorite = false, Palette = false, HUD = false })
+	TG:CreateToggle({ Name = "Aperçu : éteint", Default = false, Favorite = false, Palette = false, HUD = false })
+
 	-- ───────────── Notifications ─────────────
 	local C = tab:CreateBlock({ Name = "Notifications", Side = "Left", Collapsed = true })
 	local posItems, posKeys = { "Haut gauche", "Haut centre", "Haut droite", "Bas gauche", "Bas centre", "Bas droite", "Personnalisée" }, {}
@@ -5410,6 +5707,9 @@ function Window:CreateSettingsTab(name, icon, docked)
 			Library.AutoSaveSettings = v and true or false
 			if Library._settingsReady and (Library._restoring or 0) == 0 then Library:SaveSettings() end
 		end })
+	D:CreateToggle({ Name = "Verrouiller la position", Flag = "ui.lockpos", Default = Library.LockPosition == true,
+		Tooltip = "La fenêtre ne peut plus être déplacée ni redimensionnée à la souris (le double-clic pour réduire et Ctrl+R restent possibles).",
+		Callback = function(v) Library:SetLockPosition(v) end })
 	D:CreateButton({ Name = "Réinitialiser la fenêtre", Favorite = false,
 		Tooltip = "Recentre la fenêtre et remet sa taille d'origine (Ctrl+R).",
 		Callback = function() win:Reset() end })
@@ -5420,7 +5720,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 			if Library.DefaultTheme then Library:ApplyTheme(Library.DefaultTheme) end
 		end })
 	D:CreateParagraph({ Title = "Raccourcis",
-		Content = "Double-clic sur la barre de titre : réduire / restaurer.\nCtrl+R : recentrer la fenêtre.\nBouton = dans la barre de titre : tout replier / déplier.\nLa position et la taille de la fenêtre sont retenues automatiquement.\nCtrl+K : palette de commandes (roue au centre de l'écran, choix de 1 à 0)." })
+		Content = "Double-clic sur la barre de titre : réduire / restaurer.\nCtrl+R : recentrer la fenêtre.\nBouton = dans la barre de titre : tout replier / déplier.\nLa position et la taille de la fenêtre sont retenues automatiquement (Paramètres > Fenêtre > Verrouiller la position pour les figer).\nCtrl+K : palette de commandes (roue au centre de l'écran, choix de 1 à 0)." })
 
 	-- ───────────── Raccourcis clavier : tous les keybinds, avec saut vers leur emplacement ─────────────
 	local KB = tab:CreateBlock({ Name = "Raccourcis clavier", Side = "Right", Collapsed = true })
@@ -5871,6 +6171,15 @@ do
 					local w = win()
 					Library:ClosePalette()
 					if w and w.Toggle then w:Toggle() end
+				end },
+			{ Name = "Fenêtre : verrouiller la position", Sub = Library.LockPosition and "ON" or "OFF", On = Library.LockPosition and true or false,
+				Tab = "Palette", Block = "Interface",
+				Run = function()
+					local v = not Library.LockPosition
+					local it = Library.Items["ui.lockpos"]
+					if it and it.Set then pcall(it.Set, v) else Library:SetLockPosition(v) end
+					flash("Position verrouillée : " .. (v and "ON" or "OFF"))
+					render(false)
 				end },
 			{ Name = "Fenêtre : recentrer", Sub = "Interface", Tab = "Palette", Block = "Interface",
 				Run = function()
@@ -7324,6 +7633,8 @@ function Library:CreateWindow(cfg)
 	if cfg.Animations ~= nil then Library.Animations = cfg.Animations and true or false end
 	if cfg.AnimSpeed then Library.AnimSpeed = math.clamp(tonumber(cfg.AnimSpeed) or 1, 0.25, 4) end
 	if cfg.WindowAnim ~= nil then Library.WindowAnim = cfg.WindowAnim and true or false end
+	if cfg.LockPosition ~= nil then Library.LockPosition = cfg.LockPosition and true or false end
+	if cfg.ToggleStyle and TOGGLE_STYLES[cfg.ToggleStyle] then Library.ToggleStyle = cfg.ToggleStyle end
 
 	-- Nettoie une ancienne instance (relance du script)
 	for _, p in ipairs({ CoreGui, LP:FindFirstChild("PlayerGui") }) do
@@ -7666,6 +7977,7 @@ function Library:CreateWindow(cfg)
 			return
 		end
 		lastClick = now
+		if Library.LockPosition then return end   -- position verrouillée : pas de déplacement
 		local start = Vector2.new(i.Position.X, i.Position.Y)
 		local origin = tgtPos or curPos
 		tgtPos = nil
@@ -7695,7 +8007,7 @@ function Library:CreateWindow(cfg)
 	local function attachResize(h, dx, dy)
 		handles[#handles + 1] = h
 		h.InputBegan:Connect(function(i)
-			if not isPress(i) or collapsed then return end
+			if not isPress(i) or collapsed or Library.LockPosition then return end
 			local start = Vector2.new(i.Position.X, i.Position.Y)
 			local sw, sh = main.Size.X.Offset, main.Size.Y.Offset
 			local sc = scaleBase
