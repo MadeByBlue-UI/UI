@@ -53,7 +53,7 @@
 		  poignée de redimensionnement (coin bas-droite), Window:SetScale(n).
 		• Transition fluide entre onglets, blocs repliables animés, hover partout.
 		• Recherche globale (barre dans la sidebar) : filtre les éléments de tous les onglets.
-		• Slider : clic sur la valeur pour taper un nombre, options Step/Increment et Suffix.
+		• Slider : clic sur la valeur pour taper un nombre exact (ex. -2.89765, sans accroche sur le pas ; la poignée, elle, suit Step/Increment), options Step/Increment et Suffix.
 		• Dropdown : recherche intégrée (listes longues) et mode Multi = true (retourne une table).
 		  Option Search = true/false pour forcer la barre de recherche.
 		• Input : option Numeric = true, LiveUpdate = true, ClearOnFocus = true.
@@ -4472,10 +4472,16 @@ function Block:CreateSlider(o)
 	local mult = 10 ^ dec
 	local suffix = o.Suffix and tostring(o.Suffix) or ""
 
-	local function snap(v)
+	-- exact = true (saisie au clavier / item:Set) : aucune accroche sur le pas, précision libre (jusqu'à 6 décimales).
+	-- exact = false (glisser la poignée) : accroche sur Step / Rounding comme avant.
+	local function snap(v, exact)
 		v = math.clamp(v, min, max)
-		if step and step > 0 then v = min + math.floor((v - min) / step + 0.5) * step end
-		v = math.floor(v * mult + 0.5) / mult
+		if exact then
+			v = math.floor(v * 1e6 + 0.5) / 1e6
+		else
+			if step and step > 0 then v = min + math.floor((v - min) / step + 0.5) * step end
+			v = math.floor(v * mult + 0.5) / mult
+		end
 		return math.clamp(v, min, max)
 	end
 	local function fmt(v) return tostring(v) .. suffix end
@@ -4509,8 +4515,8 @@ function Block:CreateSlider(o)
 	hover(f, st)
 
 	local value
-	local function apply(v, silent, instant)
-		v = snap(v)
+	local function apply(v, silent, instant, exact)
+		v = snap(v, exact)
 		if v == value and not silent then return end
 		value = v
 		local span = max - min
@@ -4529,7 +4535,7 @@ function Block:CreateSlider(o)
 	local item = {}
 	item.Set = function(...)
 		local v = tonumber((unself(item, ...)))
-		if v then apply(v) end
+		if v then apply(v, false, false, true) end
 	end
 	item.Get = function() return value end
 
@@ -4550,12 +4556,14 @@ function Block:CreateSlider(o)
 	end)
 	valBox.FocusLost:Connect(function()
 		tween(valBox, { BackgroundTransparency = 1, TextColor3 = T.ElementAccent }, 0.25)
-		local n = tonumber(string.match(valBox.Text, "-?%d+%.?%d*"))
-		if n then apply(n) end
+		-- virgule acceptée, ".5" / "-.5" acceptés, saisie exacte (pas d'accroche sur le pas)
+		local txt = string.gsub(valBox.Text, ",", ".")
+		local n = tonumber(string.match(txt, "-?%d*%.?%d+"))
+		if n then apply(n, false, false, true) end
 		valBox.Text = fmt(value)
 	end)
 
-	apply(def, true, true)
+	apply(def, true, true, true)
 	register(o.Flag, item, value)
 	if Library.FireDefaults then fire(o.Callback, value) end
 	return item
