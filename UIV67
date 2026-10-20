@@ -149,6 +149,15 @@
 		  Il se déplace à la souris / au doigt et sa position est sauvegardée avec les réglages.
 		• Slider à deux poignées : Block:CreateRangeSlider({ Name, Min, Max, Step, MinGap, Default = { Low, High }, Callback = function(lo, hi) })
 		• Sous-onglets : local subs = Tab:CreateSubTabs({ "A", "B" }) puis subs[1]:CreateBlock({...}) (voir plus bas).
+		• Onglets DANS un onglet (menu déroulant fluide dans la barre latérale, avec une flèche ›) :
+		    local combat = Window:CreateTab("Combat", nil, icon)
+		    local aim    = combat:CreateChildTab("Aimbot", nil, icon)   -- (ou combat:CreateTab(...))
+		    local esp    = combat:CreateChildTab("ESP")
+		    aim:CreateBlock({ Name = "Réglages" }) ...                  -- un enfant est un onglet normal
+		    combat:SetExpanded(true) / combat:ToggleExpanded() / combat.Expanded
+		    local kids = combat:CreateChildTabs({ "Aimbot", { Name = "ESP", Icon = "rbxassetid://..." } })
+		    Les enfants peuvent aussi avoir des enfants (imbrication illimitée). Clic sur la flèche = ouvrir / fermer ;
+		    clic sur l'onglet = l'afficher et déplier ; clic sur l'onglet déjà actif = plier / déplier.
 		• Console : Window:CreateConsoleTab("Console") affiche les print / warn / erreurs ; Library:ConsoleLog(texte, type).
 		• « Ne plus afficher » : une notification répétée (x2) reçoit un bouton qui la masque ; liste + réactivation dans
 		  Paramètres > Notifications masquées (Library:SilenceNotif / UnsilenceNotif / UnsilenceAllNotifs).
@@ -6688,10 +6697,24 @@ local function applySearch(win, q)
 			if active and show then total = total + math.max(n, 1) end
 			if expand and n > 0 and blk._isCollapsed and blk._isCollapsed() then blk:SetCollapsed(false) end
 		end
+		tab._hits = active and total or 0
 		tween(tab.Dot, { BackgroundTransparency = (active and total > 0) and 0.1 or 1 }, 0.25)
 		tween(tab.Label, { TextTransparency = (active and total == 0) and 0.6 or 0 }, 0.25)
 		if active and total > 0 and not firstHit then firstHit = tab end
 		if tab == win.Current then curHit = total > 0 end
+	end
+	-- onglets parents : pastille allumée (et dépliés pendant une recherche) si un de leurs enfants a un résultat
+	for i = #win.Tabs, 1, -1 do   -- les enfants sont créés après leur parent : on remonte du dernier au premier
+		local t = win.Tabs[i]
+		local p = t.ParentTab
+		if p and active and (t._hits or 0) > 0 then
+			if (p._hits or 0) == 0 then
+				tween(p.Dot, { BackgroundTransparency = 0.1 }, 0.25)
+				tween(p.Label, { TextTransparency = 0 }, 0.25)
+			end
+			p._hits = (p._hits or 0) + t._hits
+			if q ~= "" then p:SetExpanded(true) end
+		end
 	end
 	if active and firstHit and not curHit then firstHit:Select() end
 end
@@ -6711,12 +6734,17 @@ function Library:SetTabTransition(n)
 	return false
 end
 
-function Window:CreateTab(name, _, icon)
+function Window:CreateTab(name, _, icon, parentTab)
 	local win = self
+	-- parentTab (optionnel, interne) : fait de cet onglet un ENFANT déplié sous parentTab (voir Tab:CreateChildTab)
+	local depth = parentTab and ((parentTab.Depth or 0) + 1) or 0
+	local fullName = parentTab and (tostring(parentTab.Name) .. " / " .. tostring(name or "Tab")) or name
 	local btn = new("TextButton", {
-		Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
-		Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = #self.Tabs + 1, ClipsDescendants = true,
-	}, self.Sidebar)
+		Size = UDim2.new(1, 0, 0, parentTab and 30 or 34), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
+		Text = "", AutoButtonColor = false, BorderSizePixel = 0, ClipsDescendants = true,
+		-- ordre pair = onglet, ordre impair juste après = son conteneur d'enfants
+		LayoutOrder = parentTab and ((#parentTab.Children + 1) * 2) or ((#self.Tabs + 1) * 2),
+	}, parentTab and parentTab:_childHolder() or self.Sidebar)
 	new("UICorner", { CornerRadius = UDim.new(0, 8) }, btn)
 	local bar = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
 		Size = UDim2.new(0, 3, 0, 0), BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, btn)
@@ -6724,13 +6752,14 @@ function Window:CreateTab(name, _, icon)
 	local dot = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
 		Size = UDim2.new(0, 5, 0, 5), BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0 }, btn)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
-	local x = 12
+	local x0 = 12 + depth * 10        -- retrait des onglets enfants
+	local x = x0
 	if icon and icon ~= "" then
 		new("ImageLabel", { BackgroundTransparency = 1, Image = icon, ImageColor3 = T.Text,
-			Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, 12, 0.5, -8) }, btn)
-		x = 34
+			Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, x0, 0.5, -8) }, btn)
+		x = x0 + 22
 	end
-	local txt = label(btn, name or "Tab", 13, { Position = UDim2.new(0, x, 0, 0), Size = UDim2.new(1, -x - 14, 1, 0),
+	local txt = label(btn, name or "Tab", parentTab and 12 or 13, { Position = UDim2.new(0, x, 0, 0), Size = UDim2.new(1, -x - 14, 1, 0),
 		TextColor3 = T.ElementAccent })
 
 	local page = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Visible = false }, self.Content)
@@ -6746,8 +6775,8 @@ function Window:CreateTab(name, _, icon)
 		return sf
 	end
 
-	local tab = setmetatable({ Name = name, Page = page, Button = btn, Blocks = {}, Cols = {}, NumCols = 0,
-		_newColumn = newColumn }, Tab)
+	local tab = setmetatable({ Name = fullName, Page = page, Button = btn, Blocks = {}, Cols = {}, NumCols = 0,
+		_newColumn = newColumn, Win = win, ParentTab = parentTab, Depth = depth, Children = {}, Expanded = false }, Tab)
 	tab:SetColumns(self.EffCols or (self.TwoCols and 2 or 1))
 
 	function tab:Select()
@@ -6757,6 +6786,16 @@ function Window:CreateTab(name, _, icon)
 				tween(t.Bar, { Size = UDim2.new(0, 3, 0, 0) }, 0.25)
 				tween(t.Button, { BackgroundTransparency = 1 }, 0.25)
 				tween(t.Label, { TextColor3 = T.ElementAccent }, 0.25)
+			end
+		end
+		-- les parents d'un onglet enfant se déplient et restent « allumés » tant qu'il est actif
+		do
+			local p = tab.ParentTab
+			while p do
+				p:SetExpanded(true)
+				tween(p.Label, { TextColor3 = T.Text }, 0.25)
+				tween(p.Bar, { Size = UDim2.new(0, 3, 0, 8) }, 0.35)
+				p = p.ParentTab
 			end
 		end
 		page.Visible = true
@@ -6811,11 +6850,17 @@ function Window:CreateTab(name, _, icon)
 	end)
 	btn.MouseButton1Click:Connect(function()
 		ripple(btn)
-		if win.Current ~= tab then uiSnd("tab") end
+		local was = win.Current == tab
+		if not was then uiSnd("tab") end
 		tab:Select()
+		if tab._holder then
+			if was then tab:SetExpanded(not tab.Expanded)   -- déjà actif : plier / déplier
+			else tab:SetExpanded(true) end                  -- sinon : l'afficher et déplier
+		end
 	end)
 
 	table.insert(self.Tabs, tab)
+	if parentTab then table.insert(parentTab.Children, tab) end
 	if not self.Current and not self._noSelect then tab:Select() end
 	return tab
 end
@@ -6921,6 +6966,141 @@ function Tab:SelectSub(name)
 	local s = self:GetSubTab(name)
 	if s then s:Select() end
 	return s
+end
+
+
+-- ============================================================================
+-- ONGLETS DANS UN ONGLET : une flèche › sur l'onglet de la barre latérale déplie ses onglets enfants
+--   (hauteur + fondu + glissement, fermeture identique à l'envers). Imbrication illimitée.
+--
+--   local combat = Window:CreateTab("Combat", nil, icon)
+--   local aim    = combat:CreateChildTab("Aimbot", nil, icon)     -- alias : combat:CreateTab("Aimbot")
+--   local kids   = combat:CreateChildTabs({ "ESP", { Name = "Divers", Icon = "rbxassetid://..." } })  -- kids[1], kids.ESP
+--   combat:SetExpanded(true)  /  combat:ToggleExpanded()  /  combat.Expanded  /  combat:GetChildTab("Aimbot")
+--   Un enfant est un onglet à part entière : CreateBlock, CreateSubTabs, Select, recherche, favoris, disposition...
+-- ============================================================================
+local function fadeChildren(tab, to, t)
+	if canvasSupported then
+		tween(tab._holder, { GroupTransparency = to }, t)
+	else   -- pas de CanvasGroup : on fait fondre les textes des enfants
+		for _, c in ipairs(tab.Children) do tween(c.Label, { TextTransparency = to }, t) end
+	end
+end
+
+-- crée (une seule fois) la flèche et le conteneur des enfants ; renvoie le Frame « Inner » où se placent les boutons enfants
+function Tab:_childHolder()
+	if self._holder then return self._holder.Inner end
+	local tab, btn = self, self.Button
+
+	local holder = new(canvasSupported and "CanvasGroup" or "Frame", {
+		Name = "Children", Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+		ClipsDescendants = true, Visible = false, LayoutOrder = btn.LayoutOrder + 1,
+	}, btn.Parent)
+	if canvasSupported then holder.GroupTransparency = 1 end
+	local inner = new("Frame", { Name = "Inner", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY,
+		BackgroundTransparency = 1, BorderSizePixel = 0, Position = UDim2.new(0, -10, 0, 0) }, holder)
+	local list = new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = BYORDER }, inner)
+	self._holder, self._list = holder, list
+
+	-- si du contenu est ajouté / retiré pendant que c'est ouvert (ou pendant l'animation d'un sous-menu), la hauteur suit
+	list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		if tab.Expanded and not tab._animating then
+			holder.Size = UDim2.new(1, 0, 0, list.AbsoluteContentSize.Y)
+		end
+	end)
+
+	-- flèche à droite de l'onglet (sous la pastille de recherche)
+	local arrow = new("TextButton", { Name = "Arrow", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -21, 0.5, 0),
+		Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1, Text = "›", TextColor3 = T.ElementAccent,
+		TextSize = 20, Font = F_BOLD, AutoButtonColor = false, ZIndex = 2 }, btn)
+	self._arrow = arrow
+	-- le texte raccourcit pour laisser la place à la flèche
+	self.Label.Size = UDim2.new(self.Label.Size.X.Scale, self.Label.Size.X.Offset - 20, self.Label.Size.Y.Scale, self.Label.Size.Y.Offset)
+	arrow.MouseEnter:Connect(function() tween(arrow, { TextColor3 = T.Text }, 0.15) end)
+	arrow.MouseLeave:Connect(function()
+		tween(arrow, { TextColor3 = tab.Expanded and T.Text or T.ElementAccent }, 0.25)
+	end)
+	arrow.MouseButton1Click:Connect(function()
+		uiSnd(tab.Expanded and "off" or "on")
+		tab:SetExpanded(not tab.Expanded)
+	end)
+	return inner
+end
+
+function Tab:SetExpanded(on, instant)
+	local holder = self._holder
+	if not holder then return end
+	on = on and true or false
+	if self.Expanded == on then return end
+	self.Expanded = on
+	self._expTok = (self._expTok or 0) + 1
+	local my = self._expTok
+	local list, inner, arrow = self._list, holder.Inner, self._arrow
+	local function d(t) return instant and 0 or t end
+	self._animating = true
+
+	if on then
+		local H = list.AbsoluteContentSize.Y
+		if H <= 0 then H = #self.Children * 33 end   -- le layout n'a pas encore calculé : estimation, corrigée à la fin
+		holder.Visible = true
+		local tw = tween(holder, { Size = UDim2.new(1, 0, 0, H) }, d(0.45))
+		fadeChildren(self, 0, d(0.45))
+		tween(inner, { Position = UDim2.new(0, 0, 0, 0) }, d(0.5))
+		tween(arrow, { Rotation = 90, TextColor3 = T.Text }, d(0.4), BACK)
+		tw.Completed:Connect(function()
+			if self._expTok ~= my then return end
+			self._animating = false
+			local ch = list.AbsoluteContentSize.Y
+			holder.Size = UDim2.new(1, 0, 0, ch > 0 and ch or H)
+		end)
+	else
+		local tw = tween(holder, { Size = UDim2.new(1, 0, 0, 0) }, d(0.38))
+		fadeChildren(self, 1, d(0.24))
+		tween(inner, { Position = UDim2.new(0, -10, 0, 0) }, d(0.38))
+		tween(arrow, { Rotation = 0, TextColor3 = T.ElementAccent }, d(0.32))
+		tw.Completed:Connect(function()
+			if self._expTok ~= my then return end
+			self._animating = false
+			holder.Visible = false
+		end)
+	end
+end
+
+function Tab:ToggleExpanded() self:SetExpanded(not self.Expanded) end
+
+function Tab:CreateChildTab(name, _, icon)
+	local win = self.Win
+	if not win then
+		warn("[Ui-Lib] CreateChildTab : à appeler sur un onglet (Window:CreateTab), pas sur un sous-onglet.")
+		return nil
+	end
+	return win:CreateTab(name, nil, icon, self)
+end
+Tab.CreateTab = Tab.CreateChildTab   -- alias : combat:CreateTab("Aimbot")
+
+function Tab:CreateChildTabs(list)
+	local out = {}
+	for idx, d in ipairs(list or {}) do
+		local name = type(d) == "table" and tostring(d.Name or d[1] or ("Page " .. idx)) or tostring(d)
+		local child = self:CreateChildTab(name, nil, type(d) == "table" and d.Icon or nil)
+		if child then
+			out[#out + 1] = child
+			out[name] = child
+		end
+	end
+	return out
+end
+
+function Tab:GetChildTab(name)
+	for _, c in ipairs(self.Children or {}) do
+		if c.Name == tostring(self.Name) .. " / " .. tostring(name) then return c end
+	end
+	return nil
+end
+function Tab:SelectChild(name)
+	local c = self:GetChildTab(name)
+	if c then c:Select() end
+	return c
 end
 
 -- Interface de gestion des configs (utilisée par l'onglet Config et par l'onglet Paramètres)
