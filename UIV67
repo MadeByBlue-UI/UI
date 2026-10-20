@@ -4424,7 +4424,9 @@ function Block:CreateToggle(o)
 		-- appuyer sur la touche bascule le toggle (sauf pendant l'écriture / l'assignation d'une touche)
 		track(UIS.InputBegan:Connect(function(i, gp)
 			if gp or listening or Library._listening then return end
-			if i.UserInputType ~= Enum.UserInputType.Keyboard or key == Enum.KeyCode.Unknown or i.KeyCode ~= key then return end
+			-- Filtre strict : SEULEMENT les événements clavier, et seulement si la touche est définie
+			if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
+			if key == Enum.KeyCode.Unknown or i.KeyCode ~= key then return end
 			if os.clock() - lastBind < 0.2 or not f.Parent then return end
 			if UIS:GetFocusedTextBox() then return end
 			apply(not state)
