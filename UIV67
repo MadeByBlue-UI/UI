@@ -4745,7 +4745,6 @@ end
 -- ============================================================================
 do
 	local ddPop          -- menu partagé : créé au premier clic droit
-	local DD_W = 204
 
 	local function keyOf(name)
 		if type(name) ~= "string" then return nil end
@@ -4782,6 +4781,17 @@ do
 		end
 	end
 
+	local CARD_W, CARD_H = 200, 86
+
+	-- change un texte avec un petit fondu (évite le « clignotement » sec)
+	local function swapText(lbl, txt, instant)
+		if lbl.Text == txt then return end
+		lbl.Text = txt
+		if instant then lbl.TextTransparency = 0 return end
+		lbl.TextTransparency = 0.7
+		tween(lbl, { TextTransparency = 0 }, 0.18)
+	end
+
 	local function close(entry)
 		local p = ddPop
 		if not (p and p.Open) then return end
@@ -4790,9 +4800,9 @@ do
 		p.Tok += 1
 		local my = p.Tok
 		if p.Listening then p.StopListen() end
-		tween(p.Card, { GroupTransparency = 1 }, 0.16)
-		tween(p.Scale, { Scale = 0.94 }, 0.16)
-		task.delay(0.25 / math.max(Library.AnimSpeed or 1, 0.05), function()
+		tween(p.Card, { GroupTransparency = 1, Position = UDim2.fromOffset(p.X or 0, (p.Y or 0) + 4) }, 0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		tween(p.Scale, { Scale = 0.97 }, 0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		task.delay(0.18 / math.max(Library.AnimSpeed or 1, 0.05), function()
 			if ddPop == p and p.Tok == my and not p.Open then p.Card.Visible = false end
 		end)
 	end
@@ -4802,62 +4812,86 @@ do
 		if ddPop and ddPop.Card and ddPop.Card.Parent then return ddPop end
 		local gui = Library.Window and Library.Window.Gui
 		if not gui then return nil end
-		local p = { Tok = 0, Open = false, Listening = false }
-		local card = new("CanvasGroup", { Name = "DropdownKeyMenu", Size = UDim2.fromOffset(DD_W, 64),
+		local p = { Tok = 0, Open = false, Listening = false, PulseTok = 0 }
+		local card = new("CanvasGroup", { Name = "DropdownKeyMenu", Size = UDim2.fromOffset(CARD_W, CARD_H),
 			BackgroundColor3 = T.Second, BackgroundTransparency = 0.04, BorderSizePixel = 0, Visible = false,
 			ZIndex = 600, GroupTransparency = 1 }, gui)
-		corner(card, 9)
+		corner(card, 10)
 		stroke(card, 0.8)
-		local sc = new("UIScale", { Scale = 0.94 }, card)
-		local title = label(card, "", 11, { Position = UDim2.fromOffset(10, 8), Size = UDim2.new(1, -20, 0, 16),
+		local sc = new("UIScale", { Scale = 0.96 }, card)
+
+		-- en-tête : nom de l'entrée + croix « retirer la touche » (elle apparaît en fondu seulement s'il y a une touche)
+		local title = label(card, "", 11, { Position = UDim2.fromOffset(12, 8), Size = UDim2.new(1, -44, 0, 16),
 			TextColor3 = T.ElementAccent })
-		local chip = new("TextButton", { Position = UDim2.fromOffset(8, 28), Size = UDim2.new(1, -16, 0, 28),
-			BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = "", TextColor3 = T.Text,
-			TextSize = 12, Font = F_MED, AutoButtonColor = false }, card)
-		corner(chip, 7)
-		local cst = stroke(chip, 0.9)
-		local clr = new("TextButton", { Position = UDim2.fromOffset(8, 60), Size = UDim2.new(1, -16, 0, 22),
-			BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0, Text = "Retirer la touche",
-			TextColor3 = T.ElementAccent, TextSize = 11, Font = F_REG, AutoButtonColor = false }, card)
-		corner(clr, 6)
-		local hint = label(card, "Échap : annuler  ·  Retour : retirer", 10, { Position = UDim2.fromOffset(10, 62),
-			Size = UDim2.new(1, -20, 0, 18), TextColor3 = T.ElementAccent, Font = F_REG, Visible = false })
+		local clr = new("TextButton", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -8, 0, 7),
+			Size = UDim2.fromOffset(20, 18), BackgroundTransparency = 1, BorderSizePixel = 0, Text = "✕",
+			TextColor3 = T.ElementAccent, TextSize = 11, Font = F_BOLD, AutoButtonColor = false,
+			TextTransparency = 1, Active = false }, card)
+
+		-- « keycap » : affiche la touche (ou invite à en choisir une) ; un clic lance l'écoute
+		local chip = new("TextButton", { Position = UDim2.fromOffset(10, 30), Size = UDim2.new(1, -20, 0, 30),
+			BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = "",
+			TextColor3 = T.Text, TextSize = 13, Font = F_BOLD, AutoButtonColor = false }, card)
+		corner(chip, 8)
+		local cst = stroke(chip, 0.88)
+		local hint = label(card, "", 10, { Position = UDim2.fromOffset(12, 66), Size = UDim2.new(1, -24, 0, 14),
+			TextColor3 = T.ElementAccent, Font = F_REG, TextTransparency = 0.25 })
 
 		local function paint(instant)
 			local e, text = p.Entry, p.Text
 			if not e then return end
 			local k = keyOf(e.Keys[text])
-			title.Text = tostring(text)
+			swapText(title, tostring(text), instant)
 			if p.Listening then
-				chip.Text = "Appuie sur une touche…"
+				swapText(chip, "Appuie sur une touche…", instant)
+				chip.TextColor3 = T.ElementAccent
+				chip.TextSize = 12
+				swapText(hint, "Échap : annuler  ·  Retour : retirer", instant)
 			elseif k then
-				chip.Text = "Touche : " .. (shortKey(k) or k.Name) .. "   ·   changer"
+				swapText(chip, shortKey(k) or k.Name, instant)
+				chip.TextColor3 = T.Accent
+				chip.TextSize = 14
+				swapText(hint, "Clique pour changer", instant)
 			else
-				chip.Text = "Assigner une touche"
+				swapText(chip, "Aucune touche", instant)
+				chip.TextColor3 = T.ElementAccent
+				chip.TextSize = 12
+				swapText(hint, "Clique pour assigner", instant)
 			end
-			clr.Visible = (k ~= nil) and not p.Listening
-			hint.Visible = p.Listening
-			local h = (k ~= nil or p.Listening) and 90 or 64
-			if instant then
-				card.Size = UDim2.fromOffset(DD_W, h)
-			else
-				tween(card, { Size = UDim2.fromOffset(DD_W, h) }, 0.2)
-			end
+			local showClr = (k ~= nil) and not p.Listening
+			clr.Active = showClr
+			tween(clr, { TextTransparency = showClr and 0.2 or 1 }, 0.18)
 		end
 
-		chip.MouseEnter:Connect(function() if not p.Listening then tween(cst, { Transparency = 0.6 }, 0.15) end end)
-		chip.MouseLeave:Connect(function() if not p.Listening then tween(cst, { Transparency = 0.9 }, 0.2) end end)
-		clr.MouseEnter:Connect(function() tween(clr, { BackgroundTransparency = 0.9 }, 0.15) end)
-		clr.MouseLeave:Connect(function() tween(clr, { BackgroundTransparency = 1 }, 0.2) end)
+		chip.MouseEnter:Connect(function() if not p.Listening then tween(cst, { Transparency = 0.55 }, 0.15) end end)
+		chip.MouseLeave:Connect(function() if not p.Listening then tween(cst, { Transparency = 0.88 }, 0.2) end end)
+		clr.MouseEnter:Connect(function() if clr.Active then tween(clr, { TextColor3 = T.Accent, TextTransparency = 0 }, 0.12) end end)
+		clr.MouseLeave:Connect(function() tween(clr, { TextColor3 = T.ElementAccent, TextTransparency = clr.Active and 0.2 or 1 }, 0.15) end)
 
 		local conn
 		function p.StopListen()
 			if conn then conn:Disconnect() conn = nil end
+			p.PulseTok += 1
 			if p.Listening then
 				p.Listening = false
 				Library._listening = false
 			end
-			tween(cst, { Transparency = 0.9 }, 0.2)
+			tween(cst, { Transparency = 0.88 }, 0.2)
+			tween(chip, { BackgroundTransparency = 0.4 }, 0.2)
+		end
+
+		-- pulsation douce de la bordure pendant l'écoute
+		local function pulse()
+			p.PulseTok += 1
+			local my = p.PulseTok
+			task.spawn(function()
+				local low = true
+				while p.Listening and p.PulseTok == my do
+					tween(cst, { Transparency = low and 0.15 or 0.55 }, 0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+					low = not low
+					task.wait(0.5 / math.max(Library.AnimSpeed or 1, 0.05))
+				end
+			end)
 		end
 
 		chip.MouseButton1Click:Connect(function()
@@ -4865,8 +4899,9 @@ do
 			p.Listening = true
 			Library._listening = true
 			uiSnd("focus")
-			tween(cst, { Transparency = 0.25 }, 0.2)
+			tween(chip, { BackgroundTransparency = 0.2 }, 0.15)
 			paint()
+			pulse()
 			conn = track(UIS.InputBegan:Connect(function(i)
 				if i.UserInputType ~= Enum.UserInputType.Keyboard or i.KeyCode == Enum.KeyCode.Unknown then return end
 				local kc, e, text = i.KeyCode, p.Entry, p.Text
@@ -4879,13 +4914,14 @@ do
 				else
 					e.SetKey(text, kc)
 					conflict(e, text, kc.Name)
+					uiSnd("on")
 				end
 				paint()
 			end))
 		end)
 
 		clr.MouseButton1Click:Connect(function()
-			if not p.Entry then return end
+			if not p.Entry or not clr.Active then return end
 			p.Entry.SetKey(p.Text, nil)
 			uiSnd("off")
 			paint()
@@ -4896,7 +4932,7 @@ do
 		return p
 	end
 
-	-- ouvre le menu à la position de la souris (apparition en fondu + léger glissement)
+	-- ouvre le menu près de la souris : fondu + léger glissement vers le haut + zoom doux (taille fixe, plus de saut de hauteur)
 	Library._ddOpen = function(entry, text)
 		local p = build()
 		if not p then return end
@@ -4910,18 +4946,18 @@ do
 		p.OpenedAt = os.clock()
 		p.Paint(true)
 		local m, v = UIS:GetMouseLocation(), viewport()
-		local h = card.Size.Y.Offset
-		local x = math.clamp(m.X + 8, 4, math.max(4, v.X - DD_W - 4))
+		local x = math.clamp(m.X + 8, 4, math.max(4, v.X - CARD_W - 4))
 		local y = m.Y + 8
-		if y + h > v.Y - 4 then y = math.max(4, m.Y - h - 8) end
+		if y + CARD_H > v.Y - 4 then y = math.max(4, m.Y - CARD_H - 8) end
+		p.X, p.Y = x, y
 		if fresh then
-			card.Position = UDim2.fromOffset(x, y + 8)
-			p.Scale.Scale = 0.94
+			card.Position = UDim2.fromOffset(x, y + 6)
+			p.Scale.Scale = 0.96
 			card.GroupTransparency = 1
 			card.Visible = true
 		end
-		tween(card, { Position = UDim2.fromOffset(x, y), GroupTransparency = 0 }, 0.22)
-		tween(p.Scale, { Scale = 1 }, 0.22)
+		tween(card, { Position = UDim2.fromOffset(x, y), GroupTransparency = 0 }, 0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		tween(p.Scale, { Scale = 1 }, 0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	end
 
 	Library._ddConflict = conflict
