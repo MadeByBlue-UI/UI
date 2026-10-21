@@ -242,6 +242,8 @@ local Library = {
 	FavEntries        = {},
 	CmdEntries        = {},    -- éléments disponibles dans la palette de commandes (Ctrl+K)
 	KeybindEntries    = {},    -- tous les keybinds placés dans l'interface (bloc « Raccourcis clavier » des Paramètres)
+	DropdownKeys      = false, -- true = clic droit sur une entrée de liste : lui assigner une touche (Paramètres > Fenêtre)
+	DDKeyEntries      = {},    -- listes déroulantes qui acceptent des touches : { Frame, Keys, Trigger, Refresh, SetKey, Clear }
 	ToggleEntries     = {},    -- toggles listés par le HUD des actifs
 	ResetEntries      = {},    -- toggles / sliders / keybinds du script, remis à zéro par « Réinitialiser les contrôles »
 	ModEntries        = {},    -- éléments à valeur (filtre « Modifiés » + pastille) : { Item, Frame, Base, Mod, Dot }
@@ -4732,6 +4734,256 @@ function Block:CreateRangeSlider(o)
 	return item
 end
 
+-- ============================================================================
+-- KEYBINDS DANS LES LISTES DÉROULANTES  (Paramètres > Fenêtre > « Keybinds dans les listes »)
+--   Option activée : clic droit sur une entrée d'une liste -> petit menu en fondu pour lui assigner une touche.
+--   Appuyer ensuite sur cette touche choisit l'entrée (liste à choix multiples : la coche / décoche), même fenêtre fermée.
+--   Les touches sont retenues dans la config : « <Flag>.keys » (ou « ddkeys/onglet/bloc/nom » si la liste n'a pas de Flag).
+--   Block:CreateDropdown({ ..., Keys = false }) exclut une liste.
+--   Library:SetDropdownKeys(bool) · Library:ClearDropdownKeys() -> nombre de touches retirées
+--   (bloc isolé dans un do ... end : la librairie est proche de la limite de 200 variables locales)
+-- ============================================================================
+do
+	local ddPop          -- menu partagé : créé au premier clic droit
+	local DD_W = 204
+
+	local function keyOf(name)
+		if type(name) ~= "string" then return nil end
+		local ok, k = pcall(function() return Enum.KeyCode[name] end)
+		if ok and typeof(k) == "EnumItem" and k ~= Enum.KeyCode.Unknown then return k end
+		return nil
+	end
+	Library._ddKeyOf = keyOf
+
+	-- prévient si la touche est déjà prise par une autre entrée de liste ou par un keybind / toggle
+	local function conflict(entry, text, kn)
+		if Library.KeybindConflictWarn == false then return end
+		local who
+		for _, e in ipairs(Library.DDKeyEntries) do
+			if e.Frame and e.Frame.Parent then
+				for t, k in pairs(e.Keys) do
+					if k == kn and not (e == entry and t == text) then who = t break end
+				end
+			end
+			if who then break end
+		end
+		if not who then
+			for _, e in ipairs(Library.KeybindEntries) do
+				local ok, cur = pcall(function() return e.Item.Get() end)
+				if ok and typeof(cur) == "EnumItem" and cur.Name == kn and e.Frame and e.Frame.Parent then
+					who = e.Name
+					break
+				end
+			end
+		end
+		if who then
+			Library:Notify({ Title = "Touche déjà utilisée", Content = kn .. " sert déjà à « " .. tostring(who) .. " »",
+				Type = "Warning", Duration = 3 })
+		end
+	end
+
+	local function close(entry)
+		local p = ddPop
+		if not (p and p.Open) then return end
+		if entry and p.Entry ~= entry then return end
+		p.Open = false
+		p.Tok += 1
+		local my = p.Tok
+		if p.Listening then p.StopListen() end
+		tween(p.Card, { GroupTransparency = 1 }, 0.16)
+		tween(p.Scale, { Scale = 0.94 }, 0.16)
+		task.delay(0.25 / math.max(Library.AnimSpeed or 1, 0.05), function()
+			if ddPop == p and p.Tok == my and not p.Open then p.Card.Visible = false end
+		end)
+	end
+	Library._ddKeyClose = close
+
+	local function build()
+		if ddPop and ddPop.Card and ddPop.Card.Parent then return ddPop end
+		local gui = Library.Window and Library.Window.Gui
+		if not gui then return nil end
+		local p = { Tok = 0, Open = false, Listening = false }
+		local card = new("CanvasGroup", { Name = "DropdownKeyMenu", Size = UDim2.fromOffset(DD_W, 64),
+			BackgroundColor3 = T.Second, BackgroundTransparency = 0.04, BorderSizePixel = 0, Visible = false,
+			ZIndex = 600, GroupTransparency = 1 }, gui)
+		corner(card, 9)
+		stroke(card, 0.8)
+		local sc = new("UIScale", { Scale = 0.94 }, card)
+		local title = label(card, "", 11, { Position = UDim2.fromOffset(10, 8), Size = UDim2.new(1, -20, 0, 16),
+			TextColor3 = T.ElementAccent })
+		local chip = new("TextButton", { Position = UDim2.fromOffset(8, 28), Size = UDim2.new(1, -16, 0, 28),
+			BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = "", TextColor3 = T.Text,
+			TextSize = 12, Font = F_MED, AutoButtonColor = false }, card)
+		corner(chip, 7)
+		local cst = stroke(chip, 0.9)
+		local clr = new("TextButton", { Position = UDim2.fromOffset(8, 60), Size = UDim2.new(1, -16, 0, 22),
+			BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0, Text = "Retirer la touche",
+			TextColor3 = T.ElementAccent, TextSize = 11, Font = F_REG, AutoButtonColor = false }, card)
+		corner(clr, 6)
+		local hint = label(card, "Échap : annuler  ·  Retour : retirer", 10, { Position = UDim2.fromOffset(10, 62),
+			Size = UDim2.new(1, -20, 0, 18), TextColor3 = T.ElementAccent, Font = F_REG, Visible = false })
+
+		local function paint(instant)
+			local e, text = p.Entry, p.Text
+			if not e then return end
+			local k = keyOf(e.Keys[text])
+			title.Text = tostring(text)
+			if p.Listening then
+				chip.Text = "Appuie sur une touche…"
+			elseif k then
+				chip.Text = "Touche : " .. (shortKey(k) or k.Name) .. "   ·   changer"
+			else
+				chip.Text = "Assigner une touche"
+			end
+			clr.Visible = (k ~= nil) and not p.Listening
+			hint.Visible = p.Listening
+			local h = (k ~= nil or p.Listening) and 90 or 64
+			if instant then
+				card.Size = UDim2.fromOffset(DD_W, h)
+			else
+				tween(card, { Size = UDim2.fromOffset(DD_W, h) }, 0.2)
+			end
+		end
+
+		chip.MouseEnter:Connect(function() if not p.Listening then tween(cst, { Transparency = 0.6 }, 0.15) end end)
+		chip.MouseLeave:Connect(function() if not p.Listening then tween(cst, { Transparency = 0.9 }, 0.2) end end)
+		clr.MouseEnter:Connect(function() tween(clr, { BackgroundTransparency = 0.9 }, 0.15) end)
+		clr.MouseLeave:Connect(function() tween(clr, { BackgroundTransparency = 1 }, 0.2) end)
+
+		local conn
+		function p.StopListen()
+			if conn then conn:Disconnect() conn = nil end
+			if p.Listening then
+				p.Listening = false
+				Library._listening = false
+			end
+			tween(cst, { Transparency = 0.9 }, 0.2)
+		end
+
+		chip.MouseButton1Click:Connect(function()
+			if p.Listening or Library._listening or not p.Entry then return end
+			p.Listening = true
+			Library._listening = true
+			uiSnd("focus")
+			tween(cst, { Transparency = 0.25 }, 0.2)
+			paint()
+			conn = track(UIS.InputBegan:Connect(function(i)
+				if i.UserInputType ~= Enum.UserInputType.Keyboard or i.KeyCode == Enum.KeyCode.Unknown then return end
+				local kc, e, text = i.KeyCode, p.Entry, p.Text
+				p.StopListen()
+				Library._ddLastBind = os.clock()
+				if kc == Enum.KeyCode.Escape then
+					-- annulé : rien ne change
+				elseif kc == Enum.KeyCode.Backspace or kc == Enum.KeyCode.Delete then
+					e.SetKey(text, nil)
+				else
+					e.SetKey(text, kc)
+					conflict(e, text, kc.Name)
+				end
+				paint()
+			end))
+		end)
+
+		clr.MouseButton1Click:Connect(function()
+			if not p.Entry then return end
+			p.Entry.SetKey(p.Text, nil)
+			uiSnd("off")
+			paint()
+		end)
+
+		p.Card, p.Scale, p.Paint = card, sc, paint
+		ddPop = p
+		return p
+	end
+
+	-- ouvre le menu à la position de la souris (apparition en fondu + léger glissement)
+	Library._ddOpen = function(entry, text)
+		local p = build()
+		if not p then return end
+		if Library._listening and not p.Listening then return end   -- une touche est déjà en cours d'assignation ailleurs
+		if p.Listening then p.StopListen() end
+		local card = p.Card
+		local fresh = (not card.Visible) or card.GroupTransparency > 0.85
+		p.Entry, p.Text = entry, text
+		p.Tok += 1
+		p.Open = true
+		p.OpenedAt = os.clock()
+		p.Paint(true)
+		local m, v = UIS:GetMouseLocation(), viewport()
+		local h = card.Size.Y.Offset
+		local x = math.clamp(m.X + 8, 4, math.max(4, v.X - DD_W - 4))
+		local y = m.Y + 8
+		if y + h > v.Y - 4 then y = math.max(4, m.Y - h - 8) end
+		if fresh then
+			card.Position = UDim2.fromOffset(x, y + 8)
+			p.Scale.Scale = 0.94
+			card.GroupTransparency = 1
+			card.Visible = true
+		end
+		tween(card, { Position = UDim2.fromOffset(x, y), GroupTransparency = 0 }, 0.22)
+		tween(p.Scale, { Scale = 1 }, 0.22)
+	end
+
+	Library._ddConflict = conflict
+	Library._ddDestroy = function() ddPop = nil end
+
+	-- un seul écouteur pour tout : fermeture du menu (clic dehors / Échap) + touches liées aux entrées
+	track(UIS.InputBegan:Connect(function(i, gp)
+		local p = ddPop
+		if p and p.Open then
+			local ut = i.UserInputType
+			if ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.MouseButton2
+				or ut == Enum.UserInputType.MouseButton3 or ut == Enum.UserInputType.Touch then
+				if os.clock() - (p.OpenedAt or 0) > 0.2 then
+					local m = (ut == Enum.UserInputType.Touch) and Vector2.new(i.Position.X, i.Position.Y + guiInset().Y)
+						or UIS:GetMouseLocation()
+					local ap, as = p.Card.AbsolutePosition, p.Card.AbsoluteSize
+					if m.X < ap.X or m.Y < ap.Y or m.X > ap.X + as.X or m.Y > ap.Y + as.Y then close() end
+				end
+			elseif ut == Enum.UserInputType.Keyboard and i.KeyCode == Enum.KeyCode.Escape and not p.Listening then
+				close()
+			end
+		end
+		if gp or not Library.DropdownKeys or Library._listening then return end
+		if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
+		if os.clock() - (Library._ddLastBind or 0) < 0.25 then return end
+		if UIS:GetFocusedTextBox() then return end
+		local kn = i.KeyCode.Name
+		local list = Library.DDKeyEntries
+		for idx = #list, 1, -1 do
+			local e = list[idx]
+			if not (e.Frame and e.Frame.Parent) then
+				table.remove(list, idx)
+			else
+				for text, key in pairs(e.Keys) do
+					if key == kn then task.spawn(e.Trigger, text) end
+				end
+			end
+		end
+	end))
+
+	function Library:SetDropdownKeys(v)
+		Library.DropdownKeys = v and true or false
+		if not Library.DropdownKeys then close() end
+		for _, e in ipairs(Library.DDKeyEntries) do
+			if e.Refresh then pcall(e.Refresh) end
+		end
+	end
+
+	-- retire toutes les touches des listes ; renvoie le nombre de touches retirées
+	function Library:ClearDropdownKeys()
+		close()
+		local n = 0
+		for _, e in ipairs(Library.DDKeyEntries) do
+			if e.Frame and e.Frame.Parent then
+				for _ in pairs(e.Keys) do n += 1 end
+				if e.Clear then pcall(e.Clear) end
+			end
+		end
+		return n
+	end
+end
+
 function Block:CreateDropdown(o)
 	o = o or {}
 	local multi = (o.Multi == true) or (o.MultiSelect == true) or (o.MultipleOptions == true)
@@ -4839,6 +5091,59 @@ function Block:CreateDropdown(o)
 		end
 	end
 
+	-- ---- touches par entrée (clic droit) : voir « KEYBINDS DANS LES LISTES DÉROULANTES » plus haut
+	local keys = {}   -- [texte de l'entrée] = nom de la touche
+	local keysOk = (o.Keys ~= false) and not self._noFav and not (self.Tab and self.Tab._isSettings)
+	local keyFlag
+	if keysOk then
+		keyFlag = o.Flag and (o.Flag .. ".keys")
+			or ("ddkeys/" .. tostring(self.Tab and self.Tab.Name or "") .. "/" .. tostring(self.Name or "") .. "/" .. tostring(o.Name or ""))
+	end
+	local ddEntry
+	local function refreshTags()
+		for text, b in pairs(btns) do
+			local k = Library.DropdownKeys and Library._ddKeyOf(keys[text]) or nil
+			local txt = k and (shortKey(k) or k.Name) or nil
+			if txt then
+				local was = b.Tag.Visible
+				b.Tag.Text = txt
+				b.Pad.PaddingRight = UDim.new(0, 26 + math.max(18, #txt * 6.5 + 10) + 6)
+				b.Tag.Visible = true
+				if not was then
+					b.Tag.TextTransparency, b.Tag.BackgroundTransparency = 1, 1
+					tween(b.Tag, { TextTransparency = 0, BackgroundTransparency = 0.35 }, 0.2)
+				end
+			else
+				b.Tag.Visible = false
+				b.Pad.PaddingRight = UDim.new(0, 26)
+			end
+		end
+	end
+	local function keysChanged()
+		if keyFlag then
+			local c = {}
+			for t2, k2 in pairs(keys) do c[t2] = k2 end
+			Library.Flags[keyFlag] = c
+		end
+		refreshTags()
+	end
+	if keysOk then
+		ddEntry = {
+			Frame = holder, Keys = keys, Name = o.Name,
+			Trigger = function(text)
+				if not table.find(items, text) then return end
+				uiSnd("pick")
+				pick(text)
+			end,
+			Refresh = refreshTags,
+			SetKey = function(text, kc)
+				if kc then keys[text] = kc.Name else keys[text] = nil end
+				keysChanged()
+			end,
+			Clear = function() table.clear(keys) keysChanged() end,
+		}
+	end
+
 	restyle = function()
 		for text, b in pairs(btns) do
 			local on = isOn(text)
@@ -4909,7 +5214,7 @@ function Block:CreateDropdown(o)
 				TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd,
 				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = idx, ClipsDescendants = true,
 			}, list)
-			new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 26) }, b)
+			local pad = new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 26) }, b)
 			new("UICorner", { CornerRadius = UDim.new(0, 5) }, b)
 			local ind
 			if multi then
@@ -4924,7 +5229,13 @@ function Block:CreateDropdown(o)
 					BorderSizePixel = 0 }, b)
 				new("UICorner", { CornerRadius = UDim.new(1, 0) }, ind)
 			end
-			btns[text] = { Btn = b, Ind = ind, Shown = true }
+			local tag = new("TextLabel", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+				Size = UDim2.fromOffset(0, 16), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = T.Off,
+				BackgroundTransparency = 0.35, Text = "", TextColor3 = T.Accent, TextSize = 10, Font = F_MED,
+				Visible = false, BorderSizePixel = 0 }, b)
+			new("UICorner", { CornerRadius = UDim.new(0, 4) }, tag)
+			new("UIPadding", { PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5) }, tag)
+			btns[text] = { Btn = b, Ind = ind, Shown = true, Tag = tag, Pad = pad }
 			b.MouseEnter:Connect(function()
 				if not isOn(text) then tween(b, { BackgroundTransparency = 0.93 }, 0.15) end
 			end)
@@ -4932,9 +5243,13 @@ function Block:CreateDropdown(o)
 				if not isOn(text) then tween(b, { BackgroundTransparency = 1 }, 0.2) end
 			end)
 			b.MouseButton1Click:Connect(function() uiSnd("pick") pick(text) end)
+			b.MouseButton2Click:Connect(function()
+				if ddEntry and Library.DropdownKeys then Library._ddOpen(ddEntry, text) end
+			end)
 		end
 		restyle()
 		layout()
+		refreshTags()
 	end
 
 	setItems = function(newItems, clear)
@@ -4972,6 +5287,7 @@ function Block:CreateDropdown(o)
 			layout()
 		else
 			if Library._openDD == setOpen then Library._openDD = nil end
+			if ddEntry and Library._ddKeyClose then Library._ddKeyClose(ddEntry) end
 		end
 		isOpen = v
 		dr:Set(v)
@@ -5017,6 +5333,27 @@ function Block:CreateDropdown(o)
 	local initial
 	if multi then initial = getMulti() else initial = selected end
 	register(o.Flag, item, initial)
+	if keysOk then
+		local keysItem = {}
+		keysItem.Set = function(...)
+			local v = unself(keysItem, ...)
+			table.clear(keys)
+			if type(v) == "table" then
+				for t2, k2 in pairs(v) do
+					if type(t2) == "string" and Library._ddKeyOf(k2) then keys[t2] = k2 end
+				end
+			end
+			keysChanged()
+		end
+		keysItem.Get = function()
+			local c = {}
+			for t2, k2 in pairs(keys) do c[t2] = k2 end
+			return c
+		end
+		register(keyFlag, keysItem, {})
+		Library.DDKeyEntries[#Library.DDKeyEntries + 1] = ddEntry
+		Library.ResetEntries[#Library.ResetEntries + 1] = { Kind = "DDKeys", Item = keysItem, Frame = holder }
+	end
 	if Library.FireDefaults and ((multi and #getMulti() > 0) or ((not multi) and selected)) then
 		fire(o.Callback, initial)
 	end
@@ -5824,6 +6161,9 @@ function Library:ResetControls()
 					local _, ck = pcall(function() return it.GetKey() end)
 					if ck ~= Enum.KeyCode.Unknown then pcall(it.SetKey, it, Enum.KeyCode.Unknown) n += 1 end
 				end
+			elseif r.Kind == "DDKeys" then
+				local _, cur = pcall(function() return it.Get() end)
+				if type(cur) == "table" and next(cur) ~= nil then pcall(it.Set, it, {}) n += 1 end
 			elseif r.Kind == "Slider" then
 				local _, cur = pcall(function() return it.Get() end)
 				if r.Default ~= nil and cur ~= r.Default then pcall(it.Set, it, r.Default) n += 1 end
@@ -8147,6 +8487,15 @@ function Window:CreateSettingsTab(name, icon, docked)
 	D:CreateToggle({ Name = "Barre réduite visible", Flag = "ui.minibar", Default = Library.MiniBarVisible == true,
 		Tooltip = "Activé : la barre réduite reste toujours à l'écran, que tu masques l'interface ou non (si la fenêtre est dépliée, la masquer la réduit en barre ; la rouvrir la redéplie). Désactivé : tout se masque normalement.",
 		Callback = function(v) Library:SetMiniBarVisible(v) end })
+	D:CreateToggle({ Name = "Keybinds dans les listes", Flag = "ui.ddkeys", Default = Library.DropdownKeys == true,
+		Tooltip = "Clic droit sur une entrée d'une liste déroulante : un petit menu apparaît en fondu pour lui assigner une touche. Appuyer sur la touche choisit directement cette entrée (même fenêtre fermée).",
+		Callback = function(v) Library:SetDropdownKeys(v) end })
+	D:CreateButton({ Name = "Retirer les touches des listes", Confirm = true, Favorite = false,
+		Tooltip = "Enlève toutes les touches assignées aux entrées des listes déroulantes.",
+		Callback = function()
+			local n = Library:ClearDropdownKeys()
+			Library:Notify({ Title = "Touches des listes", Content = n .. " touche(s) retirée(s)", Type = "Success", Duration = 3 })
+		end })
 	D:CreateButton({ Name = "Réinitialiser la fenêtre", Favorite = false,
 		Tooltip = "Recentre la fenêtre et remet sa taille d'origine (Ctrl+R).",
 		Callback = function() win:Reset() end })
@@ -10772,6 +11121,7 @@ function Library:CreateWindow(cfg)
 		if v == self.Open then return end
 		self.Open = v
 		if not Library._quietWin then uiSnd(v and "winopen" or "winclose") end
+		if Library._ddKeyClose then pcall(Library._ddKeyClose) end
 		if Library._hudRefresh then Library._hudRefresh() end
 		local noAnim = Library.WindowAnim == false   -- réglage « Animation ouverture / fermeture » désactivé
 		skyTarget = v and 1 or 0
@@ -11175,6 +11525,8 @@ function Library:Destroy()
 	table.clear(Library.KeybindEntries)
 	table.clear(Library.ToggleEntries)
 	table.clear(Library.ResetEntries)
+	table.clear(Library.DDKeyEntries)
+	if Library._ddDestroy then pcall(Library._ddDestroy) end
 	table.clear(Library.ModEntries)
 	table.clear(Library.ModByFrame)
 	Library.ModFilter, Library.ModCount, Library._modWatching, Library._modFilterItem = false, 0, false, nil
