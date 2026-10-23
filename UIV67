@@ -4565,7 +4565,7 @@ function Block:CreateToggle(o)
 				local ok, res = pcall(function() return Enum.KeyCode[k] end)
 				k = ok and res or nil
 			end
-			if typeof(k) == "EnumItem" then setKey(k) end
+			if typeof(k) == "EnumItem" then setKey(k, (Library._silentSound or 0) > 0) end   -- config / auto-load : silencieux
 		end
 		keyItem.Get = function() return key end
 		item.SetKey = function(...) keyItem.Set(...) end
@@ -5776,6 +5776,11 @@ function Block:CreateInput(o)
 	tb:GetPropertyChangedSignal("Text"):Connect(function()
 		if o.Numeric then
 			local clean = string.gsub(tb.Text, "[^%d%.%-]", "")
+			local neg = string.sub(clean, 1, 1) == "-"
+			clean = string.gsub(clean, "%-", "")
+			local a, b = string.find(clean, ".", 1, true)
+			if a then clean = string.sub(clean, 1, a) .. string.gsub(string.sub(clean, a + 1), "%.", "") end
+			if neg then clean = "-" .. clean end
 			if clean ~= tb.Text then tb.Text = clean return end
 		end
 		if o.Flag then Library.Flags[o.Flag] = tb.Text end
