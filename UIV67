@@ -5158,7 +5158,13 @@ function Block:CreateDropdown(o)
 	o = o or {}
 	local multi = (o.Multi == true) or (o.MultiSelect == true) or (o.MultipleOptions == true)
 	local items = {}
-	for _, v in ipairs(o.Items or o.Options or {}) do items[#items + 1] = tostring(v) end
+	do
+		local seen = {}
+		for _, v in ipairs(o.Items or o.Options or {}) do
+			local t = tostring(v)
+			if not seen[t] then seen[t] = true items[#items + 1] = t end
+		end
+	end
 
 	local selected, selSet = nil, {}
 	do
@@ -5190,7 +5196,7 @@ function Block:CreateDropdown(o)
 	hover(head, hst)
 	label(head, o.Name or "Dropdown", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0.5, -12, 1, 0) })
 	local valL = label(head, "", 12, { Position = UDim2.new(0.5, 0, 0, 0), Size = UDim2.new(0.5, -34, 1, 0),
-		TextXAlignment = RIGHT, TextColor3 = T.ElementAccent })
+		TextXAlignment = RIGHT, TextColor3 = T.ElementAccent, TextTruncate = Enum.TextTruncate.AtEnd })
 	local arrow = label(head, ">", 13, { Position = UDim2.new(1, -26, 0, 0), Size = UDim2.new(0, 16, 1, 0),
 		TextXAlignment = CENTER, Font = F_BOLD, TextColor3 = T.ElementAccent })
 
@@ -5424,7 +5430,13 @@ function Block:CreateDropdown(o)
 
 	setItems = function(newItems, clear)
 		items = {}
-		for _, v in ipairs(newItems or {}) do items[#items + 1] = tostring(v) end
+		do
+			local seen = {}
+			for _, v in ipairs(newItems or {}) do
+				local t = tostring(v)
+				if not seen[t] then seen[t] = true items[#items + 1] = t end
+			end
+		end
 		if clear == true then
 			selSet = {}
 			selected = nil
@@ -5537,8 +5549,9 @@ function Block:CreateDropdown(o)
 			if hiText and table.find(items, hiText) then
 				uiSnd("pick")
 				pick(hiText)
+				return true
 			end
-			return true
+			return false   -- rien de surligné : Entrée reste disponible pour le jeu
 		end
 		if kc == Enum.KeyCode.Backspace then
 			if search.Visible then
@@ -5658,7 +5671,12 @@ function Block:CreateDropdown(o)
 		tween(arrow, { Rotation = v and 90 or 0 }, 0.3)
 	end
 
-	search:GetPropertyChangedSignal("Text"):Connect(layout)
+	search:GetPropertyChangedSignal("Text"):Connect(function()
+		layout()
+		if isOpen then
+			if search.Text ~= "" then setHi(visibleItems()[1]) else setHi(nil) end
+		end
+	end)
 	head.MouseButton1Click:Connect(function() uiSnd(isOpen and "close" or "open") setOpen(not isOpen) end)
 
 	local item = {}
@@ -11118,7 +11136,11 @@ function Library:CreateWindow(cfg)
 		local nh = math.floor(sz.Y / 2 + 0.5) * 2
 		local ns = Vector2.new(nw, nh)
 		if ns == lastSize then return false end
-		curPos = curPos + (ns - lastSize) * scaleBase * rsDir / 2
+		local shift = (ns - lastSize) * scaleBase * rsDir / 2
+		curPos = curPos + shift
+		-- si un déplacement lissé est en cours, sa cible suit le même décalage : sinon elle « rattrape » la fenêtre
+		-- et le bord censé rester fixe (haut lors d'une réduction) glisse tout seul
+		if tgtPos then tgtPos = tgtPos + shift end
 		lastSize = ns
 		main.Size = UDim2.fromOffset(nw, nh)
 		return true
@@ -11126,11 +11148,21 @@ function Library:CreateWindow(cfg)
 	local persistReady = false
 	local function saveWin()
 		local v = viewport()
+		-- on sauvegarde l'état FINAL (pas une taille intermédiaire d'animation) et, si la fenêtre est réduite,
+		-- la taille / le centre de la fenêtre dépliée (bord haut fixe)
 		local p = tgtPos or curPos
+		local sz = Vector2.new(main.Size.X.Offset, main.Size.Y.Offset)
+		if tgtSize and rsSmooth then
+			p = p + (tgtSize - lastSize) * scaleBase * rsDir / 2
+			sz = tgtSize
+		end
+		if collapsed and preSize then
+			p = Vector2.new(p.X, p.Y + (preSize.Y - sz.Y) * scaleBase / 2)
+			sz = preSize
+		end
 		Library.Flags["__window"] = {
 			cx = p.X / v.X, cy = p.Y / v.Y,
-			w = main.Size.X.Offset,
-			h = (collapsed and preSize) and preSize.Y or main.Size.Y.Offset,
+			w = sz.X, h = sz.Y,
 		}
 		if remember and persistReady and writefile then
 			pcall(function()
@@ -12146,6 +12178,10 @@ function Library:Destroy()
 	table.clear(notifEntries)
 	Library._openDD = nil
 	Library._listening = false
+	do
+		local CASd = game:GetService("ContextActionService")
+		for n = 1, (Library._ddNavId or 0) do pcall(function() CASd:UnbindAction("UiLibDDNav" .. n) end) end
+	end
 	if Library.Window and Library.Window.Gui then Library.Window.Gui:Destroy() end
 	Library.Window = nil
 	if notifGui then notifGui:Destroy() notifGui = nil end
