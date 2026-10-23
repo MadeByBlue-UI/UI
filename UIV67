@@ -5437,14 +5437,25 @@ function Block:CreateDropdown(o)
 	end
 
 	setItems = function(newItems, clear)
-		items = {}
+		local nl = {}
 		do
 			local seen = {}
 			for _, v in ipairs(newItems or {}) do
 				local t = tostring(v)
-				if not seen[t] then seen[t] = true items[#items + 1] = t end
+				if not seen[t] then seen[t] = true nl[#nl + 1] = t end
 			end
 		end
+		-- 🛠️ FIX : liste identique (ex. un script qui rafraîchit les joueurs toutes les 3 s) -> on NE reconstruit PAS.
+		-- Avant, chaque Refresh détruisait puis recréait tous les boutons : un clic (ou la recherche en cours) pouvait tomber
+		-- pile pendant la reconstruction, d'où des éléments impossibles à choisir « parfois, sur certaines listes ».
+		if clear ~= true and #nl == #items then
+			local same = true
+			for i2, t2 in ipairs(nl) do
+				if items[i2] ~= t2 then same = false break end
+			end
+			if same then return end
+		end
+		items = nl
 		if clear == true then
 			selSet = {}
 			selected = nil
