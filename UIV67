@@ -242,6 +242,8 @@ local Library = {
 	FavEntries        = {},
 	CmdEntries        = {},    -- éléments disponibles dans la palette de commandes (Ctrl+K)
 	KeybindEntries    = {},    -- tous les keybinds placés dans l'interface (bloc « Raccourcis clavier » des Paramètres)
+	DropdownEscape    = true,  -- Échap ferme la liste déroulante ouverte (Paramètres > Fenêtre)
+	DropdownKeyNav    = true,  -- flèches / Entrée / frappe dans une liste ouverte (Paramètres > Fenêtre)
 	DropdownKeys      = false, -- true = clic droit sur une entrée de liste : lui assigner une touche (Paramètres > Fenêtre)
 	DDKeyEntries      = {},    -- listes déroulantes qui acceptent des touches : { Frame, Keys, Trigger, Refresh, SetKey, Clear }
 	ToggleEntries     = {},    -- toggles listés par le HUD des actifs
@@ -1256,17 +1258,49 @@ do
 -- ───────────── Sons (un par type, réglables dans Paramètres > Sons des notifications) ─────────────
 -- Les sons « rbxasset:// » viennent du dossier de contenu du client Roblox. Si l'un manque sur ta version,
 -- choisis « Personnalisé » et donne un ID (123456), un rbxassetid://..., ou un fichier du workspace (mon_son.mp3).
+local SF = {   -- fichiers de base (une seule variable locale : le fichier approche la limite de 200)
+	PING = "rbxasset://sounds/electronicpingshort.wav", CLICK = "rbxasset://sounds/clickfast.wav",
+	SWITCH = "rbxasset://sounds/switch.wav", SNAP = "rbxasset://sounds/snap.mp3",
+	BASS = "rbxasset://sounds/bass.wav", VICT = "rbxasset://sounds/victory.wav", UHOH = "rbxasset://sounds/uuhhh.mp3",
+}
+-- Champs d'un son : Id, Speed (hauteur), Vol (volume relatif), Lp = true (filtre doux, étouffe les aigus),
+-- Rv = { durée, niveau dB } (réverbération), Echo = { délai, répétition, niveau dB }, Len = durée max en secondes.
+-- Les sons « (calme) » sont les plus doux : hauteur modulée + filtre + réverbération, à partir des mêmes fichiers.
 local SOUND_PRESETS = {
 	{ Name = "Aucun" },
-	{ Name = "Ping",          Id = "rbxasset://sounds/electronicpingshort.wav", Speed = 1 },
-	{ Name = "Ping aigu",     Id = "rbxasset://sounds/electronicpingshort.wav", Speed = 1.45 },
-	{ Name = "Ping grave",    Id = "rbxasset://sounds/electronicpingshort.wav", Speed = 0.7 },
-	{ Name = "Clic",          Id = "rbxasset://sounds/clickfast.wav", Speed = 1 },
-	{ Name = "Interrupteur",  Id = "rbxasset://sounds/switch.wav", Speed = 1 },
-	{ Name = "Claquement",    Id = "rbxasset://sounds/snap.mp3", Speed = 1 },
-	{ Name = "Basse",         Id = "rbxasset://sounds/bass.wav", Speed = 1 },
-	{ Name = "Victoire",      Id = "rbxasset://sounds/victory.wav", Speed = 1 },
-	{ Name = "Uh-oh",         Id = "rbxasset://sounds/uuhhh.mp3", Speed = 1 },
+	-- classiques
+	{ Name = "Ping",          Id = SF.PING,   Speed = 1 },
+	{ Name = "Ping aigu",     Id = SF.PING,   Speed = 1.45 },
+	{ Name = "Ping grave",    Id = SF.PING,   Speed = 0.7 },
+	{ Name = "Clic",          Id = SF.CLICK,  Speed = 1 },
+	{ Name = "Interrupteur",  Id = SF.SWITCH, Speed = 1 },
+	{ Name = "Claquement",    Id = SF.SNAP,   Speed = 1 },
+	{ Name = "Basse",         Id = SF.BASS,   Speed = 1 },
+	{ Name = "Victoire",      Id = SF.VICT,   Speed = 1 },
+	{ Name = "Uh-oh",         Id = SF.UHOH,   Speed = 1 },
+	-- calmes
+	{ Name = "Goutte (calme)",         Id = SF.PING,   Speed = 1.9,  Vol = 0.7, Lp = true, Rv = { 1.6, -8 } },
+	{ Name = "Bulle (calme)",          Id = SF.PING,   Speed = 2.3,  Vol = 0.6, Lp = true, Rv = { 1.2, -10 } },
+	{ Name = "Cloche douce (calme)",   Id = SF.PING,   Speed = 0.85, Vol = 0.9, Lp = true, Rv = { 3.5, -4 }, Len = 1.6 },
+	{ Name = "Carillon (calme)",       Id = SF.PING,   Speed = 1.25, Vol = 0.8, Rv = { 3, -5 }, Len = 1.5 },
+	{ Name = "Brume (calme)",          Id = SF.PING,   Speed = 0.5,  Vol = 0.9, Lp = true, Rv = { 5, -3 }, Len = 1.8 },
+	{ Name = "Écho doux (calme)",      Id = SF.PING,   Speed = 1.0,  Vol = 0.7, Lp = true, Echo = { 0.22, 0.35, -6 }, Len = 1.6 },
+	{ Name = "Soupir (calme)",         Id = SF.BASS,   Speed = 1.6,  Vol = 0.8, Lp = true, Rv = { 3, -5 }, Len = 1.5 },
+	{ Name = "Onde (calme)",           Id = SF.BASS,   Speed = 1.25, Vol = 0.8, Lp = true, Rv = { 2.5, -6 }, Len = 1.4 },
+	{ Name = "Murmure (calme)",        Id = SF.SWITCH, Speed = 0.7,  Vol = 0.8, Lp = true, Rv = { 2.5, -6 } },
+	{ Name = "Clic feutré (calme)",    Id = SF.CLICK,  Speed = 0.6,  Vol = 0.9, Lp = true },
+	{ Name = "Tic doux (calme)",       Id = SF.CLICK,  Speed = 1.3,  Vol = 0.5, Lp = true, Rv = { 1.5, -9 } },
+	{ Name = "Léger (calme)",          Id = "rbxassetid://10066936758", Speed = 1.2, Vol = 0.8 },
+	{ Name = "Doux clic (calme)",      Id = "rbxassetid://6895079853",  Speed = 1.0, Vol = 0.8 },
+	{ Name = "Grondement doux (calme)", Id = SF.UHOH,  Speed = 0.65, Vol = 0.7, Lp = true, Rv = { 2.5, -6 }, Len = 1.3 },
+	-- vifs / spéciaux
+	{ Name = "Pop",             Id = SF.SNAP,  Speed = 1.6 },
+	{ Name = "Sourd",           Id = SF.SNAP,  Speed = 0.6, Lp = true },
+	{ Name = "Sonar",           Id = SF.PING,  Speed = 0.9, Echo = { 0.3, 0.5, -3 }, Len = 2 },
+	{ Name = "Double tic",      Id = SF.CLICK, Speed = 1.0, Echo = { 0.11, 0.45, -2 }, Len = 0.9 },
+	{ Name = "Petite fanfare",  Id = SF.VICT,  Speed = 1.5, Vol = 0.6, Len = 1.2 },
+	{ Name = "Fanfare grave",   Id = SF.VICT,  Speed = 0.8, Len = 1.8 },
+	{ Name = "Oups aigu",       Id = SF.UHOH,  Speed = 1.4 },
 	{ Name = "Personnalisé" },
 }
 local SOUND_BY_NAME, SOUND_NAMES = {}, {}
@@ -1276,6 +1310,8 @@ for _, p in ipairs(SOUND_PRESETS) do
 end
 Library.SoundPresetNames = SOUND_NAMES
 Library.NotifSound  = true
+Library.NotifSoundLimit = true     -- « Limiter les sons » : plusieurs notifications d'affilée = un seul son
+Library.NotifSoundGap   = 0.6      -- secondes pendant lesquelles les autres sons sont ignorés
 Library.NotifVolume = 0.6
 Library.NotifSounds = {
 	Info    = { Preset = "Ping",         Custom = "" },
@@ -1304,32 +1340,75 @@ local function resolveSound(spec)
 		return nil
 	end
 	local p = SOUND_BY_NAME[spec.Preset]
-	if p and p.Id then return p.Id, p.Speed or 1 end
+	if p and p.Id then return p.Id, p.Speed or 1, p end
 	return nil
 end
 
+local NS = { Prio = { Loading = 0, Info = 1, Success = 2, Warning = 3, Error = 4 }, LastPrio = 0 }
+
 local function playNotifSound(kind, preview)
+	local prio = NS.Prio[kind] or 1
 	if not preview then
 		if not Library.NotifSound then return end
 		local now = os.clock()
-		if now - lastSndAt < 0.12 then return end
-		lastSndAt = now
+		local limit = Library.NotifSoundLimit ~= false
+		local gap = limit and math.max(tonumber(Library.NotifSoundGap) or 0.6, 0.12) or 0.12
+		if now - lastSndAt < gap then
+			-- limité : seul le premier son passe ; un son plus important (erreur > alerte > succès > info) le remplace
+			if not limit or prio <= NS.LastPrio then return end
+			for k, o in pairs(notifSoundObjs) do
+				if k ~= kind and o.Parent then pcall(function() o:Stop() end) end
+			end
+		end
+		lastSndAt, NS.LastPrio = now, prio
 	end
-	local id, speed = resolveSound(Library.NotifSounds[kind])
+	local id, speed, pr = resolveSound(Library.NotifSounds[kind])
 	if not id then return end
 	ensureNotif()
 	local s = notifSoundObjs[kind]
 	if not (s and s.Parent) then
 		s = Instance.new("Sound")
 		s.Name = "Snd" .. tostring(kind)
+		for _, def in ipairs({ { "EqualizerSoundEffect", "Eq" }, { "ReverbSoundEffect", "Rv" }, { "EchoSoundEffect", "Echo" } }) do
+			local fxObj = Instance.new(def[1])
+			fxObj.Name, fxObj.Enabled = def[2], false
+			fxObj.Parent = s
+		end
 		s.Parent = notifGui
 		notifSoundObjs[kind] = s
 	end
+	-- effets du son choisi (filtre doux / réverbération / écho) ; coupés pour les sons sans effet
+	local fx = pr or {}
+	local eq, rv, ec = s:FindFirstChild("Eq"), s:FindFirstChild("Rv"), s:FindFirstChild("Echo")
+	if eq then
+		eq.Enabled = fx.Lp == true
+		if fx.Lp then eq.LowGain, eq.MidGain, eq.HighGain = 3, -3, -28 end
+	end
+	if rv then
+		rv.Enabled = fx.Rv ~= nil
+		if fx.Rv then rv.DecayTime, rv.Density, rv.Diffusion, rv.DryLevel, rv.WetLevel = fx.Rv[1], 1, 1, -2, fx.Rv[2] end
+	end
+	if ec then
+		ec.Enabled = fx.Echo ~= nil
+		if fx.Echo then ec.Delay, ec.Feedback, ec.DryLevel, ec.WetLevel = fx.Echo[1], fx.Echo[2], 0, fx.Echo[3] end
+	end
 	if s.SoundId ~= id then s.SoundId = id end
 	s.PlaybackSpeed = speed or 1
-	s.Volume = math.clamp(tonumber(Library.NotifVolume) or 0.6, 0, 1)
+	s.Volume = math.clamp((tonumber(Library.NotifVolume) or 0.6) * (fx.Vol or 1), 0, 1)
 	s.TimePosition = 0
+	local tok = (s:GetAttribute("tok") or 0) + 1
+	s:SetAttribute("tok", tok)
 	s:Play()
+	if fx.Len then   -- coupe en douceur les sons trop longs
+		task.delay(fx.Len, function()
+			if s.Parent and s:GetAttribute("tok") == tok then
+				TweenService:Create(s, TweenInfo.new(0.2), { Volume = 0 }):Play()
+				task.delay(0.22, function()
+					if s.Parent and s:GetAttribute("tok") == tok then s:Stop() end
+				end)
+			end
+		end)
+	end
 end
 
 function Library:PlayNotifSound(kind) playNotifSound(NOTIF_ICON[kind] and kind or "Info", true) end
@@ -1349,6 +1428,8 @@ function Library:SetNotifSound(kind, preset, custom)
 end
 function Library:SetNotifSoundEnabled(v) Library.NotifSound = v and true or false end
 function Library:SetNotifVolume(v) Library.NotifVolume = math.clamp(tonumber(v) or 0.6, 0, 1) end
+function Library:SetNotifSoundLimit(v) Library.NotifSoundLimit = v and true or false end
+function Library:SetNotifSoundGap(sec) Library.NotifSoundGap = math.clamp(tonumber(sec) or 0.6, 0.1, 3) end
 
 -- ───────────── Pastille « +N » (notifications masquées au-delà du maximum) ─────────────
 local pillHost, pillBtn, pillScale, pillGrad
@@ -3295,6 +3376,10 @@ function Library:LoadSettings()
 		if isfile(settingsPath()) then data = HttpService:JSONDecode(readfile(settingsPath())) end
 	end)
 	if type(data) ~= "table" then return false end
+	if type(data["ui.lasttab"]) == "string" then
+		Library._lastTab = data["ui.lasttab"]               -- dernier onglet utilisé (restauré à la création de l'onglet)
+		Library.Flags["ui.lasttab"] = data["ui.lasttab"]
+	end
 	local sub = {}
 	for k, v in pairs(data) do
 		if type(k) == "string" and string.sub(k, 1, 3) == "ui." then sub[k] = v end
@@ -4807,6 +4892,13 @@ do
 		end)
 	end
 	Library._ddKeyClose = close
+	-- vrai si le point (écran) est dans la fenêtre de keybind ouverte (pour ne pas fermer un dropdown en cliquant dedans)
+	Library._ddPopHit = function(m)
+		local p = ddPop
+		if not (p and p.Open and p.Card and p.Card.Visible) then return false end
+		local ap, as = p.Card.AbsolutePosition, p.Card.AbsoluteSize
+		return m.X >= ap.X and m.Y >= ap.Y and m.X <= ap.X + as.X and m.Y <= ap.Y + as.Y
+	end
 
 	local function build()
 		if ddPop and ddPop.Card and ddPop.Card.Parent then return ddPop end
@@ -4824,9 +4916,23 @@ do
 		local title = label(card, "", 11, { Position = UDim2.fromOffset(12, 8), Size = UDim2.new(1, -44, 0, 16),
 			TextColor3 = T.ElementAccent })
 		local clr = new("TextButton", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -8, 0, 7),
-			Size = UDim2.fromOffset(20, 18), BackgroundTransparency = 1, BorderSizePixel = 0, Text = "✕",
+			Size = UDim2.fromOffset(20, 18), BackgroundTransparency = 1, BorderSizePixel = 0, Text = "",
 			TextColor3 = T.ElementAccent, TextSize = 11, Font = F_BOLD, AutoButtonColor = false,
-			TextTransparency = 1, Active = false }, card)
+			Active = false }, card)
+		-- croix dessinée avec deux barres (le caractère « ✕ » s'affiche en carré avec certaines polices)
+		local clrBars = {}
+		for _, rot in ipairs({ 45, -45 }) do
+			clrBars[#clrBars + 1] = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(10, 2), Rotation = rot, BackgroundColor3 = T.ElementAccent,
+				BackgroundTransparency = 1, BorderSizePixel = 0 }, clr)
+		end
+		local function clrPaint(tr, col, t)
+			for _, b in ipairs(clrBars) do
+				local pr = { BackgroundTransparency = tr }
+				if col then pr.BackgroundColor3 = col end
+				tween(b, pr, t)
+			end
+		end
 
 		-- « keycap » : affiche la touche (ou invite à en choisir une) ; un clic lance l'écoute
 		local chip = new("TextButton", { Position = UDim2.fromOffset(10, 30), Size = UDim2.new(1, -20, 0, 30),
@@ -4860,13 +4966,13 @@ do
 			end
 			local showClr = (k ~= nil) and not p.Listening
 			clr.Active = showClr
-			tween(clr, { TextTransparency = showClr and 0.2 or 1 }, 0.18)
+			clrPaint(showClr and 0.2 or 1, nil, 0.18)
 		end
 
 		chip.MouseEnter:Connect(function() if not p.Listening then tween(cst, { Transparency = 0.55 }, 0.15) end end)
 		chip.MouseLeave:Connect(function() if not p.Listening then tween(cst, { Transparency = 0.88 }, 0.2) end end)
-		clr.MouseEnter:Connect(function() if clr.Active then tween(clr, { TextColor3 = T.Accent, TextTransparency = 0 }, 0.12) end end)
-		clr.MouseLeave:Connect(function() tween(clr, { TextColor3 = T.ElementAccent, TextTransparency = clr.Active and 0.2 or 1 }, 0.15) end)
+		clr.MouseEnter:Connect(function() if clr.Active then clrPaint(0, T.Accent, 0.12) end end)
+		clr.MouseLeave:Connect(function() clrPaint(clr.Active and 0.2 or 1, T.ElementAccent, 0.15) end)
 
 		local conn
 		function p.StopListen()
@@ -5308,6 +5414,174 @@ function Block:CreateDropdown(o)
 	end
 
 	local isOpen = false
+	local outsideConn, keyConn
+	local CAS = game:GetService("ContextActionService")
+	Library._ddNavId = (Library._ddNavId or 0) + 1
+	local NAV_ACT = "UiLibDDNav" .. Library._ddNavId
+	local hiText, typeBuf, typeAt = nil, "", 0
+
+	local function visibleItems()
+		local out = {}
+		for _, t in ipairs(items) do
+			local b = btns[t]
+			if b and b.Shown then out[#out + 1] = t end
+		end
+		return out
+	end
+
+	-- surligne la ligne visée au clavier et la fait défiler dans la vue
+	local function setHi(text)
+		hiText = text
+		for t, b in pairs(btns) do
+			local hi = (t == text)
+			if b.Hi ~= hi then
+				b.Hi = hi
+				tween(b.Btn, { BackgroundTransparency = hi and 0.8 or (isOn(t) and 0.86 or 1) }, 0.12)
+			end
+		end
+		local b = text and btns[text]
+		if b then
+			local sc = (list.Size.Y.Offset > 0 and list.AbsoluteSize.Y > 0) and (list.AbsoluteSize.Y / list.Size.Y.Offset) or 1
+			local top = (b.Btn.AbsolutePosition.Y - list.AbsolutePosition.Y) / sc + list.CanvasPosition.Y
+			local bottom = top + 24
+			local view = list.AbsoluteSize.Y / sc
+			if top < list.CanvasPosition.Y then
+				list.CanvasPosition = Vector2.new(0, math.max(top - 4, 0))
+			elseif bottom > list.CanvasPosition.Y + view then
+				list.CanvasPosition = Vector2.new(0, bottom - view + 4)
+			end
+		end
+	end
+
+	local function moveHi(d)
+		local vis = visibleItems()
+		if #vis == 0 then return end
+		local idx = hiText and table.find(vis, hiText)
+		if idx then
+			idx = idx + d
+		else
+			local cur = (not multi and selected) and table.find(vis, selected) or nil   -- 1re frappe : on part de la sélection
+			idx = cur and (cur + d) or (d > 0 and 1 or #vis)
+		end
+		setHi(vis[((idx - 1) % #vis) + 1])
+	end
+
+	local function typeChar(ch)
+		if search.Visible then
+			-- liste avec recherche : la frappe filtre, la 1re ligne restante est visée
+			search.Text = search.Text .. ch
+			setHi(visibleItems()[1])
+			return
+		end
+		local now = os.clock()
+		if now - typeAt > 1 then typeBuf = "" end
+		typeAt = now
+		typeBuf = typeBuf .. string.lower(ch)
+		local vis, found = visibleItems(), nil
+		for _, t in ipairs(vis) do
+			if string.sub(string.lower(t), 1, #typeBuf) == typeBuf then found = t break end
+		end
+		if not found then
+			for _, t in ipairs(vis) do
+				if string.find(string.lower(t), typeBuf, 1, true) then found = t break end
+			end
+		end
+		if found then setHi(found) end
+	end
+
+	-- renvoie vrai si la touche a été utilisée
+	local function handleKey(kc)
+		if kc == Enum.KeyCode.Escape then
+			if Library.DropdownEscape == false then return false end
+			if search:IsFocused() then search:ReleaseFocus() end
+			if search.Text ~= "" then
+				search.Text = ""
+				setHi(nil)
+			else
+				setOpen(false)
+			end
+			return true
+		end
+		if Library.DropdownKeyNav == false then return false end
+		if kc == Enum.KeyCode.Up then moveHi(-1) return true end
+		if kc == Enum.KeyCode.Down then moveHi(1) return true end
+		if kc == Enum.KeyCode.Return or kc == Enum.KeyCode.KeypadEnter then
+			if hiText and table.find(items, hiText) then
+				uiSnd("pick")
+				pick(hiText)
+			end
+			return true
+		end
+		if kc == Enum.KeyCode.Backspace then
+			if search.Visible then
+				search.Text = string.sub(search.Text, 1, -2)
+				setHi(visibleItems()[1])
+			else
+				typeBuf = string.sub(typeBuf, 1, -2)
+			end
+			return true
+		end
+		local ok, ch = pcall(function() return UIS:GetStringForKeyCode(kc) end)
+		if kc == Enum.KeyCode.Space then ch = " " end
+		if ok and type(ch) == "string" and #ch == 1 then
+			typeChar(ch)
+			return true
+		end
+		return false
+	end
+
+	local function navKeyList()
+		local l = {}
+		if Library.DropdownEscape ~= false then l[#l + 1] = Enum.KeyCode.Escape end
+		if Library.DropdownKeyNav ~= false then
+			for _, kc in ipairs({ Enum.KeyCode.Up, Enum.KeyCode.Down, Enum.KeyCode.Return, Enum.KeyCode.KeypadEnter,
+				Enum.KeyCode.Backspace, Enum.KeyCode.Space }) do l[#l + 1] = kc end
+			for c = 65, 90 do l[#l + 1] = Enum.KeyCode[string.char(c)] end
+			for _, n in ipairs({ "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine" }) do
+				l[#l + 1] = Enum.KeyCode[n]
+			end
+		end
+		return l
+	end
+
+	local function stopOutside()
+		if outsideConn then outsideConn:Disconnect() outsideConn = nil end
+		if keyConn then keyConn:Disconnect() keyConn = nil end
+		pcall(function() CAS:UnbindAction(NAV_ACT) end)
+	end
+
+	local function startNav()
+		hiText, typeBuf = nil, ""
+		setHi(nil)
+		local keys = navKeyList()
+		if #keys > 0 then
+			pcall(function()
+				CAS:BindActionAtPriority(NAV_ACT, function(_, state, input)
+					if not holder.Parent or not isOpen then
+						pcall(function() CAS:UnbindAction(NAV_ACT) end)   -- sécurité : ne jamais garder des touches bloquées
+						return Enum.ContextActionResult.Pass
+					end
+					-- relâchements : toujours transmis (sinon une touche de déplacement tenue avant l'ouverture resterait « coincée »)
+					if state ~= Enum.UserInputState.Begin then return Enum.ContextActionResult.Pass end
+					local kc = input.KeyCode
+					local mod = UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.RightControl)
+						or UIS:IsKeyDown(Enum.KeyCode.LeftAlt) or UIS:IsKeyDown(Enum.KeyCode.RightAlt)
+					if mod and kc ~= Enum.KeyCode.Escape then return Enum.ContextActionResult.Pass end   -- Ctrl+K, Ctrl+R... restent possibles
+					return handleKey(kc) and Enum.ContextActionResult.Sink or Enum.ContextActionResult.Pass
+				end, false, 3000, table.unpack(keys))
+			end)
+		end
+		-- champ de recherche sélectionné : les touches sont déjà prises par la zone de texte, on écoute à côté
+		keyConn = UIS.InputBegan:Connect(function(i)
+			if i.UserInputType ~= Enum.UserInputType.Keyboard or not isOpen or not search:IsFocused() then return end
+			local kc = i.KeyCode
+			if kc == Enum.KeyCode.Up or kc == Enum.KeyCode.Down or kc == Enum.KeyCode.Return
+				or kc == Enum.KeyCode.KeypadEnter or kc == Enum.KeyCode.Escape then
+				handleKey(kc)
+			end
+		end)
+	end
+
 	setOpen = function(v)
 		v = v and true or false
 		if v == isOpen then return end
@@ -5321,7 +5595,26 @@ function Block:CreateDropdown(o)
 			end
 			search.Text = ""
 			layout()
+			-- clic en dehors du dropdown (en-tête + liste) = fermeture
+			stopOutside()
+			local openedAt = os.clock()
+			outsideConn = UIS.InputBegan:Connect(function(i)
+				if not holder.Parent then stopOutside() return end
+				if not isOpen then return end
+				local ut = i.UserInputType
+				if ut ~= Enum.UserInputType.MouseButton1 and ut ~= Enum.UserInputType.MouseButton2
+					and ut ~= Enum.UserInputType.Touch then return end
+				if os.clock() - openedAt < 0.1 then return end
+				local m = (ut == Enum.UserInputType.Touch) and Vector2.new(i.Position.X, i.Position.Y + guiInset().Y)
+					or UIS:GetMouseLocation()
+				local ap, as = holder.AbsolutePosition, holder.AbsoluteSize
+				if m.X >= ap.X and m.Y >= ap.Y and m.X <= ap.X + as.X and m.Y <= ap.Y + as.Y then return end
+				if Library._ddPopHit and Library._ddPopHit(m) then return end
+				setOpen(false)
+			end)
+			startNav()
 		else
+			stopOutside()
 			if Library._openDD == setOpen then Library._openDD = nil end
 			if ddEntry and Library._ddKeyClose then Library._ddKeyClose(ddEntry) end
 		end
@@ -7221,6 +7514,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 			end)
 		end
 		win.Current = tab
+		if Library._settingsReady then Library.Flags["ui.lasttab"] = tostring(tab.Name) end   -- mémorisé (sauvegarde auto)
 		if tab.OnSelect then tab.OnSelect() end
 	end
 	tab.Bar, tab.Label, tab.Dot = bar, txt, dot
@@ -7248,6 +7542,13 @@ function Window:CreateTab(name, _, icon, parentTab)
 	table.insert(self.Tabs, tab)
 	if parentTab then table.insert(parentTab.Children, tab) end
 	if not self.Current and not self._noSelect then tab:Select() end
+	-- on rouvre l'onglet qui était affiché la dernière fois (sans animation de transition)
+	if Library._lastTab and not self._noSelect and self.Current ~= tab and tostring(tab.Name) == Library._lastTab then
+		local veil = self.Veil
+		self.Veil = nil
+		pcall(tab.Select, tab)
+		self.Veil = veil
+	end
 	return tab
 end
 
@@ -8401,8 +8702,15 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Callback = function(v) Library:SetNotifSoundEnabled(v) end })
 	SN:CreateSlider({ Name = "Volume des notifications", Flag = "ui.sndvol", Min = 0, Max = 100, Step = 5, Suffix = "%",
 		Default = pct(Library.NotifVolume), Callback = function(v) Library:SetNotifVolume(v / 100) end })
+	SN:CreateToggle({ Name = "Limiter les sons", Flag = "ui.sndlimit", Default = Library.NotifSoundLimit ~= false,
+		Tooltip = "Plusieurs notifications d'affilée ne jouent qu'un seul son (un son plus important - erreur > alerte > succès > info - remplace le précédent) au lieu de se superposer.",
+		Callback = function(v) Library:SetNotifSoundLimit(v) end })
+	SN:CreateSlider({ Name = "Délai entre deux sons", Flag = "ui.sndgap", Min = 100, Max = 3000, Step = 50, Suffix = " ms",
+		Default = math.floor((Library.NotifSoundGap or 0.6) * 1000 + 0.5),
+		Tooltip = "Pendant ce délai après un son, les autres sons de notification sont ignorés (si « Limiter les sons » est activé).",
+		Callback = function(v) Library:SetNotifSoundGap(v / 1000) end })
 	SN:CreateParagraph({ Title = "Choisir le bruit",
-		Content = "Un son par type de notification. Choisis dans la liste (aperçu immédiat) ou tape un ID perso : un nombre, un rbxassetid://..., ou le nom d'un fichier du workspace (ex. son.mp3). Un ID perso sélectionne « Personnalisé » tout seul." })
+		Content = "Un son par type de notification, plus de 30 au choix (ceux marqués « calme » sont les plus doux). Choisis dans la liste (aperçu immédiat) ou tape un ID perso : un nombre, un rbxassetid://..., ou le nom d'un fichier du workspace (ex. son.mp3). Un ID perso sélectionne « Personnalisé » tout seul." })
 	for _, tl in ipairs({ { "Info", "Information" }, { "Success", "Succès" }, { "Warning", "Alerte" }, { "Error", "Erreur" } }) do
 		local kind, lab = tl[1], tl[2]
 		SN:CreateSection(lab)
@@ -8526,6 +8834,12 @@ function Window:CreateSettingsTab(name, icon, docked)
 	D:CreateToggle({ Name = "Keybinds dans les listes", Flag = "ui.ddkeys", Default = Library.DropdownKeys == true,
 		Tooltip = "Clic droit sur une entrée d'une liste déroulante : un petit menu apparaît en fondu pour lui assigner une touche. Appuyer sur la touche choisit directement cette entrée (même fenêtre fermée).",
 		Callback = function(v) Library:SetDropdownKeys(v) end })
+	D:CreateToggle({ Name = "Échap ferme les listes", Flag = "ui.ddescape", Default = Library.DropdownEscape ~= false,
+		Tooltip = "Quand une liste déroulante est ouverte, Échap la ferme (si la recherche contient du texte, le premier Échap l'efface).",
+		Callback = function(v) Library.DropdownEscape = v and true or false end })
+	D:CreateToggle({ Name = "Navigation clavier dans les listes", Flag = "ui.ddnav", Default = Library.DropdownKeyNav ~= false,
+		Tooltip = "Liste ouverte : flèches haut/bas pour se déplacer, Entrée pour choisir, et taper pour filtrer (avec recherche) ou sauter à une entrée. Les touches utilisées sont bloquées pour le jeu tant que la liste est ouverte.",
+		Callback = function(v) Library.DropdownKeyNav = v and true or false end })
 	D:CreateButton({ Name = "Retirer les touches des listes", Confirm = true, Favorite = false,
 		Tooltip = "Enlève toutes les touches assignées aux entrées des listes déroulantes.",
 		Callback = function()
@@ -10536,6 +10850,7 @@ function Library:CreateWindow(cfg)
 		Name = "MainBackground", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(W, H),
 		Position = UDim2.fromOffset(center.X, center.Y), BackgroundColor3 = T.Main,
 		BackgroundTransparency = 1 - (1 - transp) * Sty.WinAlpha, BorderSizePixel = 0, ClipsDescendants = true,
+		Active = true, -- absorbe les clics : rien de ce qui est fait dans l'UI n'est transmis au jeu
 	}, gui)
 	local mainCorner = corner(main, 26)
 	local mainEntry = Library.CornerObjects[#Library.CornerObjects]
@@ -10857,6 +11172,14 @@ function Library:CreateWindow(cfg)
 		handles[#handles + 1] = h
 		h.InputBegan:Connect(function(i)
 			if not isPress(i) or collapsed or Library.LockPosition then return end
+			-- Une animation (dépliage, reset, colonnes) est encore en cours : on la termine d'abord, avec sa
+			-- propre direction, pour partir de la vraie taille et non d'une taille intermédiaire.
+			if tgtSize and rsSmooth then
+				applySize(tgtSize)
+				curSize, tgtSize = lastSize, nil
+			end
+			if tgtPos then curPos, tgtPos = tgtPos, nil end
+			setMainPos()
 			local start = Vector2.new(i.Position.X, i.Position.Y)
 			local sw, sh = main.Size.X.Offset, main.Size.Y.Offset
 			local sc = scaleBase
@@ -10912,16 +11235,23 @@ function Library:CreateWindow(cfg)
 		if v == collapsed then return end
 		collapsed = v
 		local sz = Vector2.new(main.Size.X.Offset, main.Size.Y.Offset)
+		-- Un dépliage est encore en cours : la vraie taille est sa cible, pas la taille intermédiaire
+		-- (sinon la fenêtre se « rapetisse » toute seule à la réouverture).
+		local fullSz = sz
+		if v and tgtSize and tgtSize.Y > 60 then fullSz = tgtSize
+		elseif v and sz.Y <= 60 and preSize then fullSz = preSize end
+		fullSz = Vector2.new(math.max(fullSz.X, minW), math.max(fullSz.Y, minH))
 		curSize, lastSize, rsDir, rsSmooth = sz, sz, Vector2.new(0, 1), true
 		if v then
-			preSize = sz
-			tgtSize = Vector2.new(sz.X, 44)
+			preSize = fullSz
+			tgtSize = Vector2.new(fullSz.X, 44)
 			task.delay(0.35, function()
 				if collapsed then for _, p in ipairs(parts) do p.Visible = false end end
 			end)
 		else
 			for _, p in ipairs(parts) do p.Visible = true end
-			tgtSize = preSize or Vector2.new(W0, H0)
+			local back = preSize or Vector2.new(W0, H0)
+			tgtSize = Vector2.new(math.max(back.X, minW), math.max(back.Y, minH))
 		end
 		for _, h in ipairs(handles) do h.Visible = not v end
 		Library._busyUntil = os.clock() + 0.6
