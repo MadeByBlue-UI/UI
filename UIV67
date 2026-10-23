@@ -244,6 +244,7 @@ local Library = {
 	KeybindEntries    = {},    -- tous les keybinds placés dans l'interface (bloc « Raccourcis clavier » des Paramètres)
 	DropdownEscape    = true,  -- Échap ferme la liste déroulante ouverte (Paramètres > Fenêtre)
 	DropdownKeyNav    = true,  -- flèches / Entrée / frappe dans une liste ouverte (Paramètres > Fenêtre)
+	DropdownTypeAhead = false, -- true = taper des lettres dans une liste ouverte la filtre / la surligne (bloque ces touches en jeu)
 	DropdownKeys      = false, -- true = clic droit sur une entrée de liste : lui assigner une touche (Paramètres > Fenêtre)
 	DDKeyEntries      = {},    -- listes déroulantes qui acceptent des touches : { Frame, Keys, Trigger, Refresh, SetKey, Clear }
 	ToggleEntries     = {},    -- toggles listés par le HUD des actifs
@@ -4419,8 +4420,11 @@ end
 function Block:CreateToggle(o)
 	o = o or {}
 	local f, st = makeRow(self, 34, o.Name)
-	local hasKey = o.Keybind ~= nil and o.Keybind ~= false
-	label(f, o.Name or "Toggle", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, hasKey and -150 or -70, 1, 0) })
+	-- touche : donnée par le script (Keybind = ...) ou assignable par le joueur (clic droit sur la ligne)
+	local explicitKey = o.Keybind ~= nil and o.Keybind ~= false
+	local keyOk = o.Keybind ~= false and not self._noFav and not (self.Tab and self.Tab._isSettings)
+	local hasKey = explicitKey or keyOk
+	local nameLbl = label(f, o.Name or "Toggle", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, explicitKey and -150 or -70, 1, 0) })
 	-- conteneur de l'interrupteur : son dessin dépend du style choisi (Paramètres > Style des toggles)
 	local sw = new("Frame", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
@@ -4457,14 +4461,15 @@ function Block:CreateToggle(o)
 	f.ClipsDescendants = true
 	btn.MouseButton1Click:Connect(function() ripple(f) apply(not state) uiSnd(state and "on" or "off") end)
 
-	-- ---- touche liée (option Keybind)
+	-- ---- touche liée : option Keybind = Enum.KeyCode.X, ou clic droit sur le toggle pour en assigner une
+	--      (Échap / Retour = retirer la touche ; Keybind = false = pas de touche pour ce toggle)
 	if hasKey then
 		local key = (typeof(o.Keybind) == "EnumItem") and o.Keybind or Enum.KeyCode.Unknown
 		local chip = new("TextButton", {
 			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -58, 0.5, 0), Size = UDim2.new(0, 0, 0, 20),
 			AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = T.Off, BackgroundTransparency = 0.4,
 			BorderSizePixel = 0, Text = shortKey(key) or "—", TextColor3 = T.Text, TextSize = 11, Font = F_MED,
-			AutoButtonColor = false, ZIndex = 3,
+			AutoButtonColor = false, ZIndex = 3, Visible = explicitKey or key ~= Enum.KeyCode.Unknown,
 		}, f)
 		corner(chip, 6)
 		new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, chip)
@@ -4473,10 +4478,43 @@ function Block:CreateToggle(o)
 
 		local listening, lastBind = false, 0
 		local keyItem = {}
+		local registered, bindConn = false, nil
+
+		local function refreshLook()
+			local has = key ~= Enum.KeyCode.Unknown
+			chip.Visible = explicitKey or has or listening
+			nameLbl.Size = UDim2.new(1, (explicitKey or has or listening) and -150 or -70, 1, 0)
+		end
+
+		-- l'entrée n'apparaît dans « Raccourcis clavier » qu'une fois qu'une touche existe
+		local function ensureEntry()
+			if registered or self._noFav then return end
+			registered = true
+			Library.KeybindEntries[#Library.KeybindEntries + 1] = { Name = tostring(o.Name or "Toggle") .. " (touche)",
+				Tab = self.Tab, Block = self, Frame = f, Item = keyItem, BadgeX = -124 }
+			if Library._onKeybindAdded then pcall(Library._onKeybindAdded) end
+		end
+
+		-- un seul écouteur clavier par toggle, créé seulement quand une touche est définie
+		local function ensureConn()
+			if bindConn then return end
+			bindConn = track(UIS.InputBegan:Connect(function(i, gp)
+				if gp or listening or Library._listening then return end
+				if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
+				if key == Enum.KeyCode.Unknown or i.KeyCode ~= key then return end
+				if os.clock() - lastBind < 0.2 or not f.Parent then return end
+				if UIS:GetFocusedTextBox() then return end
+				apply(not state)
+				uiSnd(state and "on" or "off")
+			end))
+		end
+
 		local function setKey(k, silent)
 			key = k
 			chip.Text = shortKey(k) or "—"
 			lastBind = os.clock()
+			if k ~= Enum.KeyCode.Unknown then ensureEntry() ensureConn() end
+			refreshLook()
 			if o.Flag then Library.Flags[o.Flag .. ".key"] = k.Name end
 			if Library._hudRefresh then Library._hudRefresh() end
 			if Library.RefreshKeybindConflicts then Library:RefreshKeybindConflicts() end
@@ -4486,11 +4524,13 @@ function Block:CreateToggle(o)
 				fire(o.KeyCallback, k)
 			end
 		end
-		chip.MouseButton1Click:Connect(function()
-			if listening then return end
+
+		local function startListen()
+			if listening or Library._listening then return end
 			listening = true
 			Library._listening = true
 			chip.Text = "..."
+			refreshLook()
 			uiSnd("focus")
 			tween(cst, { Transparency = 0.25 }, 0.2)
 			local c
@@ -4507,18 +4547,9 @@ function Block:CreateToggle(o)
 					end
 				end
 			end)
-		end)
-		-- appuyer sur la touche bascule le toggle (sauf pendant l'écriture / l'assignation d'une touche)
-		track(UIS.InputBegan:Connect(function(i, gp)
-			if gp or listening or Library._listening then return end
-			-- Filtre strict : SEULEMENT les événements clavier, et seulement si la touche est définie
-			if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
-			if key == Enum.KeyCode.Unknown or i.KeyCode ~= key then return end
-			if os.clock() - lastBind < 0.2 or not f.Parent then return end
-			if UIS:GetFocusedTextBox() then return end
-			apply(not state)
-			uiSnd(state and "on" or "off")
-		end))
+		end
+		chip.MouseButton1Click:Connect(startListen)
+		btn.MouseButton2Click:Connect(startListen)   -- clic droit sur la ligne du toggle
 
 		keyItem.Set = function(...)
 			local k = unself(keyItem, ...)
@@ -4532,12 +4563,9 @@ function Block:CreateToggle(o)
 		item.SetKey = function(...) keyItem.Set(...) end
 		item.GetKey = function() return key end
 		if o.Flag then register(o.Flag .. ".key", keyItem, key.Name) end
-		if not self._noFav then
-			Library.KeybindEntries[#Library.KeybindEntries + 1] = { Name = tostring(o.Name or "Toggle") .. " (touche)",
-				Tab = self.Tab, Block = self, Frame = f, Item = keyItem, BadgeX = -124 }
-			if Library._onKeybindAdded then pcall(Library._onKeybindAdded) end
-			if Library.RefreshKeybindConflicts then Library:RefreshKeybindConflicts() end
-		end
+		if key ~= Enum.KeyCode.Unknown then ensureEntry() ensureConn() end
+		refreshLook()
+		if explicitKey and Library.RefreshKeybindConflicts then Library:RefreshKeybindConflicts() end
 	end
 
 	skin()
@@ -5130,13 +5158,7 @@ function Block:CreateDropdown(o)
 	o = o or {}
 	local multi = (o.Multi == true) or (o.MultiSelect == true) or (o.MultipleOptions == true)
 	local items = {}
-	do
-		local seenI = {}
-		for _, v in ipairs(o.Items or o.Options or {}) do
-			local sv = tostring(v)
-			if not seenI[sv] then seenI[sv] = true items[#items + 1] = sv end
-		end
-	end
+	for _, v in ipairs(o.Items or o.Options or {}) do items[#items + 1] = tostring(v) end
 
 	local selected, selSet = nil, {}
 	do
@@ -5346,67 +5368,54 @@ function Block:CreateDropdown(o)
 		dr:Resize(sh + lh)
 	end
 
-	-- crée UNE ligne ; les lignes déjà présentes sont conservées (sinon un clic en cours est perdu quand la liste est rafraîchie)
-	local function buildRow(text, idx)
-		local b = new("TextButton", {
-			Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
-			Text = text, TextColor3 = T.ElementAccent, TextSize = 12, Font = F_REG,
-			TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd,
-			AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = idx, ClipsDescendants = true,
-		}, list)
-		local pad = new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 26) }, b)
-		new("UICorner", { CornerRadius = UDim.new(0, 5) }, b)
-		local ind
-		if multi then
-			ind = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 18, 0.5, 0),
-				Size = UDim2.new(0, 12, 0, 12), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
-				BorderSizePixel = 0 }, b)
-			new("UICorner", { CornerRadius = UDim.new(0, 3) }, ind)
-			stroke(ind, 0.45)
-		else
-			ind = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 20, 0.5, 0),
-				Size = UDim2.new(0, 6, 0, 6), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
-				BorderSizePixel = 0 }, b)
-			new("UICorner", { CornerRadius = UDim.new(1, 0) }, ind)
-		end
-		local tag = new("TextLabel", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
-			Size = UDim2.fromOffset(0, 16), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = T.Off,
-			BackgroundTransparency = 0.35, Text = "", TextColor3 = T.Accent, TextSize = 10, Font = F_MED,
-			Visible = false, BorderSizePixel = 0 }, b)
-		new("UICorner", { CornerRadius = UDim.new(0, 4) }, tag)
-		new("UIPadding", { PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5) }, tag)
-		btns[text] = { Btn = b, Ind = ind, Shown = true, Tag = tag, Pad = pad }
-		b.MouseEnter:Connect(function()
-			if not isOn(text) then tween(b, { BackgroundTransparency = 0.93 }, 0.15) end
-		end)
-		b.MouseLeave:Connect(function()
-			if not isOn(text) then tween(b, { BackgroundTransparency = 1 }, 0.2) end
-		end)
-		b.MouseButton1Click:Connect(function() uiSnd("pick") pick(text) end)
-		b.MouseButton2Click:Connect(function()
-			if ddEntry and Library.DropdownKeys then Library._ddOpen(ddEntry, text) end
-		end)
-	end
-
 	local function rebuild()
-		local want = {}
-		for _, t in ipairs(items) do want[t] = true end
-		for text, rec in pairs(btns) do
-			if not want[text] then
-				pcall(function() rec.Btn:Destroy() end)
-				btns[text] = nil
-			end
+		for _, c in ipairs(list:GetChildren()) do
+			if c:IsA("TextButton") or c:IsA("TextLabel") then c:Destroy() end
 		end
-		local hint = list:FindFirstChild("EmptyHint")
-		if hint then hint:Destroy() end
-		if next(btns) == nil then firstLayout = true end
+		table.clear(btns)
+		firstLayout = true
 		if #items == 0 then
-			local h = label(list, "(vide)", 12, { Size = UDim2.new(1, 0, 0, 24), TextColor3 = T.ElementAccent, TextXAlignment = CENTER })
-			h.Name = "EmptyHint"
+			label(list, "(vide)", 12, { Size = UDim2.new(1, 0, 0, 24), TextColor3 = T.ElementAccent, TextXAlignment = CENTER })
 		end
 		for idx, text in ipairs(items) do
-			local rec = btns[text]
-			if rec then rec.Btn.LayoutOrder = idx else buildRow(text, idx) end
+			local b = new("TextButton", {
+				Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
+				Text = text, TextColor3 = T.ElementAccent, TextSize = 12, Font = F_REG,
+				TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd,
+				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = idx, ClipsDescendants = true,
+			}, list)
+			local pad = new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 26) }, b)
+			new("UICorner", { CornerRadius = UDim.new(0, 5) }, b)
+			local ind
+			if multi then
+				ind = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 18, 0.5, 0),
+					Size = UDim2.new(0, 12, 0, 12), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
+					BorderSizePixel = 0 }, b)
+				new("UICorner", { CornerRadius = UDim.new(0, 3) }, ind)
+				stroke(ind, 0.45)
+			else
+				ind = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 20, 0.5, 0),
+					Size = UDim2.new(0, 6, 0, 6), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
+					BorderSizePixel = 0 }, b)
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, ind)
+			end
+			local tag = new("TextLabel", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+				Size = UDim2.fromOffset(0, 16), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = T.Off,
+				BackgroundTransparency = 0.35, Text = "", TextColor3 = T.Accent, TextSize = 10, Font = F_MED,
+				Visible = false, BorderSizePixel = 0 }, b)
+			new("UICorner", { CornerRadius = UDim.new(0, 4) }, tag)
+			new("UIPadding", { PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5) }, tag)
+			btns[text] = { Btn = b, Ind = ind, Shown = true, Tag = tag, Pad = pad }
+			b.MouseEnter:Connect(function()
+				if not isOn(text) then tween(b, { BackgroundTransparency = 0.93 }, 0.15) end
+			end)
+			b.MouseLeave:Connect(function()
+				if not isOn(text) then tween(b, { BackgroundTransparency = 1 }, 0.2) end
+			end)
+			b.MouseButton1Click:Connect(function() uiSnd("pick") pick(text) end)
+			b.MouseButton2Click:Connect(function()
+				if ddEntry and Library.DropdownKeys then Library._ddOpen(ddEntry, text) end
+			end)
 		end
 		restyle()
 		layout()
@@ -5414,13 +5423,8 @@ function Block:CreateDropdown(o)
 	end
 
 	setItems = function(newItems, clear)
-		local oldItems = items
 		items = {}
-		local seenI = {}
-		for _, v in ipairs(newItems or {}) do
-			local sv = tostring(v)
-			if not seenI[sv] then seenI[sv] = true items[#items + 1] = sv end
-		end
+		for _, v in ipairs(newItems or {}) do items[#items + 1] = tostring(v) end
 		if clear == true then
 			selSet = {}
 			selected = nil
@@ -5434,13 +5438,7 @@ function Block:CreateDropdown(o)
 			if multi then Library.Flags[o.Flag] = getMulti() else Library.Flags[o.Flag] = selected end
 		end
 		show()
-		local same = (#oldItems == #items)
-		if same then
-			for i = 1, #items do
-				if oldItems[i] ~= items[i] then same = false break end
-			end
-		end
-		if same and next(btns) ~= nil then restyle() else rebuild() end
+		rebuild()
 	end
 
 	local isOpen = false
@@ -5564,11 +5562,18 @@ function Block:CreateDropdown(o)
 		local l = {}
 		if Library.DropdownEscape ~= false then l[#l + 1] = Enum.KeyCode.Escape end
 		if Library.DropdownKeyNav ~= false then
-			for _, kc in ipairs({ Enum.KeyCode.Up, Enum.KeyCode.Down, Enum.KeyCode.Return, Enum.KeyCode.KeypadEnter,
-				Enum.KeyCode.Backspace, Enum.KeyCode.Space }) do l[#l + 1] = kc end
-			for c = 65, 90 do l[#l + 1] = Enum.KeyCode[string.char(c)] end
-			for _, n in ipairs({ "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine" }) do
-				l[#l + 1] = Enum.KeyCode[n]
+			for _, kc in ipairs({ Enum.KeyCode.Up, Enum.KeyCode.Down, Enum.KeyCode.Return, Enum.KeyCode.KeypadEnter }) do
+				l[#l + 1] = kc
+			end
+			-- lettres / chiffres / espace : seulement si la frappe dans les listes est activée (désactivée par défaut,
+			-- sinon E, WASD, etc. sont « mangées » par la liste tant qu'elle est ouverte)
+			if Library.DropdownTypeAhead == true then
+				l[#l + 1] = Enum.KeyCode.Backspace
+				l[#l + 1] = Enum.KeyCode.Space
+				for c = 65, 90 do l[#l + 1] = Enum.KeyCode[string.char(c)] end
+				for _, n in ipairs({ "Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine" }) do
+					l[#l + 1] = Enum.KeyCode[n]
+				end
 			end
 		end
 		return l
@@ -5617,7 +5622,7 @@ function Block:CreateDropdown(o)
 		if v == isOpen then return end
 		if v then
 			local prev = Library._openDD
-			if prev and prev ~= setOpen then pcall(prev, false) end
+			if prev and prev ~= setOpen then prev(false) end
 			Library._openDD = setOpen
 			if type(o.UpdateList) == "function" then
 				local ok, res = pcall(o.UpdateList)
@@ -9062,6 +9067,9 @@ function Window:CreateSettingsTab(name, icon, docked)
 	D:CreateToggle({ Name = "Navigation clavier dans les listes", Flag = "ui.ddnav", Default = Library.DropdownKeyNav ~= false,
 		Tooltip = "Liste ouverte : flèches haut/bas pour se déplacer, Entrée pour choisir, et taper pour filtrer (avec recherche) ou sauter à une entrée. Les touches utilisées sont bloquées pour le jeu tant que la liste est ouverte.",
 		Callback = function(v) Library.DropdownKeyNav = v and true or false end })
+	D:CreateToggle({ Name = "Frappe de lettres dans les listes", Flag = "ui.ddtype", Default = Library.DropdownTypeAhead == true,
+		Tooltip = "Désactivé (recommandé) : une liste ouverte ne bloque plus E, WASD, etc. Activé : taper des lettres dans une liste ouverte la filtre / surligne l'entrée (ces touches sont alors bloquées tant qu'elle est ouverte).",
+		Callback = function(v) Library.DropdownTypeAhead = v and true or false end })
 	D:CreateButton({ Name = "Retirer les touches des listes", Confirm = true, Favorite = false,
 		Tooltip = "Enlève toutes les touches assignées aux entrées des listes déroulantes.",
 		Callback = function()
