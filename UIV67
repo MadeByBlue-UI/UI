@@ -4462,7 +4462,7 @@ function Block:CreateToggle(o)
 	btn.MouseButton1Click:Connect(function() ripple(f) apply(not state) uiSnd(state and "on" or "off") end)
 
 	-- ---- touche liée : option Keybind = Enum.KeyCode.X, ou clic droit sur le toggle pour en assigner une
-	--      (Échap / Retour = retirer la touche ; Keybind = false = pas de touche pour ce toggle)
+	--      (Échap = annuler, Retour / Suppr = retirer la touche ; Keybind = false = pas de touche pour ce toggle)
 	if hasKey then
 		local key = (typeof(o.Keybind) == "EnumItem") and o.Keybind or Enum.KeyCode.Unknown
 		local chip = new("TextButton", {
@@ -4534,19 +4534,27 @@ function Block:CreateToggle(o)
 			uiSnd("focus")
 			tween(cst, { Transparency = 0.25 }, 0.2)
 			local c
-			c = UIS.InputBegan:Connect(function(i)
-				if i.UserInputType == Enum.UserInputType.Keyboard then
-					c:Disconnect()
-					listening = false
-					Library._listening = false
-					tween(cst, { Transparency = Sty.InputStroke }, 0.3)
-					if i.KeyCode == Enum.KeyCode.Escape or i.KeyCode == Enum.KeyCode.Backspace or i.KeyCode == Enum.KeyCode.Delete then
-						setKey(Enum.KeyCode.Unknown)
-					else
-						setKey(i.KeyCode)
-					end
+			local function stop()
+				if c then c:Disconnect() c = nil end
+				listening = false
+				Library._listening = false
+				Library._abortListen = nil
+				tween(cst, { Transparency = Sty.InputStroke }, 0.3)
+			end
+			-- l'interface se masque pendant l'écoute : on annule (sinon la prochaine touche du jeu serait capturée)
+			Library._abortListen = function() stop() chip.Text = shortKey(key) or "—" refreshLook() end
+			c = track(UIS.InputBegan:Connect(function(i)
+				if i.UserInputType ~= Enum.UserInputType.Keyboard or i.KeyCode == Enum.KeyCode.Unknown then return end
+				stop()
+				if i.KeyCode == Enum.KeyCode.Escape then
+					chip.Text = shortKey(key) or "—"   -- annulé : la touche actuelle est gardée
+					refreshLook()
+				elseif i.KeyCode == Enum.KeyCode.Backspace or i.KeyCode == Enum.KeyCode.Delete then
+					setKey(Enum.KeyCode.Unknown)
+				else
+					setKey(i.KeyCode)
 				end
-			end)
+			end))
 		end
 		chip.MouseButton1Click:Connect(startListen)
 		btn.MouseButton2Click:Connect(startListen)   -- clic droit sur la ligne du toggle
@@ -5620,14 +5628,14 @@ function Block:CreateDropdown(o)
 			end)
 		end
 		-- champ de recherche sélectionné : les touches sont déjà prises par la zone de texte, on écoute à côté
-		keyConn = UIS.InputBegan:Connect(function(i)
+		keyConn = track(UIS.InputBegan:Connect(function(i)
 			if i.UserInputType ~= Enum.UserInputType.Keyboard or not isOpen or not search:IsFocused() then return end
 			local kc = i.KeyCode
 			if kc == Enum.KeyCode.Up or kc == Enum.KeyCode.Down or kc == Enum.KeyCode.Return
 				or kc == Enum.KeyCode.KeypadEnter or kc == Enum.KeyCode.Escape then
 				handleKey(kc)
 			end
-		end)
+		end))
 	end
 
 	setOpen = function(v)
@@ -5814,22 +5822,33 @@ function Block:CreateKeybind(o)
 	end
 	local listening = false
 	btn.MouseButton1Click:Connect(function()
-		if listening then return end
+		if listening or Library._listening then return end   -- une seule assignation à la fois
 		listening = true
 		Library._listening = true
 		btn.Text = "..."
 		uiSnd("focus")
 		tween(bst, { Transparency = 0.25 }, 0.2)
 		local c
-		c = UIS.InputBegan:Connect(function(i)
-			if i.UserInputType == Enum.UserInputType.Keyboard then
-				c:Disconnect()
-				listening = false
-				Library._listening = false
-				tween(bst, { Transparency = Sty.InputStroke }, 0.3)
-				if i.KeyCode == Enum.KeyCode.Escape then apply(Enum.KeyCode.Unknown) else apply(i.KeyCode) end
+		local function stop()
+			if c then c:Disconnect() c = nil end
+			listening = false
+			Library._listening = false
+			Library._abortListen = nil
+			tween(bst, { Transparency = Sty.InputStroke }, 0.3)
+		end
+		local function label0() btn.Text = (key == Enum.KeyCode.Unknown) and "Aucune" or key.Name end
+		Library._abortListen = function() stop() label0() end   -- interface masquée pendant l'écoute
+		c = track(UIS.InputBegan:Connect(function(i)
+			if i.UserInputType ~= Enum.UserInputType.Keyboard or i.KeyCode == Enum.KeyCode.Unknown then return end
+			stop()
+			if i.KeyCode == Enum.KeyCode.Escape then
+				label0()                                  -- annulé : la touche actuelle est gardée
+			elseif i.KeyCode == Enum.KeyCode.Backspace or i.KeyCode == Enum.KeyCode.Delete then
+				apply(Enum.KeyCode.Unknown)               -- retirer la touche
+			else
+				apply(i.KeyCode)
 			end
-		end)
+		end))
 	end)
 
 	local item = {}
@@ -11818,6 +11837,7 @@ function Library:CreateWindow(cfg)
 			if auto and collapsed then setMinimized(false) end   -- réduite automatiquement au masquage : on la redéplie
 		else
 			if Library._openDD then Library._openDD(false) end
+			if Library._abortListen then pcall(Library._abortListen) end
 			self:RefreshShape()
 			if keepBar then
 				-- « Barre réduite visible » : la barre réduite reste à l'écran, on coupe seulement le reste (flou, étoiles)
@@ -12178,6 +12198,7 @@ function Library:Destroy()
 	table.clear(notifEntries)
 	Library._openDD = nil
 	Library._listening = false
+	Library._abortListen = nil
 	do
 		local CASd = game:GetService("ContextActionService")
 		for n = 1, (Library._ddNavId or 0) do pcall(function() CASd:UnbindAction("UiLibDDNav" .. n) end) end
