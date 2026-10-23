@@ -6266,7 +6266,7 @@ for _, kind in ipairs(WRAP_KINDS) do
 			if opts.Tooltip then attachTip(e.Frame, opts.Tooltip) end
 			-- filtre « Modifiés » : { Modified = false } pour exclure un élément
 			if kind ~= "Button" and kind ~= "Progress" and not self._noFav and opts.Modified ~= false then
-				Library:_trackModified(kind, item, e.Frame, opts)
+				Library:_trackModified(kind, item, e.Frame, opts, self)
 			end
 			-- remise à zéro globale (Paramètres > Fenêtre) : { Reset = false } pour exclure un élément
 			if (kind == "Toggle" or kind == "Slider" or kind == "RangeSlider" or kind == "Keybind")
@@ -6351,7 +6351,7 @@ local function modSig(v)
 	return tostring(v)
 end
 
-function Library:_trackModified(kind, item, frame, opts)
+function Library:_trackModified(kind, item, frame, opts, blk)
 	if not frame then return end
 	local host = frame
 	if host:FindFirstChildOfClass("UIListLayout") then host = host:FindFirstChildWhichIsA("TextButton") or host end
@@ -6359,7 +6359,9 @@ function Library:_trackModified(kind, item, frame, opts)
 		Size = UDim2.fromOffset(6, 6), BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0,
 		ZIndex = 7, Active = false }, host)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
-	local en = { Kind = kind, Item = item, Frame = frame, Dot = dot, Name = tostring(opts.Name or kind), Mod = false, Shown = 1 }
+	local en = { Kind = kind, Item = item, Frame = frame, Dot = dot, Name = tostring(opts.Name or kind), Mod = false, Shown = 1,
+		Opts = opts, TabName = blk and blk.Tab and blk.Tab.Name or "", BlockName = blk and blk.Name or "",
+		IsSettings = (blk and blk.Tab and blk.Tab._isSettings == true) or false, NoUndo = opts.Undo == false }
 	en.Get = function()
 		local ok, v = pcall(function() return item.Get() end)
 		local sg = ok and modSig(v) or "?"
@@ -6370,6 +6372,8 @@ function Library:_trackModified(kind, item, frame, opts)
 		return sg
 	end
 	en.Base = en.Get()
+	en.USig = en.Base                                   -- référence pour « Annuler » / « Récemment utilisés »
+	if Library._undoSnap then en.UVal, en.UKey = Library._undoSnap(en) end
 	Library.ModEntries[#Library.ModEntries + 1] = en
 	Library.ModByFrame[frame] = en
 	Library:_startModWatcher()
@@ -6461,6 +6465,175 @@ end
 function Library:SetModBaseline()
 	for _, en in ipairs(Library.ModEntries) do en.Base = en.Get() end
 	Library:_refreshModified()
+end
+
+-- ============================================================================
+-- ANNULER  +  RÉCEMMENT UTILISÉS
+--   Chaque changement fait dans l'interface (toggle, slider, liste, champ, couleur, touche, stepper) est retenu :
+--   • bouton « Annuler » dans la barre de titre (à gauche de l'indicateur FPS / ping, visible avec lui) ou Ctrl+Z :
+--     revient en arrière d'un pas. Un « Réinitialiser les contrôles » ou un chargement de config = UN seul pas.
+--     Un curseur / une couleur déplacé en continu = un seul pas.
+--   • section « Récemment utilisés » (onglet Favoris, ou Window:CreateRecentTab) : les derniers éléments modifiés.
+--   { Undo = false } sur un élément l'exclut de « Annuler ».  Library:Undo() · Library:ClearUndo() · Library.UndoMax / RecentMax
+--   Seuls les changements faits pendant que tu utilises l'interface (fenêtre ou palette ouverte, avec une action de ta part)
+--   sont retenus : pas ceux d'un script qui change une valeur tout seul.
+-- ============================================================================
+Library.UndoStack = {}
+Library.RecentList = {}
+Library.UndoMax = 50
+Library.RecentMax = 12
+Library._lastInputAt = 0
+
+do
+	local function snap(en)
+		local it = en.Item
+		local ok, v = pcall(function() return it.Get() end)
+		local k
+		if type(it.GetKey) == "function" then
+			local ok2, kk = pcall(it.GetKey)
+			if ok2 then k = kk end
+		end
+		return ok and copyVal(v) or nil, k
+	end
+	Library._undoSnap = snap
+
+	local function markInput(i)
+		local ut = i.UserInputType
+		if ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.MouseButton2
+			or ut == Enum.UserInputType.Touch or ut == Enum.UserInputType.Keyboard then
+			Library._lastInputAt = os.clock()
+		end
+	end
+	track(UIS.InputBegan:Connect(function(i, gp)
+		markInput(i)
+		if gp or i.KeyCode ~= Enum.KeyCode.Z then return end
+		if not (UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.RightControl)) then return end
+		local w = Library.Window
+		if w and w.Open ~= false and not UIS:GetFocusedTextBox() and #Library.UndoStack > 0 then Library:Undo() end
+	end))
+	track(UIS.InputEnded:Connect(markInput))
+
+	local function context()
+		local w = Library.Window
+		local winOpen = w ~= nil and w.Open ~= false
+		local pal = Library.IsPaletteOpen and Library:IsPaletteOpen() or false
+		local now = os.clock()
+		if winOpen or pal then Library._ctxAt = now return true end
+		return now - (Library._ctxAt or 0) < 1.0
+	end
+
+	local function step()
+		local changes = {}
+		for _, en in ipairs(Library.ModEntries) do
+			if en.Frame and en.Frame.Parent and en.Item and not en.NoUndo then
+				local sig = en.Get()
+				if en.USig == nil then
+					en.USig = sig
+					en.UVal, en.UKey = snap(en)
+				elseif sig ~= en.USig then
+					changes[#changes + 1] = { En = en, Old = en.UVal, OldKey = en.UKey }
+					en.USig = sig
+					en.UVal, en.UKey = snap(en)
+				end
+			end
+		end
+		if #changes == 0 or Library._undoing or os.clock() < (Library._undoGrace or 0) then return end
+		local now = os.clock()
+		if not context() then return end
+		if not (activeDrag ~= nil or now - (Library._lastInputAt or 0) < 1.3) then return end   -- pas un geste de ta part
+
+		local stack = Library.UndoStack
+		local top = stack[#stack]
+		if #changes == 1 and top and #top.Changes == 1 and top.Changes[1].En == changes[1].En and now - top.At < 1.6 then
+			top.At = now   -- même réglage modifié en continu : un seul pas
+		else
+			stack[#stack + 1] = { Changes = changes, At = now,
+				Label = (#changes == 1) and tostring(changes[1].En.Name) or (#changes .. " éléments") }
+			if #stack > (Library.UndoMax or 50) then table.remove(stack, 1) end
+		end
+		local rl = Library.RecentList
+		for _, c in ipairs(changes) do
+			local en = c.En
+			if not en.IsSettings then
+				local at = table.find(rl, en)
+				if at then table.remove(rl, at) end
+				table.insert(rl, 1, en)
+			end
+		end
+		while #rl > (Library.RecentMax or 12) do table.remove(rl) end
+		if Library._undoRefresh then pcall(Library._undoRefresh) end
+	end
+
+	local token = (Library._undoToken or 0) + 1
+	Library._undoToken = token
+	task.spawn(function()
+		while Library._undoToken == token do
+			task.wait(0.3)
+			if not Library._listening then pcall(step) end
+		end
+	end)
+
+	function Library:Undo()
+		local stack = Library.UndoStack
+		local st = table.remove(stack)
+		if not st then return false end
+		Library._undoing = true
+		Library._silentSound = (Library._silentSound or 0) + 1
+		for i = #st.Changes, 1, -1 do
+			local c = st.Changes[i]
+			local en = c.En
+			if en.Frame and en.Frame.Parent then
+				pcall(en.Item.Set, en.Item, copyVal(c.Old))
+				if c.OldKey ~= nil and en.Item.SetKey then pcall(en.Item.SetKey, en.Item, c.OldKey) end
+				en.USig = en.Get()
+				en.UVal, en.UKey = snap(en)
+			end
+		end
+		Library._silentSound = math.max((Library._silentSound or 1) - 1, 0)
+		Library._undoing = false
+		Library._undoGrace = os.clock() + 0.8   -- les mises à jour tardives dues à l'annulation ne comptent pas comme de nouveaux changements
+		if Library.RefreshKeybindConflicts then pcall(function() Library:RefreshKeybindConflicts() end) end
+		if Library._hudRefresh then pcall(Library._hudRefresh) end
+		pcall(Library._refreshModified, Library)
+		if Library._undoRefresh then pcall(Library._undoRefresh) end
+		pcall(function() Library:Notify({ Title = "Annulé", Content = tostring(st.Label), Type = "Info", Duration = 2 }) end)
+		return true
+	end
+
+	function Library:ClearUndo()
+		table.clear(Library.UndoStack)
+		if Library._undoRefresh then pcall(Library._undoRefresh) end
+	end
+
+	-- contenu de la section « Récemment utilisés » : copies des derniers éléments modifiés (le plus récent en haut)
+	function Library:_buildRecent(blk)
+		local alive = {}
+		for _, en in ipairs(Library.RecentList) do
+			if en.Frame and en.Frame.Parent and en.Opts and en.Item then alive[#alive + 1] = en end
+		end
+		if #alive == 0 then
+			blk:CreateParagraph({ Title = "Rien pour l'instant",
+				Content = "Les derniers éléments que tu modifies (toggles, sliders, listes...) apparaissent ici, le plus récent en haut." })
+			return
+		end
+		local last
+		for _, en in ipairs(alive) do
+			local group = tostring(en.TabName) .. " · " .. tostring(en.BlockName)
+			if group ~= last then blk:CreateSection(group) last = group end
+			local o = {}
+			for k, v in pairs(en.Opts) do o[k] = v end
+			o.Flag, o.Keybind = nil, nil   -- la touche reste sur l'élément d'origine
+			o.Favorite, o.Palette, o.Modified, o.Reset, o.Undo = false, false, false, false, false
+			local item = en.Item
+			local ok, cur = pcall(function() return item.Get() end)
+			if ok and cur ~= nil then o.Default = cur end
+			o.Callback = function(...)
+				local a, b = ...
+				pcall(item.Set, item, (b ~= nil) and { a, b } or a)
+			end
+			pcall(function() blk["Create" .. en.Kind](blk, o) end)
+		end
+	end
 end
 
 -- ============================================================================
@@ -7917,6 +8090,9 @@ function Window:CreateFavoritesTab(name, icon)
 
 	local function rebuild()
 		tab:ClearBlocks()
+		local rb = tab:CreateBlock({ Name = "Récemment utilisés", Side = "Right" })
+		rb._noFav = true
+		Library:_buildRecent(rb)
 		local keys = {}
 		for k in pairs(Library.Favorites) do
 			if Library.FavEntries[k] then keys[#keys + 1] = k end
@@ -7936,6 +8112,22 @@ function Window:CreateFavoritesTab(name, icon)
 			if group ~= last then blk:CreateSection(group) last = group end
 			proxy(blk, ent)
 		end
+	end
+	tab.OnSelect = rebuild
+	rebuild()
+	return tab
+end
+
+-- Onglet « Récents » seul (si tu n'utilises pas Window:CreateFavoritesTab) : Window:CreateRecentTab("Récents")
+function Window:CreateRecentTab(name, icon)
+	local win = self
+	local tab = self:CreateTab(name or "Récents", nil, icon)
+	win.RecentTab = tab
+	local function rebuild()
+		tab:ClearBlocks()
+		local blk = tab:CreateBlock({ Name = "Récemment utilisés", Side = "Left" })
+		blk._noFav = true
+		Library:_buildRecent(blk)
 	end
 	tab.OnSelect = rebuild
 	rebuild()
@@ -9773,6 +9965,8 @@ end
 		table.clear(seqSpin)
 	end
 
+	function Library:IsPaletteOpen() return P.open == true end
+
 	function Library:OpenPalette()
 		if P.open or not Library.PaletteEnabled then return end
 		buildGui()
@@ -11058,6 +11252,39 @@ function Library:CreateWindow(cfg)
 	local fpsLabel = label(titleBar, "", 11, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -80, 0.5, 0),
 		Size = UDim2.new(0, 104, 0, 16), TextXAlignment = RIGHT, Font = F_REG, TextColor3 = T.ElementAccent,
 		Visible = statsOn })
+	-- bouton « Annuler » : à gauche de l'indicateur FPS / ping, visible seulement quand celui-ci l'est
+	local undoBtn = new("TextButton", { Name = "UndoButton", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -192, 0.5, 0),
+		Size = UDim2.new(0, 58, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.93,
+		Text = "Annuler", TextColor3 = T.Text, TextSize = 11, Font = F_MED, AutoButtonColor = false,
+		TextTransparency = 0.55, Visible = statsOn }, titleBar)
+	corner(undoBtn, 7)
+	local undoTok = 0
+	Library._undoRefresh = function()
+		local has = #Library.UndoStack > 0
+		tween(undoBtn, { TextTransparency = has and 0 or 0.55 }, 0.18)
+	end
+	undoBtn.MouseEnter:Connect(function()
+		if #Library.UndoStack > 0 then tween(undoBtn, { BackgroundTransparency = 0.8 }, 0.2) end
+		undoTok += 1
+		local my = undoTok
+		task.delay(0.4, function()
+			if undoTok ~= my or not tipLabel then return end
+			local n = #Library.UndoStack
+			tipLabel.Text = n > 0 and ("Annuler : " .. tostring(Library.UndoStack[n].Label) .. "  (Ctrl+Z)") or "Rien à annuler"
+			tipShown = true
+			tipLabel.Visible = true
+		end)
+	end)
+	undoBtn.MouseLeave:Connect(function()
+		tween(undoBtn, { BackgroundTransparency = 0.93 }, 0.25)
+		undoTok += 1
+		tipShown = false
+		if tipLabel then tipLabel.Visible = false end
+	end)
+	undoBtn.MouseButton1Click:Connect(function()
+		uiSnd("click")
+		Library:Undo()
+	end)
 	fadeLine(main, { Position = UDim2.new(0, 14, 0, 42), Size = UDim2.new(1, -28, 0, 1) })
 
 	-- Tooltip global
@@ -11370,6 +11597,7 @@ function Library:CreateWindow(cfg)
 		statsOn = v and true or false
 		win.StatsVisible = statsOn
 		fpsLabel.Visible = statsOn
+		undoBtn.Visible = statsOn
 	end
 	function win:SetMinimized(v) setMinimized(v) end
 	function win:IsMinimized() return collapsed end
@@ -11895,6 +12123,9 @@ function Library:Destroy()
 	if Library._ddDestroy then pcall(Library._ddDestroy) end
 	table.clear(Library.ModEntries)
 	table.clear(Library.ModByFrame)
+	table.clear(Library.UndoStack)
+	table.clear(Library.RecentList)
+	Library._undoToken = (Library._undoToken or 0) + 1
 	Library.ModFilter, Library.ModCount, Library._modWatching, Library._modFilterItem = false, 0, false, nil
 	Library._modToken = (Library._modToken or 0) + 1
 	table.clear(Library.NotifSilenced)
