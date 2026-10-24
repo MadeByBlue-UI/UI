@@ -5232,6 +5232,7 @@ function Block:CreateDropdown(o)
 		PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }, list)
 
 	local btns = {}
+	local pressedPick = false  -- 🛠️ FIX : la souris choisit dès l'APPUI ; le « Click » (relâchement) ne doit alors pas rechoisir
 	local firstLayout = true   -- vrai tant que la liste vient d'être (re)construite : pas d'animation
 	local restyle, layout, setOpen, setItems
 
@@ -5426,7 +5427,21 @@ function Block:CreateDropdown(o)
 			b.MouseLeave:Connect(function()
 				if not isOn(text) then tween(b, { BackgroundTransparency = 1 }, 0.2) end
 			end)
-			b.MouseButton1Click:Connect(function() uiSnd("pick") pick(text) end)
+			-- 🛠️ FIX dropdown : avant, le choix n'était pris qu'au relâchement (MouseButton1Click). Si la liste bougeait / se
+			-- refermait entre l'appui et le relâchement (animation, clic jugé « hors liste »), le choix était perdu et il fallait
+			-- recliquer. Maintenant : souris = choix immédiat à l'appui ; tactile / manette = Click comme avant.
+			b.InputBegan:Connect(function(i)
+				if i.UserInputType == Enum.UserInputType.MouseButton1 then
+					pressedPick = true
+					uiSnd("pick")
+					pick(text)
+				end
+			end)
+			b.MouseButton1Click:Connect(function()
+				if pressedPick then pressedPick = false return end
+				uiSnd("pick")
+				pick(text)
+			end)
 			b.MouseButton2Click:Connect(function()
 				if ddEntry and Library.DropdownKeys then Library._ddOpen(ddEntry, text) end
 			end)
@@ -5661,7 +5676,22 @@ function Block:CreateDropdown(o)
 				if ok and type(res) == "table" then setItems(res, false) end
 			end
 			search.Text = ""
+			pressedPick = false
 			layout()
+			-- 🛠️ FIX : si la liste dépasse en bas de la zone visible, on fait défiler pour qu'elle soit entièrement cliquable
+			task.delay(0.38, function()
+				if not isOpen or not holder.Parent then return end
+				local scroller = holder.Parent
+				while scroller and not scroller:IsA("ScrollingFrame") do scroller = scroller.Parent end
+				if not scroller then return end
+				local sc = (head.AbsoluteSize.Y > 0) and (head.AbsoluteSize.Y / 34) or 1
+				local need = holder.AbsolutePosition.Y + (34 + 4 + dr.Height) * sc + 10
+				local have = scroller.AbsolutePosition.Y + scroller.AbsoluteSize.Y
+				if need > have then
+					local target = scroller.CanvasPosition.Y + (need - have) / sc
+					pcall(function() tween(scroller, { CanvasPosition = Vector2.new(scroller.CanvasPosition.X, target) }, 0.25) end)
+				end
+			end)
 			-- clic en dehors du dropdown (en-tête + liste) = fermeture
 			stopOutside()
 			local openedAt = os.clock()
@@ -5674,8 +5704,12 @@ function Block:CreateDropdown(o)
 				if os.clock() - openedAt < 0.1 then return end
 				local m = (ut == Enum.UserInputType.Touch) and Vector2.new(i.Position.X, i.Position.Y + guiInset().Y)
 					or UIS:GetMouseLocation()
+				-- 🛠️ FIX : on compare à la taille FINALE du dropdown (en-tête + liste ouverte), pas à celle de l'animation en cours
+				-- (sinon un clic sur les dernières lignes pendant l'ouverture / un redimensionnement fermait la liste sans choisir)
 				local ap, as = holder.AbsolutePosition, holder.AbsoluteSize
-				if m.X >= ap.X and m.Y >= ap.Y and m.X <= ap.X + as.X and m.Y <= ap.Y + as.Y then return end
+				local sc = (head.AbsoluteSize.Y > 0) and (head.AbsoluteSize.Y / 34) or 1
+				local fullH = math.max(as.Y, (34 + 4 + dr.Height) * sc)
+				if m.X >= ap.X - 4 and m.Y >= ap.Y - 4 and m.X <= ap.X + as.X + 4 and m.Y <= ap.Y + fullH + 4 then return end
 				if Library._ddPopHit and Library._ddPopHit(m) then return end
 				setOpen(false)
 			end)
