@@ -198,6 +198,18 @@
 		  Library:Notify({ ..., Exit = "Effacer vers la droite" }) (style pour une seule notification)
 		• Le swipe latéral garde son glissement. Library.NotifBlackHole = false convertit « Trou noir » en « Glisser ».
 
+	─────────────  V11 : TYPES D'INTERFACE  (Classique / Éclipse)  ─────────────
+		• Réglages > Style > « Type d'interface » : change toute la mise en page de la fenêtre d'un coup.
+		    Classique : l'interface d'origine (menu compact à gauche, barre de titre en haut).
+		    Éclipse   : menu large avec marque + slogan en haut et carte utilisateur en bas, en-tête avec le titre de la
+		                page + sous-titre + recherche, barre d'état en bas (nom / version / FPS). Se marie bien avec 3-4 colonnes.
+		• Réglages > « Type Éclipse » : largeur du menu, carte utilisateur, barre d'état, sous-titres, slogan, statut.
+		• Sauvegardé automatiquement (clés « ui.layoutstyle » et « ui.ec.* »). La fenêtre s'agrandit seule si besoin.
+		• API : Library:SetLayoutStyle("Éclipse") / Window:SetLayoutStyle(nom) / Library.LayoutStyle
+		        Library:SetEclipseOption("SidebarWidth" | "UserCard" | "FooterBar" | "Subtitle" | "Tagline" | "Status"
+		                                 | "DefaultSubtitle", valeur)  ·  Tab:SetSubtitle("texte") (sous-titre de l'en-tête)
+		        CreateWindow({ LayoutStyle = "Éclipse", Eclipse = { Tagline = "Mon slogan", SidebarWidth = 190 } })
+
 	─────────────  V10 : JAUGES, COMPTEURS, STYLES D'ENTRÉE, TRANSITIONS D'ONGLETS, HUD  ─────────────
 		• Block:CreateProgress({ Name, Min = 0, Max = 100, Default, Suffix | Format = function(v, ratio, max), Color, Text })
 		  Barre de progression / jauge mise à jour par le script (cooldowns, chargement) :
@@ -296,6 +308,21 @@ local Library = {
 	TitleFont         = "Michroma",
 	TitleFonts        = { "Michroma", "Gotham Black", "Fredoka", "Oswald", "Bangers", "Jura", "Sci-Fi", "Arcade", "Normale" },
 	TitleShine        = true,
+	LayoutStyle       = "Classique",                 -- type d'interface : "Classique" | "Éclipse"
+	LayoutStyleOrder  = { "Classique", "Éclipse" },
+	LayoutStyleInfo   = {
+		["Classique"] = "L'interface d'origine : menu compact à gauche, barre de titre en haut.",
+		["Éclipse"]   = "Moderne : menu large avec marque et carte utilisateur, titre de page + recherche en haut, barre d'état en bas. Idéal avec 3 ou 4 colonnes.",
+	},
+	Eclipse           = {                            -- réglages propres au type « Éclipse »
+		SidebarWidth    = 176,
+		UserCard        = true,
+		FooterBar       = true,
+		Subtitle        = true,
+		Tagline         = "Une interface, vos règles.",
+		Status          = "En ligne",
+		DefaultSubtitle = "Accédez rapidement à vos paramètres et personnalisez votre expérience.",
+	},
 	LayoutEdit        = false, -- mode édition : les en-têtes de blocs se déplacent à la souris
 	BlockLayout       = {},    -- [onglet][nbColonnes][bloc] = { c = colonne, o = ordre }  (sauvegardé : « ui.blocklayout »)
 }
@@ -3668,6 +3695,29 @@ function Library:SetColumns(n)
 	else Library.Columns = math.clamp(math.floor(tonumber(n) or 1), 1, 4) end
 end
 
+-- Types d'interface : Library:SetLayoutStyle("Classique" | "Éclipse")
+function Library:SetLayoutStyle(name)
+	if not Library.LayoutStyleInfo[name] then return false end
+	local w = Library.Window
+	if w and w.SetLayoutStyle then return w:SetLayoutStyle(name) end
+	Library.LayoutStyle = name
+	return true
+end
+function Library:GetLayoutStyle() return Library.LayoutStyle end
+
+-- Réglages du type Éclipse (voir Library.Eclipse)
+function Library:SetEclipseOption(k, v)
+	local o = Library.Eclipse
+	if type(k) ~= "string" or o[k] == nil then return false end
+	if k == "SidebarWidth" then v = math.clamp(math.floor(tonumber(v) or 176), 150, 240)
+	elseif k == "Tagline" or k == "Status" or k == "DefaultSubtitle" then v = tostring(v or "")
+	else v = v and true or false end
+	o[k] = v
+	local w = Library.Window
+	if w and w.RefreshLayoutStyle then w:RefreshLayoutStyle() end
+	return true
+end
+
 -- Thèmes : GetTheme / ApplyTheme / presets / fichiers / import-export
 -- ---------------------------------------------------------------------------
 local function hexOf(c) return "#" .. string.upper(c:ToHex()) end
@@ -3887,10 +3937,13 @@ function Library:_applyFlags(data)
 		local sty = data["ui.style"]
 		local sit = Library.Items["ui.style"]
 		if sty ~= nil and sit and sit.Set then pcall(sit.Set, sit, sty) end
+		local lay = data["ui.layoutstyle"]
+		local lit = Library.Items["ui.layoutstyle"]
+		if lay ~= nil and lit and lit.Set then pcall(lit.Set, lit, lay) end
 	end
 	for flag, value in pairs(data) do
 		if flag == "ui.shape" and value == "Vague" then value = "Arrondie" end
-		if flag == "ui.style" then
+		if flag == "ui.style" or flag == "ui.layoutstyle" then
 			-- déjà appliqué plus haut
 		elseif string.sub(flag, 1, 3) == "ui." then
 			local it = Library.Items[flag]
@@ -7774,9 +7827,15 @@ end
 -- ============================================================================
 -- V5 : ONGLET « Change-Log » (À propos + historique des versions)
 -- ============================================================================
-Library.Version = "5.0.0"
+Library.Version = "5.1.0"
 Library.AppName = "Ui-Lib"
 Library.Changelog = {
+	{ Version = "5.1.0", Date = "2026-10-25", Title = "Types d'interface", Notes = {
+		"Nouveau : Réglages > Style > « Type d'interface » (Classique / Éclipse), sauvegardé automatiquement.",
+		"Éclipse : menu large avec marque et carte utilisateur, en-tête avec titre de page + recherche, barre d'état en bas.",
+		"Nouveau bloc « Type Éclipse » : largeur du menu, carte utilisateur, barre d'état, sous-titres, slogan, statut.",
+		"API : Library:SetLayoutStyle, Library:SetEclipseOption, Tab:SetSubtitle, CreateWindow({ LayoutStyle, Eclipse }).",
+	} },
 	{ Version = "5.0.0", Date = "2026-10-25", Title = "Grosse mise à jour", Notes = {
 		"Correctif : la fenêtre ne se réduit plus à sa taille par défaut après fermeture / réouverture.",
 		"Keybinds : modes Hold / Toggle / Always, avec un sélecteur sur chaque ligne.",
@@ -7995,6 +8054,13 @@ function Window:CreateThemeEditorTab(name, icon)
 		Library:SetGradient({ Enabled = false })
 	end })
 	return tab
+end
+
+-- sous-titre affiché dans l'en-tête du type d'interface « Éclipse »
+function Tab:SetSubtitle(text)
+	self.Subtitle = text ~= nil and tostring(text) or nil
+	local w = self.Win
+	if w and w.Current == self and w._ecPage then w._ecPage(self) end
 end
 
 function Tab:ClearBlocks()
@@ -8595,9 +8661,12 @@ function Window:CreateTab(name, _, icon, parentTab)
 		end
 		win.Current = tab
 		if Library._settingsReady then Library.Flags["ui.lasttab"] = tostring(tab.Name) end   -- mémorisé (sauvegarde auto)
+		if win._ecTabSelected then win._ecTabSelected(tab) end
 		if tab.OnSelect then tab.OnSelect() end
 	end
 	tab.Bar, tab.Label, tab.Dot = bar, txt, dot
+	tab.Corner = btn:FindFirstChildOfClass("UICorner")
+	if win._ecStyleTab then win._ecStyleTab(tab) end
 	btn.MouseEnter:Connect(function()
 		if win.Current ~= tab then uiSnd("tabhover") tween(btn, { BackgroundTransparency = 0.95 }, 0.2) end
 		if not txt:GetAttribute("BaseX") then txt:SetAttribute("BaseX", txt.Position.X.Offset) end
@@ -9308,6 +9377,15 @@ function Window:CreateSettingsTab(name, icon, docked)
 	local win = self
 	local tab = self:CreateTab(name or "Paramètres", nil, icon)
 	tab._isSettings = true   -- ses toggles ne sont pas listés dans le HUD des actifs
+
+	-- Rangement : les blocs sont répartis en pages (pastilles en haut) au lieu d'une seule liste interminable
+	local subs = tab:CreateSubTabs({ "Apparence", "Thèmes", "Interface", "Notifications", "Joueurs", "Raccourcis & configs" })
+	local blkCount = {}
+	local function BK(group, o)
+		blkCount[group] = (blkCount[group] or 0) + 1
+		o.Side = (blkCount[group] % 2 == 1) and "Left" or "Right"   -- alterne gauche / droite dans chaque page
+		return subs[group]:CreateBlock(o)
+	end
 	local N = Library.Names
 	local function pct(v) return math.floor(v * 100 + 0.5) end
 	local function toast(ok, okMsg, errMsg)
@@ -9318,7 +9396,17 @@ function Window:CreateSettingsTab(name, icon, docked)
 	local function optPct(n) return function(v) Library:SetOption(n, v / 100) end end
 
 	-- ───────────── Style ─────────────
-	local ST = tab:CreateBlock({ Name = "Style", Side = "Left" })
+	local ST = BK("Apparence", { Name = "Style", Side = "Left" })
+	ST:CreateSection("Type d'interface")
+	local layoutInfo
+	ST:CreateDropdown({ Name = "Type d'interface", Flag = "ui.layoutstyle", Items = Library.LayoutStyleOrder, Search = false,
+		Favorite = false, Default = Library.LayoutStyle,
+		Tooltip = "Change toute la mise en page : Classique (d'origine) ou Éclipse (menu large, en-tête, barre d'état).",
+		Callback = function(v)
+			win:SetLayoutStyle(v)
+			if layoutInfo then layoutInfo.Set({ Title = v, Content = Library.LayoutStyleInfo[v] or "" }) end
+		end })
+	layoutInfo = ST:CreateParagraph({ Title = Library.LayoutStyle, Content = Library.LayoutStyleInfo[Library.LayoutStyle] or "" })
 	ST:CreateSection("Style de l'interface")
 	local styleInfo
 	ST:CreateDropdown({ Name = "Style", Flag = "ui.style", Items = Library.StyleOrder, Search = false, Favorite = false,
@@ -9335,8 +9423,28 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Tooltip = "Floute le jeu derrière l'interface (0 = aucun). Chaque style propose sa valeur, tu peux la changer.",
 		Callback = function(v) Library:SetBlur(v) end })
 
+	-- ───────────── Type Éclipse ─────────────
+	local EC = BK("Apparence", { Name = "Type Éclipse", Side = "Right" })
+	local function ecOpt(k) return function(v) Library:SetEclipseOption(k, v) end end
+	EC:CreateParagraph({ Title = "Réglages du type Éclipse",
+		Content = "Ils s'appliquent quand « Type d'interface » est sur Éclipse (ils sont mémorisés même si tu repasses en Classique)." })
+	EC:CreateSlider({ Name = "Largeur du menu", Flag = "ui.ec.sidebar", Min = 150, Max = 240, Step = 2, Suffix = " px",
+		Default = Library.Eclipse.SidebarWidth, Callback = ecOpt("SidebarWidth") })
+	EC:CreateToggle({ Name = "Carte utilisateur", Flag = "ui.ec.user", Default = Library.Eclipse.UserCard,
+		Tooltip = "Avatar, pseudo et statut en bas du menu.", Callback = ecOpt("UserCard") })
+	EC:CreateToggle({ Name = "Barre d'état en bas", Flag = "ui.ec.bar", Default = Library.Eclipse.FooterBar,
+		Tooltip = "Nom + version à gauche, FPS / ping et « Annuler » à droite.", Callback = ecOpt("FooterBar") })
+	EC:CreateToggle({ Name = "Sous-titre des pages", Flag = "ui.ec.subtitle", Default = Library.Eclipse.Subtitle,
+		Callback = ecOpt("Subtitle") })
+	EC:CreateInput({ Name = "Slogan", Flag = "ui.ec.tagline", Default = Library.Eclipse.Tagline,
+		Placeholder = "Une phrase sous le nom", Callback = ecOpt("Tagline") })
+	EC:CreateInput({ Name = "Statut", Flag = "ui.ec.status", Default = Library.Eclipse.Status,
+		Placeholder = "En ligne", Callback = ecOpt("Status") })
+	EC:CreateInput({ Name = "Sous-titre par défaut", Flag = "ui.ec.defsub", Default = Library.Eclipse.DefaultSubtitle,
+		Callback = ecOpt("DefaultSubtitle") })
+
 	-- ───────────── Thèmes ─────────────
-	local TH = tab:CreateBlock({ Name = "Thèmes", Side = "Left" })
+	local TH = BK("Thèmes", { Name = "Thèmes", Side = "Left" })
 	TH:CreateSection("Préréglages")
 	TH:CreateDropdown({ Name = "Préréglage", Items = Library.PresetOrder, Search = false, Favorite = false,
 		Tooltip = "Applique d'un coup les couleurs d'un thème prêt à l'emploi.",
@@ -9385,7 +9493,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	end })
 
 	-- ───────────── Couleurs ─────────────
-	local CO = tab:CreateBlock({ Name = "Couleurs", Side = "Right" })
+	local CO = BK("Thèmes", { Name = "Couleurs", Side = "Right" })
 	CO:CreateColorPicker({ Name = "Accent", Flag = "ui.accent", Default = T.Accent, Favorite = false,
 		Tooltip = "Boutons, curseurs, anneaux, étoiles : appliqué en direct.",
 		Callback = function(c) Library:SetColor("Accent", c) end })
@@ -9399,7 +9507,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Callback = function(c) Library:SetColor("ElementAccent", c) end })
 
 	-- ───────────── Apparence ─────────────
-	local A = tab:CreateBlock({ Name = "Apparence", Side = "Left" })
+	local A = BK("Apparence", { Name = "Apparence", Side = "Left" })
 	A:CreateSlider({ Name = "Opacité de la fenêtre", Flag = "ui.opacity", Min = 20, Max = 100, Step = 1, Suffix = "%",
 		Default = pct(win.Opacity or 0.96), Tooltip = "Rend la fenêtre transparente pour voir le jeu derrière.",
 		Callback = function(v) win:SetOpacity(v / 100) end })
@@ -9436,7 +9544,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Callback = opt("TitleBold") })
 
 	-- ───────────── Étoiles & forme ─────────────
-	local F = tab:CreateBlock({ Name = "Étoiles & forme", Side = "Right" })
+	local F = BK("Apparence", { Name = "Étoiles & forme", Side = "Right" })
 	F:CreateSection("Étoiles de l'écran")
 	F:CreateSlider({ Name = "Nombre d'étoiles", Flag = "ui.stars", Min = 0, Max = 80, Step = 1,
 		Default = Library.StarCount,
@@ -9456,7 +9564,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Callback = opt("Breathing") })
 
 	-- ───────────── Disposition des blocs ─────────────
-	local LY = tab:CreateBlock({ Name = "Disposition des blocs", Side = "Left" })
+	local LY = BK("Interface", { Name = "Disposition des blocs", Side = "Left" })
 	LY:CreateSection("Déplacer les blocs")
 	LY:CreateToggle({ Name = "Mode édition", Default = false, Favorite = false,
 		Tooltip = "Active : glisse l'en-tête d'un bloc (dans n'importe quel onglet, Paramètres compris) pour le déplacer.",
@@ -9484,7 +9592,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Callback = function() Library:AttachAllBlocks() end })
 
 	-- ───────────── Trou noir & fond ─────────────
-	local H = tab:CreateBlock({ Name = "Trou noir & fond", Side = "Left", Collapsed = true })
+	local H = BK("Apparence", { Name = "Trou noir & fond", Side = "Left", Collapsed = true })
 	H:CreateToggle({ Name = "Trou noir", Flag = "ui.hole", Default = Library.HoleVisible, Callback = opt("HoleVisible") })
 	local holeItems, holeKeys = { "Haut droite", "Haut gauche", "Bas droite", "Bas gauche", "Centre" }, {}
 	for k, v in pairs(N.HolePos) do holeKeys[v] = k end
@@ -9505,7 +9613,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Callback = function(v) win:SetBackground(bgKeys[v] or "full") end })
 
 	-- ───────────── Animations & performances ─────────────
-	local B = tab:CreateBlock({ Name = "Animations & performances", Side = "Right", Collapsed = true })
+	local B = BK("Interface", { Name = "Animations & performances", Side = "Right", Collapsed = true })
 	B:CreateToggle({ Name = "Animations", Flag = "ui.anim", Default = Library.Animations,
 		Tooltip = "Désactive toutes les transitions (utile sur les PC faibles).",
 		Callback = function(v) Library:SetAnimations(v) end })
@@ -9545,7 +9653,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		end })
 
 	-- ───────────── Style des toggles ─────────────
-	local TG = tab:CreateBlock({ Name = "Style des toggles", Side = "Left", Collapsed = true })
+	local TG = BK("Apparence", { Name = "Style des toggles", Side = "Left", Collapsed = true })
 	TG:CreateDropdown({ Name = "Style", Flag = "ui.togglestyle", Items = Library.ToggleStyles, Search = false,
 		Default = Library.ToggleStyle,
 		Tooltip = "15 présentations différentes pour les interrupteurs (pilule, case à cocher, segmenté, crans...). S'applique tout de suite à tous les toggles.",
@@ -9559,7 +9667,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	TG:CreateToggle({ Name = "Aperçu : éteint", Default = false, Favorite = false, Palette = false, HUD = false })
 
 	-- ───────────── Notifications ─────────────
-	local C = tab:CreateBlock({ Name = "Notifications", Side = "Left", Collapsed = true })
+	local C = BK("Notifications", { Name = "Notifications", Side = "Left", Collapsed = true })
 	local posItems, posKeys = { "Haut gauche", "Haut centre", "Haut droite", "Bas gauche", "Bas centre", "Bas droite", "Personnalisée" }, {}
 	for k, v in pairs(N.NotifPos) do posKeys[v] = k end
 	C:CreateSection("Affichage")
@@ -9702,7 +9810,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	C:CreateButton({ Name = "Tout fermer", Favorite = false, Callback = function() Library:ClearNotifications() end })
 
 	-- ───────────── Notifications masquées (« Ne plus afficher ») ─────────────
-	local NS = tab:CreateBlock({ Name = "Notifications masquées", Side = "Left", Collapsed = true })
+	local NS = BK("Notifications", { Name = "Notifications masquées", Side = "Left", Collapsed = true })
 	NS._noFav = true
 	local nsBuilding, nsQueued = false, false
 	local function rebuildSilenced()
@@ -9750,7 +9858,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	rebuildSilenced()
 
 	-- ───────────── Alertes joueurs ─────────────
-	local AL = tab:CreateBlock({ Name = "Alertes joueurs", Side = "Left", Collapsed = true })
+	local AL = BK("Joueurs", { Name = "Alertes joueurs", Side = "Left", Collapsed = true })
 	AL:CreateToggle({ Name = "Alertes activées", Flag = "ui.alert.master", Default = true,
 		Tooltip = "Interrupteur général de toutes les alertes ci-dessous." })
 	AL:CreateSection("Amis")
@@ -9778,7 +9886,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	Library:_startPlayerAlerts()
 
 	-- ───────────── Amis surveillés ─────────────
-	local AF = tab:CreateBlock({ Name = "Amis surveillés", Side = "Right", Collapsed = true })
+	local AF = BK("Joueurs", { Name = "Amis surveillés", Side = "Right", Collapsed = true })
 	AF:CreateToggle({ Name = "Prévenir quand un ami surveillé est en ligne", Flag = "ui.alert.watchfriends", Default = true,
 		Tooltip = "Coche ci-dessous les amis dont tu veux recevoir une notification quand ils passent en ligne." })
 	AF:CreateToggle({ Name = "Aussi quand il se déconnecte", Flag = "ui.alert.watchoff", Default = false })
@@ -9796,14 +9904,14 @@ function Window:CreateSettingsTab(name, icon, docked)
 	end })
 	AF:CreateParagraph({ Title = "À savoir",
 		Content = "Le statut « en ligne » vient de Roblox et peut être en retard ou masqué selon la confidentialité de l'ami (pastille verte = en ligne). Un ami présent dans ton serveur est toujours détecté. Ta sélection est enregistrée avec tes réglages." })
-	local FL = tab:CreateBlock({ Name = "Mes amis", Side = "Right", Collapsed = true })
+	local FL = BK("Joueurs", { Name = "Mes amis", Side = "Right", Collapsed = true })
 	FL:CreateParagraph({ Title = "Chargement...", Content = "Ta liste d'amis apparaît dans quelques secondes." })
 	Library:_startFriendWatch(FL, function(title, content)
 		friendStatus.Set({ Title = title, Content = content })
 	end)
 
 	-- ───────────── Sons des notifications ─────────────
-	local SN =tab:CreateBlock({ Name = "Sons des notifications", Side = "Right", Collapsed = true })
+	local SN =BK("Notifications", { Name = "Sons des notifications", Side = "Right", Collapsed = true })
 	SN:CreateToggle({ Name = "Sons activés", Flag = "ui.sndon", Default = Library.NotifSound,
 		Callback = function(v) Library:SetNotifSoundEnabled(v) end })
 	SN:CreateSlider({ Name = "Volume des notifications", Flag = "ui.sndvol", Min = 0, Max = 100, Step = 5, Suffix = "%",
@@ -9846,7 +9954,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	end })
 
 	-- ───────────── Sons de l'interface ─────────────
-	local US = tab:CreateBlock({ Name = "Sons de l'interface", Side = "Left", Collapsed = true })
+	local US = BK("Notifications", { Name = "Sons de l'interface", Side = "Left", Collapsed = true })
 	US:CreateToggle({ Name = "Sons de l'interface", Flag = "ui.uisnd", Default = Library.UISound,
 		Tooltip = "Petits bruits calmes : survol des onglets, clics, interrupteurs, palette, barre de recherche...",
 		Callback = function(v)
@@ -9877,7 +9985,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	end })
 
 	-- ───────────── Palette de commandes ─────────────
-	local PL = tab:CreateBlock({ Name = "Palette de commandes", Side = "Right", Collapsed = true })
+	local PL = BK("Interface", { Name = "Palette de commandes", Side = "Right", Collapsed = true })
 	PL:CreateToggle({ Name = "Palette activée", Flag = "ui.paletteon", Default = Library.PaletteEnabled,
 		Callback = function(v) Library:SetPaletteEnabled(v) end })
 	PL:CreateToggle({ Name = "Exiger Ctrl", Flag = "ui.palettectrl", Default = Library.PaletteNeedCtrl,
@@ -9890,7 +9998,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Content = "Ctrl+K ouvre la roue au milieu de l'écran (curseur libre).\n1 à 0 ou clic : choisir.   Tab : filtre (Tout / Favoris / Boutons / Toggles / Réglages).\nMolette ou ← → : page.   / : rechercher.   Échap ou Retour : retour / fermer.\nMaj + bouton : la palette reste ouverte.   Les éléments ★ passent en premier." })
 
 	-- ───────────── Barre de recherche (Ctrl+T) ─────────────
-	local SP = tab:CreateBlock({ Name = "Barre de recherche", Side = "Left", Collapsed = true })
+	local SP = BK("Interface", { Name = "Barre de recherche", Side = "Left", Collapsed = true })
 	SP:CreateToggle({ Name = "Barre de recherche activée", Flag = "ui.spotlighton", Default = Library.SpotlightEnabled,
 		Callback = function(v) Library:SetSpotlightEnabled(v) end })
 	SP:CreateToggle({ Name = "Exiger Ctrl (recherche)", Flag = "ui.spotlightctrl", Default = Library.SpotlightNeedCtrl,
@@ -9910,7 +10018,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Content = "Ctrl+T ouvre la barre au milieu de l'écran, sans la fenêtre : juste le trou noir et les étoiles.\nTape pour trouver n'importe quel bouton, interrupteur, curseur, liste, champ, couleur ou touche, et règle-le directement.\nEntrée : lance / bascule le premier résultat.   Échap : efface puis ferme.   Clic dehors : ferme." })
 
 	-- ───────────── HUD des actifs ─────────────
-	local HU = tab:CreateBlock({ Name = "HUD des actifs", Side = "Left", Collapsed = true })
+	local HU = BK("Interface", { Name = "HUD des actifs", Side = "Left", Collapsed = true })
 	HU:CreateToggle({ Name = "Afficher le HUD", Flag = "ui.hud", Default = Library.HudEnabled,
 		Tooltip = "Petit panneau déplaçable (glisse-le à la souris ou au doigt) qui liste les toggles activés.",
 		Callback = function(v) Library:SetHud(v) end })
@@ -9924,7 +10032,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	HU:CreateButton({ Name = "Replacer le HUD", Favorite = false, Callback = function() Library:ResetHudPosition() end })
 
 	-- ───────────── Fenêtre ─────────────
-	local D = tab:CreateBlock({ Name = "Fenêtre", Side = "Right", Collapsed = true })
+	local D = BK("Interface", { Name = "Fenêtre", Side = "Right", Collapsed = true })
 	D:CreateToggle({ Name = "Sauvegarde auto des paramètres", Flag = "ui.autosave", Default = Library.AutoSaveSettings ~= false,
 		Tooltip = "Enregistre tout seul les réglages (position des notifications, thème, colonnes...) et les restaure au prochain lancement.",
 		Callback = function(v)
@@ -9974,7 +10082,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Content = "Double-clic sur la barre de titre : réduire / restaurer.\nCtrl+R : recentrer la fenêtre.\nBouton = dans la barre de titre : tout replier / déplier.\nLa position et la taille de la fenêtre sont retenues automatiquement (Paramètres > Fenêtre > Verrouiller la position pour les figer).\nCtrl+K : palette de commandes (roue au centre de l'écran, choix de 1 à 0)." })
 
 	-- ───────────── Raccourcis clavier : tous les keybinds, avec saut vers leur emplacement ─────────────
-	local KB = tab:CreateBlock({ Name = "Raccourcis clavier", Side = "Right", Collapsed = true })
+	local KB = BK("Raccourcis & configs", { Name = "Raccourcis clavier", Side = "Right", Collapsed = true })
 	KB._noFav = true
 	local kbRows = {}
 	local function keyText(it)
@@ -10095,13 +10203,14 @@ function Window:CreateSettingsTab(name, icon, docked)
 	rebuildKeybinds()
 
 	-- ───────────── Configurations ─────────────
-	local CF = tab:CreateBlock({ Name = "Configurations", Side = "Left", Collapsed = true })
+	local CF = BK("Raccourcis & configs", { Name = "Configurations", Side = "Left", Collapsed = true })
 	buildConfigUI(CF)
 
 	-- Docké en bas de la barre latérale, avec une petite icône
 	if docked and self.Footer then
 		tab.Button.Parent = self.Footer
 		tab.Button.LayoutOrder = 1
+		if win._ecStyleTab then win._ecStyleTab(tab) end
 		tab.Label.Position = UDim2.new(0, 34, 0, 0)
 		tab.Label.Size = UDim2.new(1, -48, 1, 0)
 		local ico = new("Frame", { Position = UDim2.new(0, 12, 0.5, -7), Size = UDim2.fromOffset(14, 14),
@@ -11887,6 +11996,12 @@ function Library:CreateWindow(cfg)
 	snapshotColors()
 	if cfg.Shape then Library.Shape = (cfg.Shape == "Vague") and "Arrondie" or cfg.Shape end
 	if cfg.Style and STYLES[cfg.Style] then Library:SetStyle(cfg.Style) end
+	if cfg.LayoutStyle and Library.LayoutStyleInfo[cfg.LayoutStyle] then Library.LayoutStyle = cfg.LayoutStyle end
+	if type(cfg.Eclipse) == "table" then
+		for k, v in pairs(cfg.Eclipse) do
+			if Library.Eclipse[k] ~= nil then Library.Eclipse[k] = v end
+		end
+	end
 	if cfg.Blur ~= nil then Library.BlurSize = math.clamp(tonumber(cfg.Blur) or 0, 0, 56) end
 	local transp = tonumber(cfg.Transparency) or 0.04
 	Library.ConfigFolder = cfg.ConfigFolder or Library.ConfigFolder or "Ui-Lib"
@@ -11981,6 +12096,7 @@ function Library:CreateWindow(cfg)
 	local rsSmooth = false            -- true = animation lissée (réduction, reset), false = suit directement le curseur
 	local collapsed, preSize = false, nil
 	local setMinimized
+	local ec = { collapsedH = 44 }   -- tout ce qui concerne le type d'interface « Éclipse » (une seule variable locale)
 	local statsOn = cfg.ShowStats ~= false
 
 	local function clampCenter(c)
@@ -12145,13 +12261,14 @@ function Library:CreateWindow(cfg)
 	local dragZone = new("Frame", { Size = UDim2.new(1, -56, 1, 0), BackgroundTransparency = 1 }, titleBar)
 	local tx = 16
 	if cfg.CustomIcon and cfg.CustomIcon ~= "" then
-		new("ImageLabel", { BackgroundTransparency = 1, Image = cfg.CustomIcon, Size = UDim2.new(0, 20, 0, 20),
+		ec.logo = new("ImageLabel", { BackgroundTransparency = 1, Image = cfg.CustomIcon, Size = UDim2.new(0, 20, 0, 20),
 			Position = UDim2.new(0, 14, 0.5, -10) }, titleBar)
 		tx = 42
 	else
 		-- petit trou noir en guise de logo
 		local logo = new("Frame", { Position = UDim2.new(0, 14, 0.5, -9), Size = UDim2.new(0, 18, 0, 18),
 			BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0 }, titleBar)
+		ec.logo = logo
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, logo)
 		local lst = new("UIStroke", { Color = T.Accent, Thickness = 2, Transparency = 0.05, ApplyStrokeMode = BORDER }, logo)
 		spin(new("UIGradient", { Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(70, 70, 75)),
@@ -12221,7 +12338,7 @@ function Library:CreateWindow(cfg)
 		uiSnd("click")
 		Library:Undo()
 	end)
-	fadeLine(main, { Position = UDim2.new(0, 14, 0, 42), Size = UDim2.new(1, -28, 0, 1) })
+	ec.titleLine = fadeLine(main, { Position = UDim2.new(0, 14, 0, 42), Size = UDim2.new(1, -28, 0, 1) })
 
 	-- Tooltip global
 	tipLabel = new("TextLabel", { Name = "Tooltip", AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.fromOffset(0, 0),
@@ -12262,6 +12379,12 @@ function Library:CreateWindow(cfg)
 		Library:SetModFilter(not Library.ModFilter)
 	end)
 
+	-- Type « Éclipse » : panneau arrondi derrière le menu (créé avant la sidebar = dessiné derrière)
+	ec.side = new("Frame", { Name = "EclipseSide", Position = UDim2.fromOffset(8, 8), Size = UDim2.new(0, 176, 1, -16),
+		BackgroundColor3 = T.Second, BackgroundTransparency = 0.35, BorderSizePixel = 0, Visible = false }, main)
+	corner(ec.side, 16)
+	trackStyled(ec.side, stroke(ec.side, 0.9), "block")
+
 	local sidebar = new("ScrollingFrame", {
 		Position = UDim2.new(0, 10, 0, 88), Size = UDim2.new(0, 116, 1, -140), BackgroundTransparency = 1,
 		BorderSizePixel = 0, ScrollBarThickness = 0, CanvasSize = UDim2.new(),
@@ -12293,9 +12416,97 @@ function Library:CreateWindow(cfg)
 	win.ModChip = modChip
 	Library:_paintModChip()
 
+	-- ------------------------------------------------------------------
+	-- Éléments du type d'interface « Éclipse » (créés une fois, masqués tant que « Classique » est actif)
+	-- ------------------------------------------------------------------
+	do
+		-- marque : logo + nom + slogan, en haut du menu (sert aussi à déplacer la fenêtre)
+		ec.brand = new("Frame", { Name = "EclipseBrand", Position = UDim2.fromOffset(8, 8), Size = UDim2.fromOffset(176, 62),
+			BackgroundTransparency = 1, Visible = false }, main)
+		if cfg.CustomIcon and cfg.CustomIcon ~= "" then
+			new("ImageLabel", { BackgroundTransparency = 1, Image = cfg.CustomIcon, Size = UDim2.fromOffset(34, 34),
+				Position = UDim2.fromOffset(14, 14) }, ec.brand)
+		else
+			local lg = new("Frame", { Position = UDim2.fromOffset(14, 14), Size = UDim2.fromOffset(34, 34),
+				BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0 }, ec.brand)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, lg)
+			local lgs = new("UIStroke", { Color = T.Accent, Thickness = 2, Transparency = 0.05, ApplyStrokeMode = BORDER }, lg)
+			spin(new("UIGradient", { Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(70, 70, 75)),
+				Transparency = ringSeq() }, lgs), 160)
+			-- croissant de lune : un disque clair, un disque sombre décalé par-dessus
+			local moon = new("Frame", { Position = UDim2.fromOffset(8, 9), Size = UDim2.fromOffset(17, 17),
+				BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, lg)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, moon)
+			local cut = new("Frame", { Position = UDim2.fromOffset(13, 6), Size = UDim2.fromOffset(15, 15),
+				BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0, ZIndex = 2 }, lg)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, cut)
+		end
+		ec.brandName = label(ec.brand, titleRaw, 15, { Position = UDim2.new(0, 56, 0, 13), Size = UDim2.new(1, -62, 0, 20),
+			Font = F_BOLD })
+		ec.brandTag = label(ec.brand, "", 10, { Position = UDim2.new(0, 56, 0, 33), Size = UDim2.new(1, -62, 0, 14),
+			Font = F_REG, TextColor3 = T.ElementAccent })
+		ec.brand.InputBegan:Connect(function(i)
+			if ec.beginDrag then ec.beginDrag(i) end
+		end)
+
+		-- carte utilisateur : avatar, pseudo, statut, engrenage -> ouvre les Réglages
+		ec.user = new("Frame", { Name = "EclipseUser", Position = UDim2.new(0, 14, 1, -64), Size = UDim2.new(0, 164, 0, 50),
+			BackgroundColor3 = T.Element, BackgroundTransparency = 0.45, BorderSizePixel = 0, Visible = false }, main)
+		corner(ec.user, 12)
+		trackStyled(ec.user, stroke(ec.user, 0.9), "panel")
+		local uid = (LP and LP.UserId) or 0
+		local av = new("ImageLabel", { Position = UDim2.fromOffset(8, 8), Size = UDim2.fromOffset(34, 34),
+			BackgroundColor3 = T.Off, BackgroundTransparency = 0.3, BorderSizePixel = 0,
+			Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(uid) .. "&w=150&h=150" }, ec.user)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, av)
+		new("UIStroke", { Color = T.Accent, Thickness = 1.5, Transparency = 0.55, ApplyStrokeMode = BORDER }, av)
+		local uname = (LP and ((LP.DisplayName ~= "" and LP.DisplayName) or LP.Name)) or "Utilisateur"
+		label(ec.user, uname, 12, { Position = UDim2.new(0, 50, 0, 9), Size = UDim2.new(1, -90, 0, 16), Font = F_BOLD })
+		local sdot = new("Frame", { Position = UDim2.fromOffset(50, 31), Size = UDim2.fromOffset(6, 6),
+			BackgroundColor3 = T.ElementAccent, BorderSizePixel = 0 }, ec.user)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, sdot)
+		ec.userStatus = label(ec.user, "", 10, { Position = UDim2.new(0, 62, 0, 26), Size = UDim2.new(1, -100, 0, 16),
+			Font = F_REG, TextColor3 = T.ElementAccent })
+		local gear = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
+			Size = UDim2.fromOffset(26, 26), BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, ec.user)
+		local gico = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(14, 14), BackgroundTransparency = 1, BorderSizePixel = 0 }, gear)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, gico)
+		local gst = new("UIStroke", { Color = T.ElementAccent, Thickness = 2, Transparency = 0.1, ApplyStrokeMode = BORDER }, gico)
+		local gdot = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(4, 4), BackgroundColor3 = T.ElementAccent, BorderSizePixel = 0 }, gico)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, gdot)
+		gear.MouseEnter:Connect(function() tween(gst, { Transparency = 0 }, 0.15) tween(gico, { Rotation = 90 }, 0.4) end)
+		gear.MouseLeave:Connect(function() tween(gst, { Transparency = 0.1 }, 0.2) tween(gico, { Rotation = 0 }, 0.4) end)
+		gear.MouseButton1Click:Connect(function()
+			uiSnd("tab")
+			for _, t in ipairs(win.Tabs) do
+				if t._isSettings then t:Select() break end
+			end
+		end)
+
+		-- barre d'état : nom + version + slogan à gauche ; FPS / ping et « Annuler » viennent s'y placer à droite
+		ec.bar = new("Frame", { Name = "EclipseBar", Position = UDim2.new(0, 194, 1, -44), Size = UDim2.new(1, -204, 0, 34),
+			BackgroundColor3 = T.Second, BackgroundTransparency = 0.35, BorderSizePixel = 0, Visible = false }, main)
+		corner(ec.bar, 12)
+		trackStyled(ec.bar, stroke(ec.bar, 0.9), "block")
+		ec.barName = label(ec.bar, "", 12, { Position = UDim2.new(0, 14, 0, 3), Size = UDim2.new(1, -210, 0, 16), Font = F_BOLD })
+		ec.barTag = label(ec.bar, "", 10, { Position = UDim2.new(0, 14, 0, 18), Size = UDim2.new(1, -210, 0, 13),
+			Font = F_REG, TextColor3 = T.ElementAccent })
+
+		-- en-tête : titre de la page + sous-titre (remplacent le titre de la fenêtre)
+		ec.pageTitle = label(titleBar, "", 20, { Position = UDim2.new(0, 4, 0, 7), Size = UDim2.new(1, -300, 0, 26),
+			Font = F_BOLD, Visible = false })
+		ec.pageSub = label(titleBar, "", 11, { Position = UDim2.new(0, 4, 0, 33), Size = UDim2.new(1, -300, 0, 16),
+			Font = F_REG, TextColor3 = T.ElementAccent, Visible = false })
+
+		-- petite marge dans le menu : le contour des onglets ne doit pas être rogné
+		ec.sidePad = new("UIPadding", {}, sidebar)
+	end
+
 	-- Déplacement de la fenêtre (lissé) + double-clic = réduire / restaurer
 	local lastClick = 0
-	dragZone.InputBegan:Connect(function(i)
+	ec.beginDrag = function(i)
 		if not isPress(i) then return end
 		local now = os.clock()
 		if now - lastClick < 0.32 then
@@ -12311,7 +12522,8 @@ function Library:CreateWindow(cfg)
 		startDrag(function(p)
 			tgtPos = clampCenter(origin + (Vector2.new(p.X, p.Y) - start))
 		end, nil, i.Position, saveWinLater)
-	end)
+	end
+	dragZone.InputBegan:Connect(ec.beginDrag)
 
 	-- ------------------------------------------------------------------
 	-- Bordure « horizon des événements » + poignées de redimensionnement (bords et coins)
@@ -12404,12 +12616,16 @@ function Library:CreateWindow(cfg)
 		curSize, lastSize, rsDir, rsSmooth = sz, sz, Vector2.new(0, 1), true
 		if v then
 			preSize = fullSz
-			tgtSize = Vector2.new(fullSz.X, 44)
+			tgtSize = Vector2.new(fullSz.X, ec.collapsedH)
 			task.delay(0.35, function()
-				if collapsed then for _, p in ipairs(parts) do p.Visible = false end end
+				if collapsed then
+					for _, p in ipairs(parts) do p.Visible = false end
+					if ec.vis then ec.vis() end
+				end
 			end)
 		else
 			for _, p in ipairs(parts) do p.Visible = true end
+			if ec.vis then ec.vis() end
 			local back = fullSize
 			tgtSize = Vector2.new(math.max(back.X, minW), math.max(back.Y, minH))
 		end
@@ -12425,6 +12641,7 @@ function Library:CreateWindow(cfg)
 		if collapsed then
 			collapsed = false
 			for _, p in ipairs(parts) do p.Visible = true end
+			if ec.vis then ec.vis() end
 			for _, h in ipairs(handles) do h.Visible = true end
 		end
 		local v = viewport()
@@ -12507,6 +12724,188 @@ function Library:CreateWindow(cfg)
 		return eff
 	end
 	function win:GetColumns() return win.Columns, win.EffCols end
+
+	-- ------------------------------------------------------------------
+	-- Types d'interface : « Classique » (d'origine) ou « Éclipse ». Tout est repositionné ici, rien n'est recréé.
+	-- ------------------------------------------------------------------
+	-- visibilité des éléments propres à chaque type (la barre réduite garde la marque Éclipse + l'en-tête)
+	ec.vis = function()
+		local on = Library.LayoutStyle == "Éclipse"
+		local o = Library.Eclipse
+		local open = not collapsed
+		vline.Visible = open and not on
+		ec.side.Visible = open and on
+		ec.brand.Visible = on
+		ec.user.Visible = open and on and o.UserCard ~= false
+		ec.bar.Visible = open and on and o.FooterBar ~= false
+		modChip.Visible = open
+	end
+
+	-- textes (nom, version, slogan, statut)
+	ec.texts = function()
+		local o = Library.Eclipse
+		ec.brandName.Text = titleRaw
+		ec.brandTag.Text = tostring(o.Tagline or "")
+		ec.brandTag.Visible = tostring(o.Tagline or "") ~= ""
+		ec.barName.Text = titleRaw .. "  v" .. tostring(Library.Version or "1.0")
+		ec.barTag.Text = tostring(o.Tagline or "")
+		ec.barTag.Visible = tostring(o.Tagline or "") ~= ""
+		ec.userStatus.Text = tostring(o.Status or "")
+	end
+
+	-- en-tête : titre de la page affichée + sous-titre
+	ec.page = function(tab)
+		tab = tab or win.Current
+		local on = Library.LayoutStyle == "Éclipse"
+		local o = Library.Eclipse
+		ec.pageTitle.Visible = on
+		if not on then
+			ec.pageSub.Visible = false
+			return
+		end
+		ec.pageTitle.Text = tab and tostring(tab.Name) or titleRaw
+		local sub = tostring((tab and tab.Subtitle) or o.DefaultSubtitle or "")
+		local showSub = o.Subtitle ~= false and sub ~= ""
+		ec.pageSub.Text = sub
+		ec.pageSub.Visible = showSub
+		ec.pageTitle.Position = UDim2.new(0, 4, 0, showSub and 7 or 15)
+	end
+	win._ecPage = ec.page
+
+	-- bouton d'onglet : hauteur, arrondi, contour de sélection (barre latérale cachée en Éclipse)
+	ec.styleTab = function(tab)
+		local btn = tab.Button
+		if not btn then return end
+		local on = Library.LayoutStyle == "Éclipse"
+		local docked = btn.Parent == footer
+		btn.Size = UDim2.new(1, 0, 0, tab.ParentTab and 30 or ((on and not docked) and 38 or 34))
+		if tab.Corner then tab.Corner.CornerRadius = UDim.new(0, on and 12 or 8) end
+		local st = btn:FindFirstChild("EcSel")
+		if on and not st then
+			st = new("UIStroke", { Name = "EcSel", Color = T.Accent, Thickness = 1, ApplyStrokeMode = BORDER,
+				Transparency = (win.Current == tab) and 0.72 or 1 }, btn)
+		end
+		if st then st.Enabled = on end
+		if tab.Bar then tab.Bar.Visible = not on end
+		if win.Current == tab then btn.BackgroundTransparency = on and 0.88 or 0.92 end
+	end
+	win._ecStyleTab = ec.styleTab
+
+	win._ecTabSelected = function(tab)
+		if Library.LayoutStyle == "Éclipse" then
+			for _, t in ipairs(win.Tabs) do
+				local st = t.Button and t.Button:FindFirstChild("EcSel")
+				if st then tween(st, { Transparency = (t == tab) and 0.72 or 1 }, 0.25) end
+			end
+			tween(tab.Button, { BackgroundTransparency = 0.88 }, 0.25)
+		end
+		ec.page(tab)
+	end
+
+	-- applique le type d'interface courant (positions, tailles, visibilité)
+	ec.apply = function(flash)
+		local on = Library.LayoutStyle == "Éclipse"
+		local o = Library.Eclipse
+		win.LayoutStyle = Library.LayoutStyle
+		local sw = math.clamp(math.floor(tonumber(o.SidebarWidth) or 176), 150, 240)
+		local userOn = on and o.UserCard ~= false
+		local barOn = on and o.FooterBar ~= false
+		local oldPad = SIDE_PAD
+
+		if on then
+			local cx = sw + 18                 -- x du contenu
+			SIDE_PAD = cx + 10
+			ec.collapsedH = 58
+			ec.side.Position = UDim2.fromOffset(8, 8)
+			ec.side.Size = UDim2.new(0, sw, 1, -16)
+			ec.brand.Position = UDim2.fromOffset(8, 8)
+			ec.brand.Size = UDim2.fromOffset(sw, 62)
+			ec.user.Position = UDim2.new(0, 14, 1, -64)
+			ec.user.Size = UDim2.new(0, sw - 12, 0, 50)
+			local footTop = userOn and 102 or 48
+			footer.Position = UDim2.new(0, 14, 1, -footTop)
+			footer.Size = UDim2.new(0, sw - 12, 0, 34)
+			sidebar.Position = UDim2.new(0, 12, 0, 74)
+			sidebar.Size = UDim2.new(0, sw - 8, 1, -(74 + footTop + 6))
+			ec.sidePad.PaddingLeft, ec.sidePad.PaddingRight, ec.sidePad.PaddingTop = UDim.new(0, 2), UDim.new(0, 2), UDim.new(0, 2)
+			titleBar.Position = UDim2.new(0, cx, 0, 0)
+			titleBar.Size = UDim2.new(1, -cx, 0, 56)
+			ec.titleLine.Position = UDim2.new(0, cx, 0, 57)
+			ec.titleLine.Size = UDim2.new(1, -(cx + 10), 0, 1)
+			search.AnchorPoint = Vector2.new(1, 0)
+			search.Position = UDim2.new(1, -114, 0, 13)
+			search.Size = UDim2.fromOffset(170, 30)
+			modChip.AnchorPoint = Vector2.new(1, 0)
+			modChip.Position = UDim2.new(1, -82, 0, 13)
+			modChip.Size = UDim2.fromOffset(26, 30)
+			content.Position = UDim2.new(0, cx, 0, 66)
+			content.Size = UDim2.new(1, -SIDE_PAD, 1, -(66 + (barOn and 52 or 12)))
+			ec.bar.Position = UDim2.new(0, cx, 1, -44)
+			ec.bar.Size = UDim2.new(1, -SIDE_PAD, 0, 34)
+			fpsLabel.Parent = ec.bar
+			fpsLabel.Position = UDim2.new(1, -12, 0.5, 0)
+			undoBtn.Parent = ec.bar
+			undoBtn.Position = UDim2.new(1, -122, 0.5, 0)
+		else
+			SIDE_PAD = 156
+			ec.collapsedH = 44
+			footer.Position = UDim2.new(0, 10, 1, -48)
+			footer.Size = UDim2.new(0, 116, 0, 34)
+			sidebar.Position = UDim2.new(0, 10, 0, 88)
+			sidebar.Size = UDim2.new(0, 116, 1, -140)
+			ec.sidePad.PaddingLeft, ec.sidePad.PaddingRight, ec.sidePad.PaddingTop = UDim.new(0, 0), UDim.new(0, 0), UDim.new(0, 0)
+			titleBar.Position = UDim2.new(0, 0, 0, 0)
+			titleBar.Size = UDim2.new(1, 0, 0, 42)
+			ec.titleLine.Position = UDim2.new(0, 14, 0, 42)
+			ec.titleLine.Size = UDim2.new(1, -28, 0, 1)
+			search.AnchorPoint = Vector2.new(0, 0)
+			search.Position = UDim2.new(0, 10, 0, 52)
+			search.Size = UDim2.new(0, 84, 0, 28)
+			modChip.AnchorPoint = Vector2.new(0, 0)
+			modChip.Position = UDim2.new(0, 100, 0, 52)
+			modChip.Size = UDim2.new(0, 26, 0, 28)
+			content.Position = UDim2.new(0, 146, 0, 52)
+			content.Size = UDim2.new(1, -156, 1, -64)
+			fpsLabel.Parent = titleBar
+			fpsLabel.Position = UDim2.new(1, -80, 0.5, 0)
+			undoBtn.Parent = titleBar
+			undoBtn.Position = UDim2.new(1, -192, 0.5, 0)
+		end
+
+		sidebar:FindFirstChildOfClass("UIListLayout").Padding = UDim.new(0, on and 4 or 3)
+		title.Visible = not on
+		if ec.logo then ec.logo.Visible = not on end
+		for _, t in ipairs(win.Tabs) do ec.styleTab(t) end
+		ec.vis()
+		ec.texts()
+		ec.page()
+
+		-- la largeur minimale dépend du menu : la fenêtre s'agrandit toute seule si besoin
+		if SIDE_PAD ~= oldPad and win.Columns then win:SetColumns(win.Columns) end
+
+		-- petit voile qui s'estompe pour adoucir le changement
+		if flash and ec.ready and win.Veil and not collapsed and Library.Animations and (Library._restoring or 0) == 0 then
+			win.VeilToken = (win.VeilToken or 0) + 1
+			local my = win.VeilToken
+			win.Veil.Visible = true
+			win.Veil.BackgroundTransparency = Sty.VeilTr
+			local tw = tween(win.Veil, { BackgroundTransparency = 1 }, 0.42)
+			tw.Completed:Connect(function()
+				if win.VeilToken == my then win.Veil.Visible = false end
+			end)
+		end
+		ec.ready = true
+	end
+
+	function win:SetLayoutStyle(name)
+		if not Library.LayoutStyleInfo[name] then return false end
+		if name == Library.LayoutStyle and ec.ready then return true end
+		Library.LayoutStyle = name
+		ec.apply(true)
+		return true
+	end
+	function win:RefreshLayoutStyle() ec.apply() end
+	function win:GetLayoutStyle() return Library.LayoutStyle end
 
 	-- état initial (même comportement qu'avant par défaut : 2 colonnes si la fenêtre est assez large)
 	win.Columns = math.clamp(math.floor(tonumber(cfg.Columns or Library.Columns) or (contentW >= 520 and 2 or 1)), 1, 4)
@@ -12608,6 +13007,8 @@ function Library:CreateWindow(cfg)
 		end
 		title.Font = f or (Library.Fonts and Library.Fonts[3]) or F_BOLD
 		title.Text = (Library.TitleStretch ~= false) and Library._stretch(titleRaw) or titleRaw
+		if ec.brandName and ec.texts then ec.texts() end
+		if ec.page and win.Current then ec.page() end
 		titleStroke.Enabled = Library.TitleBold ~= false
 		if shineTw then
 			shineTw:Cancel()
@@ -13044,6 +13445,7 @@ function Library:CreateWindow(cfg)
 	persistReady = true
 
 	Library.Window = win
+	ec.apply()
 	win:RefreshShape()
 	win:RefreshHole()
 	win:ApplyTitle()
