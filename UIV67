@@ -7,6 +7,17 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V5 — NOUVEAUTÉS
+		• Correctif : la fenêtre garde sa taille après fermeture / réouverture (taille « dépliée » de référence).
+		• Keybinds : sélecteur de mode sur chaque ligne -> Toggle / Hold / Always.
+		    Toggle : CreateToggle({ Keybind = Enum.KeyCode.X, KeyMode = "Hold" })  (clic droit = changer la touche)
+		    Keybind : CreateKeybind({ Mode = "Hold", OnState = function(actif) end })  item:IsActive() / GetMode() / SetMode()
+		• Mini-fenêtres : bouton dans l'en-tête de chaque bloc (limite 1 à 5 dans Paramètres), Library:DetachBlock(bloc).
+		• Nouveaux éléments : Block:CreateTextArea / CreateRadio / CreateTable / CreateImage.
+		• Onglet « Change-Log » (À propos + versions) : Library:AddChangelog(version, { notes }), CreateWindow({ Version = "1.0" }).
+		• Onglet « Éditeur de thème » : aperçu en direct + dégradés (Library:SetGradient({...})). ChangeLog = false /
+		  ThemeEditor = false dans CreateWindow pour les masquer.
+
 	API (inchangée) :
 		Library:CreateWindow({...})            -> Window
 		Window:CreateTab(nom, _, icone)        -> Tab
@@ -3568,6 +3579,7 @@ function Library:SetColors(tbl, immediate)
 	end
 	refreshTheme()
 	scheduleColors(immediate)
+	if Library._onColors then pcall(Library._onColors) end
 end
 function Library:SetColor(k, c) Library:SetColors({ [k] = c }) end
 function Library:SetAccent(c) Library:SetColor("Accent", c) end
@@ -3702,6 +3714,7 @@ function Library:GetTheme()
 		NotifEntryCustom = Library.NotifEntryCustom,
 		NotifEntry = Library.NotifEntry,
 		TabTransition = Library.TabTransition,
+		Gradient = Library._gradientData and Library:_gradientData() or nil,
 	}
 end
 
@@ -3717,6 +3730,7 @@ end
 
 function Library:ApplyTheme(t)
 	if type(t) ~= "table" then return false end
+	if type(t.Gradient) == "table" and Library.SetGradient then pcall(Library.SetGradient, Library, t.Gradient) end
 	local N = Library.Names
 	local function pct(v) return math.floor(v * 100 + 0.5) end
 	local w = Library.Window
@@ -4424,7 +4438,7 @@ function Block:CreateToggle(o)
 	local explicitKey = o.Keybind ~= nil and o.Keybind ~= false
 	local keyOk = o.Keybind ~= false and not self._noFav and not (self.Tab and self.Tab._isSettings)
 	local hasKey = explicitKey or keyOk
-	local nameLbl = label(f, o.Name or "Toggle", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, explicitKey and -150 or -70, 1, 0) })
+	local nameLbl = label(f, o.Name or "Toggle", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, explicitKey and -190 or -70, 1, 0) })
 	-- conteneur de l'interrupteur : son dessin dépend du style choisi (Paramètres > Style des toggles)
 	local sw = new("Frame", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
@@ -4434,6 +4448,7 @@ function Block:CreateToggle(o)
 	hover(f, st, btn)
 
 	local state = o.Default and true or false
+	local keyMode = "Toggle"   -- Toggle / Hold / Always (sélecteur sur la ligne)
 	local paint
 	local function skin()
 		for _, c in ipairs(sw:GetChildren()) do c:Destroy() end
@@ -4449,6 +4464,7 @@ function Block:CreateToggle(o)
 		toggleSkins = keep
 	end
 	local function apply(v, silent)
+		if keyMode == "Always" then v = true end
 		state = v
 		if o.Flag then Library.Flags[o.Flag] = v end
 		paint(v)
@@ -4465,12 +4481,25 @@ function Block:CreateToggle(o)
 	--      (Échap = annuler, Retour / Suppr = retirer la touche ; Keybind = false = pas de touche pour ce toggle)
 	if hasKey then
 		local key = (typeof(o.Keybind) == "EnumItem") and o.Keybind or Enum.KeyCode.Unknown
+		local kb = new("Frame", { Name = "KeyBox", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -58, 0.5, 0),
+			Size = UDim2.new(0, 0, 0, 20), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1, BorderSizePixel = 0,
+			ZIndex = 3, Visible = explicitKey or key ~= Enum.KeyCode.Unknown }, f)
+		new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = BYORDER,
+			HorizontalAlignment = Enum.HorizontalAlignment.Right, VerticalAlignment = Enum.VerticalAlignment.Center }, kb)
+		keyMode = (o.KeyMode == "Hold" or o.KeyMode == "Always") and o.KeyMode or "Toggle"
+		-- sélecteur de mode (clic = Toggle > Hold > Always)
+		local modeChip = new("TextButton", { Name = "KeyMode", Size = UDim2.new(0, 0, 0, 20), AutomaticSize = Enum.AutomaticSize.X,
+			LayoutOrder = 1, BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = keyMode,
+			TextColor3 = T.ElementAccent, TextSize = 10, Font = F_MED, AutoButtonColor = false, ZIndex = 3 }, kb)
+		corner(modeChip, 6)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6) }, modeChip)
+		trackStyled(modeChip, stroke(modeChip, 0.9), "input")
 		local chip = new("TextButton", {
-			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -58, 0.5, 0), Size = UDim2.new(0, 0, 0, 20),
+			Size = UDim2.new(0, 0, 0, 20), LayoutOrder = 2,
 			AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = T.Off, BackgroundTransparency = 0.4,
 			BorderSizePixel = 0, Text = shortKey(key) or "—", TextColor3 = T.Text, TextSize = 11, Font = F_MED,
-			AutoButtonColor = false, ZIndex = 3, Visible = explicitKey or key ~= Enum.KeyCode.Unknown,
-		}, f)
+			AutoButtonColor = false, ZIndex = 3,
+		}, kb)
 		corner(chip, 6)
 		new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, chip)
 		local cst = stroke(chip, 0.9)
@@ -4479,11 +4508,29 @@ function Block:CreateToggle(o)
 		local listening, lastBind = false, 0
 		local keyItem = {}
 		local registered, bindConn = false, nil
+		local endConn
+		local MODE_ORDER = { "Toggle", "Hold", "Always" }
+		local modeItem = {}
+		local function setMode(m)
+			if not table.find(MODE_ORDER, m) then return end
+			local prev = keyMode
+			keyMode = m
+			modeChip.Text = m
+			if o.Flag then Library.Flags[o.Flag .. ".mode"] = m end
+			if m == "Always" then apply(true) elseif m == "Hold" or prev == "Always" then apply(false) end
+			fire(o.ModeCallback, m)
+		end
+		modeChip.MouseButton1Click:Connect(function()
+			uiSnd("click")
+			setMode(MODE_ORDER[((table.find(MODE_ORDER, keyMode) or 1) % 3) + 1])
+		end)
+		modeItem.Get = function() return keyMode end
+		modeItem.Set = function(...) setMode((unself(modeItem, ...))) end
 
 		local function refreshLook()
 			local has = key ~= Enum.KeyCode.Unknown
-			chip.Visible = explicitKey or has or listening
-			nameLbl.Size = UDim2.new(1, (explicitKey or has or listening) and -150 or -70, 1, 0)
+			kb.Visible = explicitKey or has or listening
+			nameLbl.Size = UDim2.new(1, (explicitKey or has or listening) and -190 or -70, 1, 0)
 		end
 
 		-- l'entrée n'apparaît dans « Raccourcis clavier » qu'une fois qu'une touche existe
@@ -4502,10 +4549,17 @@ function Block:CreateToggle(o)
 				if gp or listening or Library._listening then return end
 				if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
 				if key == Enum.KeyCode.Unknown or i.KeyCode ~= key then return end
+				if keyMode == "Always" then return end
 				if os.clock() - lastBind < 0.2 or not f.Parent then return end
 				if UIS:GetFocusedTextBox() then return end
-				apply(not state)
+				if keyMode == "Hold" then apply(true) else apply(not state) end
 				uiSnd(state and "on" or "off")
+			end))
+			endConn = track(UIS.InputEnded:Connect(function(i)
+				if keyMode == "Hold" and state and key ~= Enum.KeyCode.Unknown and i.KeyCode == key then
+					apply(false)
+					uiSnd("off")
+				end
 			end))
 		end
 
@@ -4570,6 +4624,9 @@ function Block:CreateToggle(o)
 		keyItem.Get = function() return key end
 		item.SetKey = function(...) keyItem.Set(...) end
 		item.GetKey = function() return key end
+		item.SetMode = function(...) modeItem.Set(...) end
+		item.GetMode = function() return keyMode end
+		if o.Flag then register(o.Flag .. ".mode", modeItem, keyMode) end
 		if o.Flag then register(o.Flag .. ".key", keyItem, key.Name) end
 		if key ~= Enum.KeyCode.Unknown then ensureEntry() ensureConn() end
 		refreshLook()
@@ -4578,6 +4635,7 @@ function Block:CreateToggle(o)
 
 	skin()
 	register(o.Flag, item, state)
+	if keyMode == "Always" then apply(true, true) end
 	if Library.FireDefaults then fire(o.Callback, state) end
 	return item
 end
@@ -5847,7 +5905,7 @@ function Block:CreateKeybind(o)
 	o = o or {}
 	local key = o.Default or Enum.KeyCode.Unknown
 	local f, st = makeRow(self, 34, o.Name)
-	label(f, o.Name or "Keybind", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -112, 1, 0) })
+	label(f, o.Name or "Keybind", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -190, 1, 0) })
 	local btn = new("TextButton", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.new(0, 88, 0, 24),
 		BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = (key == Enum.KeyCode.Unknown) and "Aucune" or key.Name,
@@ -5857,6 +5915,37 @@ function Block:CreateKeybind(o)
 	local bst = stroke(btn, 0.9)
 	trackStyled(btn, bst, "input")
 	hover(f, st)
+
+	-- mode : Toggle / Hold / Always (sélecteur sur la ligne)
+	local mode = (o.Mode == "Hold" or o.Mode == "Always") and o.Mode or "Toggle"
+	local active = (mode == "Always")
+	local MODE_ORDER = { "Toggle", "Hold", "Always" }
+	local modeBtn = new("TextButton", { Name = "KeyMode", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -102, 0.5, 0),
+		Size = UDim2.new(0, 0, 0, 24), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = T.Off,
+		BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = mode, TextColor3 = T.ElementAccent, TextSize = 11,
+		Font = F_MED, AutoButtonColor = false }, f)
+	corner(modeBtn, 6)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, modeBtn)
+	trackStyled(modeBtn, stroke(modeBtn, 0.9), "input")
+	local function setActive(a)
+		if a == active then return end
+		active = a
+		if Library._hudRefresh then Library._hudRefresh() end
+		fire(o.OnState, active)
+	end
+	local function setMode(m)
+		if not table.find(MODE_ORDER, m) then return end
+		local prev = mode
+		mode = m
+		modeBtn.Text = m
+		if o.Flag then Library.Flags[o.Flag .. ".mode"] = m end
+		if m == "Always" then setActive(true) elseif m == "Hold" or prev == "Always" then setActive(false) end
+		fire(o.ModeCallback, m)
+	end
+	modeBtn.MouseButton1Click:Connect(function()
+		uiSnd("click")
+		setMode(MODE_ORDER[((table.find(MODE_ORDER, mode) or 1) % 3) + 1])
+	end)
 
 	local function apply(k, silent)
 		key = k
@@ -5911,6 +6000,23 @@ function Block:CreateKeybind(o)
 		if typeof(k) == "EnumItem" then apply(k) end
 	end
 	item.Get = function() return key end
+	item.IsActive = function() return mode == "Always" or active end
+	item.GetMode = function() return mode end
+	item.SetMode = function(...) setMode((unself(item, ...))) end
+	-- la touche agit selon le mode : Hold = actif tant qu'elle est tenue, Toggle = bascule, Always = toujours actif
+	track(UIS.InputBegan:Connect(function(i, gp)
+		if gp or Library._listening or key == Enum.KeyCode.Unknown or i.KeyCode ~= key then return end
+		if i.UserInputType ~= Enum.UserInputType.Keyboard or mode == "Always" then return end
+		if UIS:GetFocusedTextBox() or not f.Parent then return end
+		if mode == "Hold" then setActive(true) else setActive(not active) end
+	end))
+	track(UIS.InputEnded:Connect(function(i)
+		if mode == "Hold" and key ~= Enum.KeyCode.Unknown and i.KeyCode == key then setActive(false) end
+	end))
+	local modeItem = {}
+	modeItem.Get = function() return mode end
+	modeItem.Set = function(...) setMode((unself(modeItem, ...))) end
+	if o.Flag then register(o.Flag .. ".mode", modeItem, mode) end
 	register(o.Flag, item, key.Name)
 	return item
 end
@@ -7234,8 +7340,666 @@ function Library:RevealElement(e)
 end
 
 -- Aides sur les onglets
+-- ============================================================================
+-- V5 : NOUVEAUX ÉLÉMENTS  (TextArea / Radio / Table / Image)
+-- ============================================================================
+
+-- Zone de texte multi-ligne
+function Block:CreateTextArea(o)
+	o = o or {}
+	local h = math.clamp(tonumber(o.Height) or 96, 56, 400)
+	local f, st = makeRow(self, h + 34, o.Name)
+	label(f, o.Name or "TextArea", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -24, 0, 28) })
+	local tb = new("TextBox", {
+		Position = UDim2.new(0, 8, 0, 28), Size = UDim2.new(1, -16, 0, h), BackgroundColor3 = T.Off,
+		BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = o.Default and tostring(o.Default) or "",
+		PlaceholderText = o.Placeholder or o.PlaceholderText or "", PlaceholderColor3 = Color3.fromRGB(125, 125, 132),
+		TextColor3 = T.Text, TextSize = 12, Font = F_REG, ClearTextOnFocus = false, MultiLine = true,
+		TextWrapped = true, TextXAlignment = LEFT, TextYAlignment = Enum.TextYAlignment.Top,
+		TextEditable = o.ReadOnly ~= true,
+	}, f)
+	corner(tb, 6)
+	local tst = stroke(tb, 0.9)
+	trackStyled(tb, tst, "input")
+	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 6),
+		PaddingBottom = UDim.new(0, 6) }, tb)
+	hover(f, st)
+	tb.Focused:Connect(function() uiSnd("focus") tween(tst, { Transparency = 0.35 }, 0.2) end)
+	tb.FocusLost:Connect(function()
+		tween(tst, { Transparency = Sty.InputStroke }, 0.3)
+		fire(o.Callback, tb.Text)
+	end)
+	tb:GetPropertyChangedSignal("Text"):Connect(function()
+		local ml = tonumber(o.MaxLength)
+		if ml and #tb.Text > ml then tb.Text = string.sub(tb.Text, 1, ml) return end
+		if o.Flag then Library.Flags[o.Flag] = tb.Text end
+		if o.LiveUpdate then fire(o.Callback, tb.Text) end
+	end)
+	local item = {}
+	item.Set = function(...)
+		tb.Text = tostring((unself(item, ...)) or "")
+		fire(o.Callback, tb.Text)
+	end
+	item.SetText = item.Set
+	item.Get = function() return tb.Text end
+	item.Instance = tb
+	register(o.Flag, item, tb.Text)
+	return item
+end
+
+-- Contrôle segmenté (une seule option active)
+function Block:CreateRadio(o)
+	o = o or {}
+	local items = o.Items or o.Options or {}
+	local n = math.max(#items, 1)
+	local f, st = makeRow(self, 62, o.Name)
+	label(f, o.Name or "Radio", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -24, 0, 28) })
+	local bar = new("Frame", { Position = UDim2.new(0, 8, 0, 29), Size = UDim2.new(1, -16, 0, 26),
+		BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0 }, f)
+	corner(bar, 7)
+	trackStyled(bar, stroke(bar, 0.9), "input")
+	local hl = new("Frame", { Size = UDim2.new(1 / n, -4, 1, -4), Position = UDim2.new(0, 2, 0, 2),
+		BackgroundColor3 = T.Accent, BackgroundTransparency = 0.8, BorderSizePixel = 0 }, bar)
+	corner(hl, 5)
+	hover(f, st)
+	local btns, cur = {}, nil
+	local function indexOf(v)
+		if type(v) == "number" and items[v] ~= nil then return v end
+		for i, it in ipairs(items) do
+			if tostring(it) == tostring(v) then return i end
+		end
+		return nil
+	end
+	local function select(i, silent)
+		if not i or not items[i] then return end
+		cur = i
+		tween(hl, { Position = UDim2.new((i - 1) / n, 2, 0, 2) }, 0.28)
+		for k, b in ipairs(btns) do
+			tween(b, { TextColor3 = (k == i) and T.Text or T.ElementAccent }, 0.2)
+		end
+		if o.Flag then Library.Flags[o.Flag] = tostring(items[i]) end
+		if not silent then fire(o.Callback, items[i], i) end
+	end
+	for i, it in ipairs(items) do
+		local b = new("TextButton", { Position = UDim2.new((i - 1) / n, 0, 0, 0), Size = UDim2.new(1 / n, 0, 1, 0),
+			BackgroundTransparency = 1, Text = tostring(it), TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED,
+			AutoButtonColor = false, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 2 }, bar)
+		b.MouseButton1Click:Connect(function()
+			if cur ~= i then uiSnd("click") select(i) end
+		end)
+		btns[i] = b
+	end
+	local start = indexOf(o.Default) or 1
+	hl.Position = UDim2.new((start - 1) / n, 2, 0, 2)
+	select(start, true)
+	local item = {}
+	item.Set = function(...)
+		local i = indexOf((unself(item, ...)))
+		if i then select(i) end
+	end
+	item.Get = function() return items[cur] end
+	item.GetIndex = function() return cur end
+	item.Instance = f
+	register(o.Flag, item, tostring(items[start]))
+	return item
+end
+
+-- Tableau / liste triable (clic sur un en-tête = tri, clic sur une ligne = sélection)
+function Block:CreateTable(o)
+	o = o or {}
+	local cols = (type(o.Columns) == "table" and #o.Columns > 0) and o.Columns or { "Nom" }
+	local nc = #cols
+	local rows = {}
+	for i, r in ipairs(o.Rows or {}) do rows[i] = (type(r) == "table") and r or { r } end
+	local maxRows = math.clamp(tonumber(o.MaxRows) or 6, 2, 14)
+	local ROW_H, HEAD_H = 22, 24
+	local f, st = makeRow(self, 30 + HEAD_H + maxRows * ROW_H + 8, o.Name)
+	label(f, o.Name or "Table", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -24, 0, 28) })
+	local box = new("Frame", { Position = UDim2.new(0, 8, 0, 28), Size = UDim2.new(1, -16, 1, -36),
+		BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0, ClipsDescendants = true }, f)
+	corner(box, 6)
+	trackStyled(box, stroke(box, 0.9), "input")
+	local head = new("Frame", { Size = UDim2.new(1, 0, 0, HEAD_H), BackgroundTransparency = 1 }, box)
+	local sf = new("ScrollingFrame", { Position = UDim2.new(0, 0, 0, HEAD_H), Size = UDim2.new(1, 0, 1, -HEAD_H),
+		BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3, CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = AY, ScrollBarImageColor3 = T.Accent }, box)
+	new("UIListLayout", { SortOrder = BYORDER }, sf)
+	hover(f, st)
+
+	local sortCol, sortAsc, selected = nil, true, nil
+	local headBtns = {}
+	local rebuild
+
+	local function cmp(a, b)
+		local x, y = a[sortCol], b[sortCol]
+		local nx, ny = tonumber(x), tonumber(y)
+		local r
+		if nx and ny then r = nx < ny
+		else r = string.lower(tostring(x or "")) < string.lower(tostring(y or "")) end
+		if sortAsc then return r end
+		if nx and ny then return nx > ny end
+		return string.lower(tostring(x or "")) > string.lower(tostring(y or ""))
+	end
+
+	for c = 1, nc do
+		local hb = new("TextButton", { Position = UDim2.new((c - 1) / nc, 0, 0, 0), Size = UDim2.new(1 / nc, 0, 1, 0),
+			BackgroundTransparency = 1, Text = tostring(cols[c]), TextColor3 = T.ElementAccent, TextSize = 11,
+			Font = F_BOLD, AutoButtonColor = false, TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd }, head)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 4) }, hb)
+		hb.MouseButton1Click:Connect(function()
+			if o.Sortable == false then return end
+			uiSnd("click")
+			if sortCol == c then sortAsc = not sortAsc else sortCol, sortAsc = c, true end
+			rebuild()
+		end)
+		headBtns[c] = hb
+	end
+	fadeLine(head, { Position = UDim2.new(0, 6, 1, -1), Size = UDim2.new(1, -12, 0, 1) })
+
+	local function view()
+		local v = {}
+		for i, r in ipairs(rows) do v[i] = r end
+		if sortCol then table.sort(v, cmp) end
+		return v
+	end
+
+	rebuild = function()
+		for _, ch in ipairs(sf:GetChildren()) do
+			if ch:IsA("GuiObject") then ch:Destroy() end
+		end
+		for c = 1, nc do
+			headBtns[c].Text = tostring(cols[c]) .. ((sortCol == c) and (sortAsc and "  ^" or "  v") or "")
+		end
+		for i, r in ipairs(view()) do
+			local isSel = (r == selected)
+			local rb = new("TextButton", { Size = UDim2.new(1, 0, 0, ROW_H), LayoutOrder = i, BorderSizePixel = 0,
+				BackgroundColor3 = T.Accent, BackgroundTransparency = isSel and 0.84 or 1, Text = "", AutoButtonColor = false }, sf)
+			for c = 1, nc do
+				label(rb, tostring(r[c] == nil and "" or r[c]), 12, { Position = UDim2.new((c - 1) / nc, 8, 0, 0),
+					Size = UDim2.new(1 / nc, -10, 1, 0), TextColor3 = isSel and T.Text or T.ElementAccent, Font = F_REG })
+			end
+			rb.MouseEnter:Connect(function() if r ~= selected then tween(rb, { BackgroundTransparency = 0.93 }, 0.15) end end)
+			rb.MouseLeave:Connect(function() if r ~= selected then tween(rb, { BackgroundTransparency = 1 }, 0.2) end end)
+			rb.MouseButton1Click:Connect(function()
+				uiSnd("click")
+				selected = (selected == r) and nil or r
+				rebuild()
+				fire(o.Callback, selected, selected and table.find(rows, selected) or nil)
+			end)
+		end
+		if o.Flag then Library.Flags[o.Flag] = rows end
+	end
+	rebuild()
+
+	local item = {}
+	item.Set = function(...)
+		local d = unself(item, ...)
+		if type(d) ~= "table" then return end
+		rows = {}
+		for i, r in ipairs(d) do rows[i] = (type(r) == "table") and r or { r } end
+		selected = nil
+		rebuild()
+	end
+	item.SetRows = item.Set
+	item.Get = function() return rows end
+	item.GetSelected = function() return selected end
+	item.AddRow = function(...)
+		local r = unself(item, ...)
+		rows[#rows + 1] = (type(r) == "table") and r or { r }
+		rebuild()
+	end
+	item.RemoveRow = function(...)
+		local i = unself(item, ...)
+		if rows[i] then
+			if rows[i] == selected then selected = nil end
+			table.remove(rows, i)
+			rebuild()
+		end
+	end
+	item.Clear = function() rows, selected = {}, nil rebuild() end
+	item.Sort = function(...)
+		local c, asc = unself(item, ...)
+		if tonumber(c) and c >= 1 and c <= nc then
+			sortCol, sortAsc = math.floor(c), asc ~= false
+			rebuild()
+		end
+	end
+	item.Instance = f
+	register(o.Flag, item, rows)
+	return item
+end
+
+-- Image (rbxassetid://..., ou simple identifiant numérique)
+function Block:CreateImage(o)
+	if type(o) ~= "table" then o = { Image = o } end
+	local function norm(v)
+		v = tostring(v or "")
+		if string.match(v, "^%d+$") then v = "rbxassetid://" .. v end
+		return v
+	end
+	local cap = o.Name ~= nil and o.Name ~= ""
+	local h = math.clamp(tonumber(o.Height) or 120, 24, 400)
+	local top = cap and 28 or 6
+	local f, st = makeRow(self, h + top + 6, o.Name)
+	if cap then label(f, o.Name, 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -24, 0, 28) }) end
+	local st_ = (o.ScaleType == "Crop" and Enum.ScaleType.Crop) or (o.ScaleType == "Stretch" and Enum.ScaleType.Stretch)
+		or Enum.ScaleType.Fit
+	local im = new("ImageLabel", { Position = UDim2.new(0, 8, 0, top), Size = UDim2.new(1, -16, 0, h),
+		BackgroundTransparency = 1, Image = norm(o.Image or o.Source), ScaleType = st_,
+		ImageColor3 = o.Color or Color3.new(1, 1, 1) }, f)
+	corner(im, 6)
+	local item = {}
+	item.SetImage = function(...) im.Image = norm((unself(item, ...))) end
+	item.Set = item.SetImage
+	item.Get = function() return im.Image end
+	item.SetHeight = function(...)
+		local nh = math.clamp(tonumber((unself(item, ...))) or h, 24, 400)
+		h = nh
+		f.Size = UDim2.new(1, 0, 0, nh + top + 6)
+		im.Size = UDim2.new(1, -16, 0, nh)
+	end
+	item.SetColor = function(...) im.ImageColor3 = (unself(item, ...)) or Color3.new(1, 1, 1) end
+	item.Instance = im
+	return item
+end
+
+-- ============================================================================
+-- V5 : MINI-FENÊTRES FLOTTANTES  (détacher un bloc, 1 à 5 max)
+-- ============================================================================
+Library.Floats = {}
+Library.MaxFloats = 3
+local floatZ = 20
+
+function Library:SetMaxFloats(n)
+	n = math.clamp(math.floor(tonumber(n) or 3), 1, 5)
+	Library.MaxFloats = n
+	while #Library.Floats > n do
+		Library:AttachBlock(Library.Floats[#Library.Floats].Block)
+	end
+end
+
+function Library:AttachBlock(blk)
+	if not (blk and blk._float) then return end
+	local fl = blk._float
+	blk._float = nil
+	for i, e in ipairs(Library.Floats) do
+		if e.Block == blk then table.remove(Library.Floats, i) break end
+	end
+	if blk.Frame and blk.Frame.Parent then
+		blk.Frame.Parent = nil
+		if blk.Tab and blk.Tab._reapplyLayout then pcall(blk.Tab._reapplyLayout, blk.Tab) end
+	end
+	if fl then fl:Destroy() end
+end
+
+function Library:AttachAllBlocks()
+	for i = #Library.Floats, 1, -1 do
+		if Library.Floats[i] then Library:AttachBlock(Library.Floats[i].Block) end
+	end
+end
+
+function Library:DetachBlock(blk)
+	local win = Library.Window
+	if not win or not blk or blk._float then return false end
+	if #Library.Floats >= Library.MaxFloats then
+		Library:Notify({ Title = "Mini-fenêtres", Type = "Warning", Duration = 3,
+			Content = "Maximum atteint (" .. Library.MaxFloats .. "). Ferme-en une ou augmente la limite dans Paramètres." })
+		return false
+	end
+	local w = math.clamp(math.floor(blk.Frame.AbsoluteSize.X / math.max(pxScale(), 0.1)), 250, 420)
+	local nth = #Library.Floats
+	local ap = win.Main.AbsolutePosition
+	local v = viewport()
+	floatZ += 1
+	local fl = new("Frame", { Name = "FloatBlock", Size = UDim2.fromOffset(w, 0), AutomaticSize = AY,
+		AnchorPoint = Vector2.new(0, 0),
+		Position = UDim2.fromOffset(math.clamp(ap.X + 40 + nth * 28, 0, math.max(0, v.X - w - 10)),
+			math.clamp(ap.Y + 60 + nth * 28, 0, math.max(0, v.Y - 120))),
+		BackgroundColor3 = T.Main, BackgroundTransparency = 0.03, BorderSizePixel = 0, Active = true, ZIndex = floatZ,
+		Visible = win.Open }, win.Gui)
+	corner(fl, 12)
+	stroke(fl, 0.55)
+	new("UIScale", { Scale = Library.Scale or 1 }, fl)
+	new("UIListLayout", { SortOrder = BYORDER }, fl)
+	local bar = new("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, LayoutOrder = 1 }, fl)
+	label(bar, blk.Name, 12, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -48, 1, 0), Font = F_BOLD })
+	local close = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
+		Size = UDim2.new(0, 24, 0, 20), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.93, Text = "x",
+		TextColor3 = T.Text, TextSize = 12, Font = F_BOLD, AutoButtonColor = false }, bar)
+	corner(close, 6)
+	close.MouseEnter:Connect(function() tween(close, { BackgroundTransparency = 0.8 }, 0.15) end)
+	close.MouseLeave:Connect(function() tween(close, { BackgroundTransparency = 0.93 }, 0.2) end)
+	close.MouseButton1Click:Connect(function() uiSnd("click") Library:AttachBlock(blk) end)
+	fadeLine(bar, { Position = UDim2.new(0, 10, 1, -1), Size = UDim2.new(1, -20, 0, 1) })
+	local sf = new("ScrollingFrame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, AutomaticCanvasSize = AY,
+		CanvasSize = UDim2.new(), ScrollBarThickness = 3, BackgroundTransparency = 1, BorderSizePixel = 0,
+		LayoutOrder = 2, ScrollBarImageColor3 = T.Accent }, fl)
+	new("UISizeConstraint", { MaxSize = Vector2.new(math.huge, 420) }, sf)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4), PaddingBottom = UDim.new(0, 6) }, sf)
+
+	-- le bloc vit dans la mini-fenêtre tant qu'elle existe
+	blk._float = fl
+	blk.Frame.Parent = sf
+	blk.Frame.LayoutOrder = 1
+	Library.Floats[#Library.Floats + 1] = { Block = blk, Gui = fl }
+
+	-- au premier plan au clic ; glisser la barre de titre pour déplacer
+	fl.InputBegan:Connect(function(i)
+		if isPress(i) then
+			floatZ += 1
+			fl.ZIndex = floatZ
+		end
+	end)
+	bar.InputBegan:Connect(function(i)
+		if not isPress(i) then return end
+		local start = Vector2.new(i.Position.X, i.Position.Y)
+		local o0 = fl.Position
+		startDrag(function(p)
+			local d = Vector2.new(p.X, p.Y) - start
+			local vv = viewport()
+			fl.Position = UDim2.fromOffset(math.clamp(o0.X.Offset + d.X, -w + 80, vv.X - 80),
+				math.clamp(o0.Y.Offset + d.Y, 0, vv.Y - 40))
+		end, nil, i.Position)
+	end)
+	return true
+end
+
+-- les mini-fenêtres se masquent / réapparaissent avec l'interface
+Library._floatsVisible = function(v)
+	for _, e in ipairs(Library.Floats) do
+		if e.Gui then e.Gui.Visible = v and true or false end
+	end
+end
+
+-- ============================================================================
+-- V5 : DÉGRADÉ PERSONNALISÉ (fond de la fenêtre)
+-- ============================================================================
+Library.Gradient = { Enabled = false, C1 = Color3.fromRGB(70, 30, 140), C2 = Color3.fromRGB(10, 50, 120), C3 = nil,
+	Rotation = 45, Strength = 0.6 }
+Library.GradientPresets = {
+	["Aurore"]     = { Color3.fromRGB(20, 200, 160), Color3.fromRGB(110, 60, 220) },
+	["Crépuscule"] = { Color3.fromRGB(255, 110, 80), Color3.fromRGB(90, 40, 160) },
+	["Océan"]      = { Color3.fromRGB(0, 130, 210), Color3.fromRGB(0, 20, 70) },
+	["Braise"]     = { Color3.fromRGB(255, 70, 30), Color3.fromRGB(60, 0, 0) },
+	["Menthe"]     = { Color3.fromRGB(120, 255, 200), Color3.fromRGB(0, 90, 110) },
+	["Mono"]       = { Color3.fromRGB(255, 255, 255), Color3.fromRGB(20, 20, 20) },
+}
+
+function Library:_gradientData()
+	local g = Library.Gradient
+	return { Enabled = g.Enabled, C1 = "#" .. g.C1:ToHex(), C2 = "#" .. g.C2:ToHex(),
+		C3 = g.C3 and ("#" .. g.C3:ToHex()) or nil, Rotation = g.Rotation, Strength = g.Strength }
+end
+
+function Library:SetGradient(d)
+	local g = Library.Gradient
+	if type(d) == "table" then
+		if d.Enabled ~= nil then g.Enabled = d.Enabled and true or false end
+		local c = toColor3(d.C1)
+		if c then g.C1 = c end
+		c = toColor3(d.C2)
+		if c then g.C2 = c end
+		if d.C3 == false then
+			g.C3 = nil
+		else
+			c = toColor3(d.C3)
+			if c then g.C3 = c end
+		end
+		if tonumber(d.Rotation) then g.Rotation = tonumber(d.Rotation) % 360 end
+		if tonumber(d.Strength) then g.Strength = math.clamp(tonumber(d.Strength), 0.05, 1) end
+	end
+	Library.Flags["ui.gradient"] = Library:_gradientData()
+	local win = Library.Window
+	if win and win.Main then
+		local fr = Library._gradFrame
+		if not (fr and fr.Parent) then
+			fr = new("Frame", { Name = "ThemeGradient", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(1, 1, 1),
+				BorderSizePixel = 0, ZIndex = 0, Visible = false }, win.Main)
+			Library._gradObj = new("UIGradient", {}, fr)
+			Library._gradFrame = fr
+		end
+		fr.Visible = g.Enabled
+		fr.BackgroundTransparency = 1 - g.Strength
+		Library._gradObj.Rotation = g.Rotation
+		if g.C3 then
+			Library._gradObj.Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, g.C1),
+				ColorSequenceKeypoint.new(0.5, g.C3), ColorSequenceKeypoint.new(1, g.C2) })
+		else
+			Library._gradObj.Color = ColorSequence.new(g.C1, g.C2)
+		end
+	end
+	if Library._onColors then pcall(Library._onColors) end
+end
+
+-- ============================================================================
+-- V5 : ONGLET « Change-Log » (À propos + historique des versions)
+-- ============================================================================
+Library.Version = "5.0.0"
+Library.AppName = "Ui-Lib"
+Library.Changelog = {
+	{ Version = "5.0.0", Date = "2026-10-25", Title = "Grosse mise à jour", Notes = {
+		"Correctif : la fenêtre ne se réduit plus à sa taille par défaut après fermeture / réouverture.",
+		"Keybinds : modes Hold / Toggle / Always, avec un sélecteur sur chaque ligne.",
+		"Mini-fenêtres : détache un bloc en fenêtre flottante (de 1 à 5 max, réglable dans Paramètres).",
+		"Nouveaux éléments : CreateTextArea, CreateRadio, CreateTable, CreateImage.",
+		"Nouvel onglet Change-Log (À propos, version et historique).",
+		"Éditeur de thème visuel : aperçu en direct et dégradés personnalisés.",
+	} },
+	{ Version = "4.0.0", Title = "Base « trou noir »", Notes = {
+		"Colonnes de blocs (1 à 4), disposition des blocs déplaçable et sauvegardée.",
+		"Thèmes, styles, sauvegarde automatique des paramètres, recherche globale.",
+		"Raccourcis clavier centralisés, notifications, configs.",
+	} },
+}
+
+function Library:AddChangelog(version, notes, date, title)
+	table.insert(Library.Changelog, 1, { Version = tostring(version), Date = date, Title = title or "Nouveautés",
+		Notes = type(notes) == "table" and notes or { tostring(notes) } })
+	Library.Version = tostring(version)
+	local win = Library.Window
+	if win and win._changelogTab then pcall(Library._buildChangelog, Library, win._changelogTab) end
+end
+
+function Library:_buildChangelog(tab)
+	tab:ClearBlocks()
+	local about = tab:CreateBlock({ Name = "À propos", Side = "Left" })
+	about:CreateParagraph({ Title = tostring(Library.AppName) .. "  ·  v" .. tostring(Library.Version),
+		Content = "Interface « trou noir » : blocs, thèmes, keybinds, mini-fenêtres.\nChaque version et ses nouveautés sont listées à droite." })
+	about:CreateButton({ Name = "Copier la version", Favorite = false, Callback = function()
+		if setclipboard then
+			setclipboard(tostring(Library.AppName) .. " v" .. tostring(Library.Version))
+			Library:Notify({ Title = "À propos", Content = "Version copiée.", Type = "Success", Duration = 2 })
+		end
+	end })
+	for i, e in ipairs(Library.Changelog) do
+		local b = tab:CreateBlock({ Name = "v" .. tostring(e.Version) .. (e.Date and ("  ·  " .. e.Date) or ""),
+			Side = (i % 2 == 1) and "Right" or "Left", Collapsed = i > 2 })
+		b:CreateParagraph({ Title = e.Title or "Nouveautés", Content = "• " .. table.concat(e.Notes or {}, "\n• ") })
+	end
+end
+
+function Window:CreateChangelogTab(name, icon)
+	local tab = self:CreateTab(name or "Change-Log", nil, icon)
+	tab.Button.LayoutOrder = 900000   -- toujours en bas de la liste, après les onglets du script
+	self._changelogTab = tab
+	Library:_buildChangelog(tab)
+	return tab
+end
+
+-- ============================================================================
+-- V5 : ÉDITEUR DE THÈME VISUEL (aperçu en direct + dégradés)
+-- ============================================================================
+local function buildThemePreview(blk)
+	local box = new("Frame", { Size = UDim2.new(1, 0, 0, 156), BackgroundColor3 = T.Main, BorderSizePixel = 0,
+		ClipsDescendants = true }, blk.Body)
+	corner(box, 10)
+	local bst = stroke(box, 0.5)
+	blk:_reg(box, "Aperçu")
+	local gf = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+		ZIndex = 1, Visible = false }, box)
+	local gg = new("UIGradient", {}, gf)
+	local title = label(box, "Aperçu", 12, { Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -24, 0, 18),
+		Font = F_BOLD, ZIndex = 3 })
+	local side = new("Frame", { Position = UDim2.new(0, 8, 0, 30), Size = UDim2.new(0, 70, 1, -38), BorderSizePixel = 0,
+		BackgroundColor3 = T.Second, BackgroundTransparency = 0.35, ZIndex = 2 }, box)
+	corner(side, 8)
+	local sideLbl = {}
+	for i, nm in ipairs({ "Accueil", "Combat", "Visuel" }) do
+		sideLbl[i] = label(side, nm, 11, { Position = UDim2.new(0, 8, 0, 6 + (i - 1) * 24), Size = UDim2.new(1, -10, 0, 20),
+			ZIndex = 3 })
+	end
+	local bar = new("Frame", { Position = UDim2.new(0, 0, 0, 10), Size = UDim2.new(0, 3, 0, 12), BorderSizePixel = 0,
+		BackgroundColor3 = T.Accent, ZIndex = 3 }, side)
+	local pane = new("Frame", { Position = UDim2.new(0, 86, 0, 30), Size = UDim2.new(1, -94, 1, -38), BorderSizePixel = 0,
+		BackgroundColor3 = T.Second, BackgroundTransparency = 0.35, ZIndex = 2 }, box)
+	corner(pane, 8)
+	local nm = label(pane, "Nom du bloc", 12, { Position = UDim2.new(0, 10, 0, 6), Size = UDim2.new(1, -20, 0, 18),
+		Font = F_BOLD, ZIndex = 3 })
+	local sub = label(pane, "Texte secondaire", 11, { Position = UDim2.new(0, 10, 0, 24), Size = UDim2.new(1, -20, 0, 16),
+		TextColor3 = T.ElementAccent, Font = F_REG, ZIndex = 3 })
+	local pill = new("Frame", { Position = UDim2.new(0, 10, 0, 48), Size = UDim2.fromOffset(34, 16), BorderSizePixel = 0,
+		BackgroundColor3 = T.Accent, ZIndex = 3 }, pane)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, pill)
+	local knob = new("Frame", { Position = UDim2.new(1, -14, 0, 2), Size = UDim2.fromOffset(12, 12), BorderSizePixel = 0,
+		BackgroundColor3 = T.Main, ZIndex = 4 }, pill)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
+	local track = new("Frame", { Position = UDim2.new(0, 54, 0, 54), Size = UDim2.new(1, -66, 0, 4), BorderSizePixel = 0,
+		BackgroundColor3 = T.Off, ZIndex = 3 }, pane)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
+	local fill = new("Frame", { Size = UDim2.new(0.6, 0, 1, 0), BorderSizePixel = 0, BackgroundColor3 = T.Accent, ZIndex = 4 }, track)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
+	local btn = new("Frame", { Position = UDim2.new(0, 10, 1, -30), Size = UDim2.fromOffset(78, 22), BorderSizePixel = 0,
+		BackgroundColor3 = T.Accent, ZIndex = 3 }, pane)
+	corner(btn, 6)
+	local btnL = label(btn, "Bouton", 11, { TextXAlignment = CENTER, TextColor3 = T.Main, ZIndex = 4, Font = F_BOLD })
+
+	local function refresh()
+		box.BackgroundColor3 = T.Main
+		bst.Color = T.Accent
+		title.TextColor3 = T.Text
+		side.BackgroundColor3, pane.BackgroundColor3 = T.Second, T.Second
+		bar.BackgroundColor3 = T.Accent
+		for i, l in ipairs(sideLbl) do l.TextColor3 = (i == 1) and T.Text or T.ElementAccent end
+		nm.TextColor3, sub.TextColor3 = T.Text, T.ElementAccent
+		pill.BackgroundColor3, fill.BackgroundColor3, btn.BackgroundColor3 = T.Accent, T.Accent, T.Accent
+		knob.BackgroundColor3, btnL.TextColor3 = T.Main, T.Main
+		track.BackgroundColor3 = T.Off
+		local g = Library.Gradient
+		gf.Visible = g.Enabled
+		gf.BackgroundTransparency = 1 - g.Strength
+		gg.Rotation = g.Rotation
+		if g.C3 then
+			gg.Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, g.C1), ColorSequenceKeypoint.new(0.5, g.C3),
+				ColorSequenceKeypoint.new(1, g.C2) })
+		else
+			gg.Color = ColorSequence.new(g.C1, g.C2)
+		end
+	end
+	refresh()
+	return refresh
+end
+
+function Window:CreateThemeEditorTab(name, icon)
+	local tab = self:CreateTab(name or "Éditeur de thème", nil, icon)
+	tab.Button.LayoutOrder = 890000
+	self._themeTab = tab
+
+	-- Aperçu en direct
+	local PV = tab:CreateBlock({ Name = "Aperçu en direct", Side = "Left" })
+	local refreshPreview = buildThemePreview(PV)
+	Library._onColors = refreshPreview
+	PV:CreateParagraph({ Title = "Comment ça marche",
+		Content = "Chaque changement s'applique tout de suite à l'interface et à cet aperçu. Tout est sauvegardé automatiquement." })
+
+	-- Couleurs
+	local CO = tab:CreateBlock({ Name = "Couleurs du thème", Side = "Left" })
+	local keys = {
+		{ "Accent", "Accent", "ui.accent" }, { "Fond", "Main", "ui.c.main" }, { "Panneaux", "Second", "ui.c.second" },
+		{ "Texte", "Text", "ui.c.text" }, { "Texte secondaire", "ElementAccent", "ui.c.text2" },
+	}
+	local pickers = {}
+	for _, k in ipairs(keys) do
+		pickers[k[2]] = CO:CreateColorPicker({ Name = k[1], Default = T[k[2]], Favorite = false,
+			Callback = function(c)
+				local it = Library.Items[k[3]]
+				if it and it.Set and typeof(c) == "Color3" and T[k[2]] ~= c then pcall(it.Set, it, c)
+				else Library:SetColor(k[2], c) end
+				refreshPreview()
+			end })
+	end
+	CO:CreateButton({ Name = "Resynchroniser avec le thème", Favorite = false, Callback = function()
+		for _, k in ipairs(keys) do
+			local p = pickers[k[2]]
+			if p and p.Set then pcall(p.Set, p, T[k[2]]) end
+		end
+		refreshPreview()
+	end })
+
+	-- Dégradé personnalisé
+	local GR = tab:CreateBlock({ Name = "Dégradé personnalisé", Side = "Right" })
+	local gp1, gp2, gp3
+	GR:CreateToggle({ Name = "Activer le dégradé", Favorite = false, Keybind = false, Default = Library.Gradient.Enabled,
+		Callback = function(v) Library:SetGradient({ Enabled = v }) end })
+	local presetNames = {}
+	for k in pairs(Library.GradientPresets) do presetNames[#presetNames + 1] = k end
+	table.sort(presetNames)
+	GR:CreateDropdown({ Name = "Préréglage", Items = presetNames, Search = false, Favorite = false,
+		Callback = function(n)
+			local p = Library.GradientPresets[n]
+			if not p then return end
+			Library:SetGradient({ Enabled = true, C1 = p[1], C2 = p[2], C3 = false })
+			if gp1 and gp1.Set then pcall(gp1.Set, gp1, p[1]) end
+			if gp2 and gp2.Set then pcall(gp2.Set, gp2, p[2]) end
+		end })
+	gp1 = GR:CreateColorPicker({ Name = "Couleur 1 (début)", Default = Library.Gradient.C1, Favorite = false,
+		Callback = function(c) Library:SetGradient({ C1 = c }) end })
+	gp2 = GR:CreateColorPicker({ Name = "Couleur 2 (fin)", Default = Library.Gradient.C2, Favorite = false,
+		Callback = function(c) Library:SetGradient({ C2 = c }) end })
+	GR:CreateToggle({ Name = "Couleur centrale", Favorite = false, Keybind = false, Default = Library.Gradient.C3 ~= nil,
+		Callback = function(v)
+			if v then
+				local mid = Library.Gradient.C1:Lerp(Library.Gradient.C2, 0.5)
+				Library:SetGradient({ C3 = mid })
+				if gp3 and gp3.Set then pcall(gp3.Set, gp3, mid) end
+			else
+				Library:SetGradient({ C3 = false })
+			end
+		end })
+	gp3 = GR:CreateColorPicker({ Name = "Couleur 3 (centre)", Default = Library.Gradient.C3 or Library.Gradient.C1:Lerp(Library.Gradient.C2, 0.5),
+		Favorite = false, Callback = function(c)
+			if Library.Gradient.C3 then Library:SetGradient({ C3 = c }) end
+		end })
+	GR:CreateSlider({ Name = "Angle", Min = 0, Max = 360, Step = 5, Suffix = "°", Default = Library.Gradient.Rotation,
+		Favorite = false, Callback = function(v) Library:SetGradient({ Rotation = v }) end })
+	GR:CreateSlider({ Name = "Intensité", Min = 5, Max = 100, Step = 5, Suffix = "%",
+		Default = math.floor(Library.Gradient.Strength * 100 + 0.5), Favorite = false,
+		Callback = function(v) Library:SetGradient({ Strength = v / 100 }) end })
+
+	-- Partage du thème
+	local SH = tab:CreateBlock({ Name = "Partager / restaurer", Side = "Right" })
+	SH:CreateButton({ Name = "Copier le thème (presse-papiers)", Favorite = false, Callback = function()
+		local ok = pcall(function() return Library:ExportTheme() end)
+		Library:Notify({ Title = "Thème", Type = ok and "Success" or "Error", Duration = 2.5,
+			Content = ok and "Thème copié dans le presse-papiers." or "Export impossible ici." })
+	end })
+	SH:CreateInput({ Name = "Coller un thème", Placeholder = "UILIB-THEME:{...}", Favorite = false,
+		Callback = function(txt)
+			if txt and txt ~= "" then
+				local ok = pcall(function() return Library:ImportTheme(txt) end)
+				Library:Notify({ Title = "Thème", Type = ok and "Success" or "Error", Duration = 2.5,
+					Content = ok and "Thème importé." or "Texte de thème invalide." })
+				refreshPreview()
+			end
+		end })
+	SH:CreateButton({ Name = "Désactiver le dégradé", Favorite = false, Callback = function()
+		Library:SetGradient({ Enabled = false })
+	end })
+	return tab
+end
+
 function Tab:ClearBlocks()
 	for _, b in ipairs(self.Blocks) do
+		if b._float and Library.AttachBlock then Library:AttachBlock(b) end
 		if b.Frame then b.Frame:Destroy() end
 	end
 	self.Blocks = {}
@@ -7298,7 +8062,7 @@ function Tab:_reapplyLayout()
 	for _, b in ipairs(self.Blocks) do
 		local ci, o = self:_placeOf(b, n)
 		local col = self.Cols[ci]
-		if col then
+		if col and not b._float then
 			if b.Frame.Parent ~= col then b.Frame.Parent = col end
 			b.Frame.LayoutOrder = o
 			b.Scroll = col
@@ -7504,9 +8268,11 @@ function Tab:SetColumns(n)
 	for _, b in ipairs(self.Blocks) do
 		local ci, o = self:_placeOf(b, n)
 		local col = self.Cols[ci]
-		if b.Frame.Parent ~= col then b.Frame.Parent = col end
-		b.Frame.LayoutOrder = o
-		b.Scroll = col
+		if not b._float then
+			if b.Frame.Parent ~= col then b.Frame.Parent = col end
+			b.Frame.LayoutOrder = o
+			b.Scroll = col
+		end
 	end
 	while #self.Cols > n do table.remove(self.Cols):Destroy() end
 	self:_layoutColumns()
@@ -7546,7 +8312,7 @@ function Tab:CreateBlock(o)
 			Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, 12, 0.5, -8) }, head)
 		x = 34
 	end
-	label(head, o.Name or "Block", 13, { Position = UDim2.new(0, x, 0, 0), Size = UDim2.new(1, -x - 32, 1, 0),
+	label(head, o.Name or "Block", 13, { Position = UDim2.new(0, x, 0, 0), Size = UDim2.new(1, -x - 58, 1, 0),
 		Font = F_BOLD })
 	local arrow = label(head, ">", 13, { Position = UDim2.new(1, -28, 0, 0), Size = UDim2.new(0, 16, 1, 0),
 		TextXAlignment = CENTER, Font = F_BOLD, TextColor3 = T.ElementAccent, Rotation = 90 })
@@ -7638,6 +8404,25 @@ function Tab:CreateBlock(o)
 			if Library.LayoutEdit and isPress(i) then Library:_dragBlock(blk, i.Position) end
 		end)
 		if Library.LayoutEdit then blk._setEdit(true) end
+	end
+	-- bouton « détacher en mini-fenêtre » (re-cliquer = remettre le bloc à sa place)
+	do
+		local popBtn = new("TextButton", { Name = "Detach", Size = UDim2.fromOffset(22, 22), Position = UDim2.new(1, -54, 0.5, -11),
+			BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 3 }, head)
+		local icoStrokes = {}
+		for _, p in ipairs({ { 4, 8 }, { 9, 4 } }) do
+			local ic = new("Frame", { Position = UDim2.fromOffset(p[1], p[2]), Size = UDim2.fromOffset(9, 9),
+				BackgroundTransparency = 1, BorderSizePixel = 0 }, popBtn)
+			icoStrokes[#icoStrokes + 1] = new("UIStroke", { Color = T.ElementAccent, Thickness = 1, Transparency = 0.2,
+				ApplyStrokeMode = BORDER }, ic)
+		end
+		popBtn.MouseEnter:Connect(function() for _, s2 in ipairs(icoStrokes) do tween(s2, { Transparency = 0 }, 0.15) end end)
+		popBtn.MouseLeave:Connect(function() for _, s2 in ipairs(icoStrokes) do tween(s2, { Transparency = 0.2 }, 0.2) end end)
+		popBtn.MouseButton1Click:Connect(function()
+			if Library.LayoutEdit then return end
+			uiSnd("click")
+			if blk._float then Library:AttachBlock(blk) else Library:DetachBlock(blk) end
+		end)
 	end
 	return blk
 end
@@ -8690,6 +9475,13 @@ function Window:CreateSettingsTab(name, icon, docked)
 			Library:ResetBlockLayout()
 			Library:Notify({ Title = "Disposition", Content = "Tous les blocs sont revenus à leur place.", Type = "Success", Duration = 3 })
 		end })
+
+	LY:CreateSection("Mini-fenêtres flottantes")
+	LY:CreateSlider({ Name = "Mini-fenêtres max", Flag = "ui.floatmax", Min = 1, Max = 5, Step = 1, Default = Library.MaxFloats,
+		Tooltip = "Nombre maximum de blocs que tu peux détacher en même temps (bouton ⧉ dans l'en-tête d'un bloc).",
+		Callback = function(v) Library:SetMaxFloats(v) end })
+	LY:CreateButton({ Name = "Ramener toutes les mini-fenêtres", Favorite = false,
+		Callback = function() Library:AttachAllBlocks() end })
 
 	-- ───────────── Trou noir & fond ─────────────
 	local H = tab:CreateBlock({ Name = "Trou noir & fond", Side = "Left", Collapsed = true })
@@ -11182,6 +11974,9 @@ function Library:CreateWindow(cfg)
 	local curPos, tgtPos = center, nil
 	local curSize, tgtSize = Vector2.new(W, H), nil
 	local lastSize = Vector2.new(W, H)
+	-- Taille « dépliée » de référence : jamais déduite d'une taille intermédiaire d'animation.
+	-- Elle ne change que par un vrai redimensionnement, ApplyLayout, Reset ou SetColumns.
+	local fullSize = Vector2.new(W, H)
 	local rsDir = Vector2.new(0, 0)   -- bord fixe lors d'un redimensionnement (0 = centre, 1 = haut/gauche fixe, -1 = bas/droite fixe)
 	local rsSmooth = false            -- true = animation lissée (réduction, reset), false = suit directement le curseur
 	local collapsed, preSize = false, nil
@@ -11212,6 +12007,8 @@ function Library:CreateWindow(cfg)
 		if tgtPos then tgtPos = tgtPos + shift end
 		lastSize = ns
 		main.Size = UDim2.fromOffset(nw, nh)
+		-- taille finale (aucune animation lissée en cours) et fenêtre dépliée : c'est la nouvelle taille de référence
+		if not collapsed and not tgtSize then fullSize = ns end
 		return true
 	end
 	local persistReady = false
@@ -11225,9 +12022,9 @@ function Library:CreateWindow(cfg)
 			p = p + (tgtSize - lastSize) * scaleBase * rsDir / 2
 			sz = tgtSize
 		end
-		if collapsed and preSize then
-			p = Vector2.new(p.X, p.Y + (preSize.Y - sz.Y) * scaleBase / 2)
-			sz = preSize
+		if collapsed then
+			p = Vector2.new(p.X, p.Y + (fullSize.Y - sz.Y) * scaleBase / 2)
+			sz = fullSize
 		end
 		Library.Flags["__window"] = {
 			cx = p.X / v.X, cy = p.Y / v.Y,
@@ -11603,10 +12400,7 @@ function Library:CreateWindow(cfg)
 		local sz = Vector2.new(main.Size.X.Offset, main.Size.Y.Offset)
 		-- Un dépliage est encore en cours : la vraie taille est sa cible, pas la taille intermédiaire
 		-- (sinon la fenêtre se « rapetisse » toute seule à la réouverture).
-		local fullSz = sz
-		if v and tgtSize and tgtSize.Y > 60 then fullSz = tgtSize
-		elseif v and sz.Y <= 60 and preSize then fullSz = preSize end
-		fullSz = Vector2.new(math.max(fullSz.X, minW), math.max(fullSz.Y, minH))
+		local fullSz = Vector2.new(math.max(fullSize.X, minW), math.max(fullSize.Y, minH))
 		curSize, lastSize, rsDir, rsSmooth = sz, sz, Vector2.new(0, 1), true
 		if v then
 			preSize = fullSz
@@ -11616,7 +12410,7 @@ function Library:CreateWindow(cfg)
 			end)
 		else
 			for _, p in ipairs(parts) do p.Visible = true end
-			local back = preSize or Vector2.new(W0, H0)
+			local back = fullSize
 			tgtSize = Vector2.new(math.max(back.X, minW), math.max(back.Y, minH))
 		end
 		for _, h in ipairs(handles) do h.Visible = not v end
@@ -11638,6 +12432,7 @@ function Library:CreateWindow(cfg)
 		local nh = evenSize(math.clamp(tonumber(d.h) or H0, minH, math.max(minH, v.Y / scaleBase - 10)))
 		tgtSize, tgtPos = nil, nil
 		main.Size = UDim2.fromOffset(nw, nh)
+		fullSize = Vector2.new(nw, nh)
 		lastSize, curSize = Vector2.new(nw, nh), Vector2.new(nw, nh)
 		curPos = clampCenter(Vector2.new((tonumber(d.cx) or 0.5) * v.X, (tonumber(d.cy) or 0.5) * v.Y))
 		setMainPos()
@@ -11681,6 +12476,7 @@ function Library:CreateWindow(cfg)
 			local nw = evenSize(minW)
 			if collapsed and preSize then
 				preSize = Vector2.new(nw, preSize.Y)
+				fullSize = Vector2.new(nw, fullSize.Y)
 			else
 				local h = main.Size.Y.Offset
 				curSize = Vector2.new(main.Size.X.Offset, h)
@@ -11723,6 +12519,7 @@ function Library:CreateWindow(cfg)
 		main.Size = UDim2.fromOffset(nw, h)
 		curSize, lastSize = Vector2.new(nw, h), Vector2.new(nw, h)
 		W0 = math.max(W0, nw)
+		fullSize = Vector2.new(nw, h)
 		local c2 = clampCenter(curPos)
 		if c2 ~= curPos then curPos = c2; setMainPos() end
 	end
@@ -11853,6 +12650,7 @@ function Library:CreateWindow(cfg)
 		v = v and true or false
 		if v == self.Open then return end
 		self.Open = v
+		if Library._floatsVisible then pcall(Library._floatsVisible, v) end
 		if not Library._quietWin then uiSnd(v and "winopen" or "winclose") end
 		if Library._ddKeyClose then pcall(Library._ddKeyClose) end
 		if Library._hudRefresh then Library._hudRefresh() end
@@ -11875,6 +12673,19 @@ function Library:CreateWindow(cfg)
 		end
 		if v then
 			main.Visible = true
+			if not collapsed and not (tgtSize and rsSmooth) then
+				local vpn = viewport()
+				local keep = fullSize
+				local fs = Vector2.new(math.min(fullSize.X, math.max(minW, vpn.X / scaleBase - 10)),
+					math.min(fullSize.Y, math.max(minH, vpn.Y / scaleBase - 10)))
+				tgtSize, rsDir, rsSmooth = nil, Vector2.new(0, 0), false
+				applySize(fs)
+				fullSize = keep
+				curSize = lastSize
+				curPos = clampCenter(tgtPos or curPos)
+				tgtPos = nil
+				setMainPos()
+			end
 			if noAnim then
 				uiScale.Scale = scaleBase
 				if useCanvas then main.GroupTransparency = 0 end
@@ -12207,6 +13018,23 @@ function Library:CreateWindow(cfg)
 		Set = function(_, d) Library:_setBlockLayout(d) end,
 	}
 
+	Library.AppName = tostring(cfg.Title or "Ui-Lib")
+	if cfg.Version then Library.Version = tostring(cfg.Version) end
+	Library.Items["ui.gradient"] = {
+		Get = function() return Library:_gradientData() end,
+		Set = function(_, d) if type(d) == "table" then Library:SetGradient(d) end end,
+	}
+	Library:SetGradient()
+	win._noSelect = true
+	if cfg.ChangeLog ~= false then
+		local okc, errc = pcall(function() win:CreateChangelogTab(cfg.ChangeLogName or "Change-Log", cfg.ChangeLogIcon) end)
+		if not okc then warn("[Ui-Lib] Onglet Change-Log : " .. tostring(errc)) end
+	end
+	if cfg.ThemeEditor ~= false then
+		local okt, errt = pcall(function() win:CreateThemeEditorTab(cfg.ThemeEditorName or "Éditeur de thème", cfg.ThemeEditorIcon) end)
+		if not okt then warn("[Ui-Lib] Éditeur de thème : " .. tostring(errt)) end
+	end
+	win._noSelect = nil
 	if cfg.Settings ~= false then
 		win._noSelect = true
 		local ok, err = pcall(function() win:CreateSettingsTab(cfg.SettingsName or "Réglages", cfg.SettingsIcon, true) end)
@@ -12283,6 +13111,8 @@ function Library:Destroy()
 	table.clear(Library.FavStars)
 	table.clear(Library.Defaults)
 	Library._titleGrad = nil
+	Library.Floats = {}
+	Library._gradFrame, Library._gradObj, Library._onColors = nil, nil, nil
 	tipLabel, tipShown = nil, false
 	table.clear(styled)
 	blurToken += 1
