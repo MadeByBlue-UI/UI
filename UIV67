@@ -12966,11 +12966,14 @@ function Library:CreateWindow(cfg)
 	foldBtn.MouseButton1Click:Connect(function()
 		local tab = win.Current
 		if not tab then return end
+		-- avec des sous-onglets, les blocs sont dans la page (sous-onglet) affichée, pas dans tab.Blocks :
+		-- on agit sur la page courante
+		local scope = tab.CurrentSub or tab
 		local anyOpen = false
-		for _, b in ipairs(tab.Blocks) do
+		for _, b in ipairs(scope.Blocks) do
 			if b._isCollapsed and not b._isCollapsed() then anyOpen = true break end
 		end
-		tab:CollapseAll(anyOpen)
+		for _, b in ipairs(scope.Blocks) do b:SetCollapsed(anyOpen) end
 	end)
 
 	-- ------------------------------------------------------------------
