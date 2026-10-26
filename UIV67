@@ -4049,8 +4049,8 @@ function Block:CreateSection(text)
 	if type(text) == "table" then text = text.Name or text.Text end
 	local f = new("Frame", { Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1 }, self.Body)
 	local l = label(f, string.upper(tostring(text or "")), 11, {
-		Size = UDim2.new(1, 0, 1, -4), Font = F_BOLD, TextColor3 = T.ElementAccent,
-		TextYAlignment = Enum.TextYAlignment.Bottom, Position = UDim2.new(0, 4, 0, 0),
+		Size = UDim2.new(1, -8, 0, 22), Font = F_BOLD, TextColor3 = T.ElementAccent,
+		TextYAlignment = Enum.TextYAlignment.Bottom, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 4, 0, 11),
 	})
 	fadeLine(f, { Position = UDim2.new(0, 0, 1, -1), Size = UDim2.new(1, 0, 0, 1) })
 	local e = self:_reg(f, text)
@@ -8383,15 +8383,10 @@ function Tab:CreateBlock(o)
 	local arrow = label(head, ">", 13, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -20, 0.5, 0),
 		Size = UDim2.new(0, 16, 1, 0), TextXAlignment = CENTER, Font = F_BOLD, TextColor3 = T.ElementAccent, Rotation = 90 })
 
-	-- Effet d'agrandissement au survol de l'en-tête (ne touche pas à la mise en page : UIScale sur le texte et la flèche)
-	local nameScale = new("UIScale", { Scale = 1 }, nameLbl)
-	local arrowScale = new("UIScale", { Scale = 1 }, arrow)
 	new("UICorner", { CornerRadius = UDim.new(0, 10) }, head)
 	head.BackgroundColor3 = T.Accent
 	local function hoverFx(on)
 		if Library.LayoutEdit then on = false end
-		tween(nameScale, { Scale = on and 1.18 or 1 }, on and 0.25 or 0.3, Enum.EasingStyle.Back)
-		tween(arrowScale, { Scale = on and 1.5 or 1 }, on and 0.25 or 0.3, Enum.EasingStyle.Back)
 		tween(head, { BackgroundTransparency = on and 0.9 or 1 }, 0.2)
 		tween(nameLbl, { TextColor3 = on and T.Text or T.Text }, 0.2)
 		tween(arrow, { TextColor3 = on and T.Text or T.ElementAccent }, 0.2)
@@ -8410,29 +8405,36 @@ function Tab:CreateBlock(o)
 
 	local flagKey = "__block:" .. tostring(self.Name or "Tab") .. "/" .. tostring(o.Name or "Block")
 	local collapsed = false
+	local foldGen, foldTween = 0, nil   -- jeton + tween en cours : évite les animations qui se battent quand on spamme
 	local function setCollapsed(c)
 		if c == collapsed then return end
 		collapsed = c
+		foldGen += 1
+		local gen = foldGen
 		Library.Flags[flagKey] = c
 		tween(arrow, { Rotation = c and 0 or 90 }, 0.3)
 		Library._busyUntil = os.clock() + 0.45
 		local sc = pxScale()
-		-- hauteur cible mesurée via le layout (14 = padding haut 6 + bas 8), fiable même si le bloc est replié
+		-- 1) on coupe l'animation précédente et on part de la hauteur RÉELLEMENT affichée
+		if foldTween then pcall(function() foldTween:Cancel() end) foldTween = nil end
+		local cur = clip.AbsoluteSize.Y / sc
+		-- 2) hauteur cible mesurée via le layout (14 = padding haut 6 + bas 8)
 		local h = lay.AbsoluteContentSize.Y / sc + 14
-		local fullyOpen = clip.AutomaticSize ~= AN
 		clip.AutomaticSize = AN
-		if c then
-			if fullyOpen then clip.Size = UDim2.new(1, 0, 0, h) end
-			tween(clip, { Size = UDim2.new(1, 0, 0, 0) }, 0.36)
-		else
-			local tw = tween(clip, { Size = UDim2.new(1, 0, 0, h) }, 0.36)
-			tw.Completed:Connect(function(state)
-				if state == Enum.PlaybackState.Completed and not collapsed then
-					clip.AutomaticSize = AY
-					clip.Size = UDim2.new(1, 0, 0, 0)
-				end
-			end)
-		end
+		clip.Size = UDim2.new(1, 0, 0, math.clamp(cur, 0, h))
+		local tw = tween(clip, { Size = UDim2.new(1, 0, 0, c and 0 or h) }, 0.36)
+		foldTween = tw
+		tw.Completed:Connect(function(state)
+			-- on ignore tout tween périmé (un clic plus récent a pris le relais)
+			if gen ~= foldGen or state ~= Enum.PlaybackState.Completed then return end
+			foldTween = nil
+			if c then
+				clip.Size = UDim2.new(1, 0, 0, 0)
+			else
+				clip.AutomaticSize = AY
+				clip.Size = UDim2.new(1, 0, 0, 0)
+			end
+		end)
 	end
 	head.MouseButton1Click:Connect(function()
 		if Library.LayoutEdit then return end   -- en mode édition l'en-tête sert à déplacer le bloc
@@ -8760,7 +8762,9 @@ function Tab:CreateSubTabs(list)
 	for idx, d in ipairs(list or {}) do
 		local name = type(d) == "table" and tostring(d.Name or d[1] or ("Page " .. idx)) or tostring(d)
 		local icon = type(d) == "table" and d.Icon or nil
-		local pill = new("TextButton", { Size = UDim2.new(0, 0, 0, 24), AutomaticSize = Enum.AutomaticSize.X,
+		-- largeur FIXE calculée depuis le texte (pas d'AutomaticSize : l'onde du clic, un enfant de la pastille,
+		-- agrandissait la pastille puis l'onde suivante était mesurée sur la pastille agrandie -> croissance infinie)
+		local pill = new("TextButton", { Size = UDim2.new(0, 60, 0, 24),
 			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.94, Text = "", AutoButtonColor = false,
 			BorderSizePixel = 0, LayoutOrder = idx, ClipsDescendants = true }, strip)
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, pill)
@@ -8772,6 +8776,12 @@ function Tab:CreateSubTabs(list)
 		end
 		local pl = new("TextLabel", { Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X,
 			BackgroundTransparency = 1, Text = name, TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED }, pill)
+		do
+			local padL = icon and 28 or 13
+			local function fit() pill.Size = UDim2.new(0, math.ceil(pl.TextBounds.X) + padL + 13, 0, 24) end
+			fit()
+			pl:GetPropertyChangedSignal("TextBounds"):Connect(fit)
+		end
 
 		local page = new("Frame", { Name = "Sub_" .. name, Position = UDim2.new(0, 0, 0, 36), Size = UDim2.new(1, 0, 1, -36),
 			BackgroundTransparency = 1, Visible = false }, parent.Page)
@@ -8792,10 +8802,13 @@ function Tab:CreateSubTabs(list)
 			if win and win.Current ~= parent then parent:Select() end
 			select(sub)
 		end
+		local pillScale = new("UIScale", { Scale = 1 }, pill)   -- grossissement au survol (n'affecte pas la mise en page)
 		pill.MouseEnter:Connect(function()
+			tween(pillScale, { Scale = 1.12 }, 0.25, Enum.EasingStyle.Back)
 			if parent.CurrentSub ~= sub then uiSnd("tabhover") tween(pill, { BackgroundTransparency = 0.88 }, 0.15) end
 		end)
 		pill.MouseLeave:Connect(function()
+			tween(pillScale, { Scale = 1 }, 0.3, Enum.EasingStyle.Back)
 			if parent.CurrentSub ~= sub then tween(pill, { BackgroundTransparency = 0.94 }, 0.2) end
 		end)
 		pill.MouseButton1Click:Connect(function()
