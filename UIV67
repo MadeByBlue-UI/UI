@@ -8378,10 +8378,26 @@ function Tab:CreateBlock(o)
 			Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, 12, 0.5, -8) }, head)
 		x = 34
 	end
-	label(head, o.Name or "Block", 13, { Position = UDim2.new(0, x, 0, 0), Size = UDim2.new(1, -x - 58, 1, 0),
-		Font = F_BOLD })
-	local arrow = label(head, ">", 13, { Position = UDim2.new(1, -28, 0, 0), Size = UDim2.new(0, 16, 1, 0),
-		TextXAlignment = CENTER, Font = F_BOLD, TextColor3 = T.ElementAccent, Rotation = 90 })
+	local nameLbl = label(head, o.Name or "Block", 13, { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, x, 0.5, 0),
+		Size = UDim2.new(1, -x - 58, 1, 0), Font = F_BOLD })
+	local arrow = label(head, ">", 13, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, -20, 0.5, 0),
+		Size = UDim2.new(0, 16, 1, 0), TextXAlignment = CENTER, Font = F_BOLD, TextColor3 = T.ElementAccent, Rotation = 90 })
+
+	-- Effet d'agrandissement au survol de l'en-tête (ne touche pas à la mise en page : UIScale sur le texte et la flèche)
+	local nameScale = new("UIScale", { Scale = 1 }, nameLbl)
+	local arrowScale = new("UIScale", { Scale = 1 }, arrow)
+	new("UICorner", { CornerRadius = UDim.new(0, 10) }, head)
+	head.BackgroundColor3 = T.Accent
+	local function hoverFx(on)
+		if Library.LayoutEdit then on = false end
+		tween(nameScale, { Scale = on and 1.18 or 1 }, on and 0.25 or 0.3, Enum.EasingStyle.Back)
+		tween(arrowScale, { Scale = on and 1.5 or 1 }, on and 0.25 or 0.3, Enum.EasingStyle.Back)
+		tween(head, { BackgroundTransparency = on and 0.9 or 1 }, 0.2)
+		tween(nameLbl, { TextColor3 = on and T.Text or T.Text }, 0.2)
+		tween(arrow, { TextColor3 = on and T.Text or T.ElementAccent }, 0.2)
+	end
+	head.MouseEnter:Connect(function() hoverFx(true) end)
+	head.MouseLeave:Connect(function() hoverFx(false) end)
 	fadeLine(head, { Position = UDim2.new(0, 10, 1, -1), Size = UDim2.new(1, -20, 0, 1) })
 
 	-- Corps repliable (animé)
@@ -8401,11 +8417,8 @@ function Tab:CreateBlock(o)
 		tween(arrow, { Rotation = c and 0 or 90 }, 0.3)
 		Library._busyUntil = os.clock() + 0.45
 		local sc = pxScale()
-		local h = body.AbsoluteSize.Y / sc
-		if h < 1 then
-			-- bloc replié : AbsoluteSize peut valoir 0, on mesure via le layout (14 = padding haut 6 + bas 8)
-			h = lay.AbsoluteContentSize.Y / sc + 14
-		end
+		-- hauteur cible mesurée via le layout (14 = padding haut 6 + bas 8), fiable même si le bloc est replié
+		local h = lay.AbsoluteContentSize.Y / sc + 14
 		local fullyOpen = clip.AutomaticSize ~= AN
 		clip.AutomaticSize = AN
 		if c then
@@ -8592,7 +8605,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 	local function newColumn()
 		local sf = new("ScrollingFrame", {
 			Size = UDim2.new(1, 0, 1, 0), Visible = not page:GetAttribute("HasSubs"),
-			BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageColor3 = T.Accent,
+			BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 2, VerticalScrollBarInset = Enum.ScrollBarInset.Always, HorizontalScrollBarInset = Enum.ScrollBarInset.None, ScrollBarImageColor3 = T.Accent,
 			ScrollBarImageTransparency = 0.5, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY,
 		}, page)
 		new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, sf)
@@ -8764,7 +8777,7 @@ function Tab:CreateSubTabs(list)
 			BackgroundTransparency = 1, Visible = false }, parent.Page)
 		local function newColumn()
 			local sf = new("ScrollingFrame", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
-				ScrollBarThickness = 2, ScrollBarImageColor3 = T.Accent, ScrollBarImageTransparency = 0.5,
+				ScrollBarThickness = 2, VerticalScrollBarInset = Enum.ScrollBarInset.Always, HorizontalScrollBarInset = Enum.ScrollBarInset.None, ScrollBarImageColor3 = T.Accent, ScrollBarImageTransparency = 0.5,
 				CanvasSize = UDim2.new(), AutomaticCanvasSize = AY }, page)
 			new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, sf)
 			new("UIPadding", { PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 10), PaddingTop = UDim.new(0, 2) }, sf)
