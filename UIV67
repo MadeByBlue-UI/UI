@@ -7549,7 +7549,32 @@ function Library:SetFavorite(key, on)
 	if star and star.Parent then tween(star, { TextTransparency = on and 0.05 or 0.8 }, 0.2) end
 	Library.Flags["__favorites"] = favList()
 	local w = Library.Window
-	if w and w.FavTab and w.Current == w.FavTab and w.FavTab.OnSelect then w.FavTab.OnSelect() end
+	local ft = w and w.FavTab
+	if ft and w.Current == ft and ft.OnSelect then
+		local rows = ft._favRows and ft._favRows[key]
+		if not on and rows and Library.Animations then
+			-- la ligne se réduit puis disparaît, ensuite seulement on reconstruit l'onglet
+			ft._favGen = (ft._favGen or 0) + 1
+			local g = ft._favGen
+			local any = false
+			for _, fr in ipairs(rows) do
+				if fr.Parent and fr.AutomaticSize == Enum.AutomaticSize.None then
+					any = true
+					fr.ClipsDescendants = true
+					tween(fr, { Size = UDim2.new(fr.Size.X.Scale, fr.Size.X.Offset, 0, 0) }, 0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+				end
+			end
+			if any then
+				task.delay(0.24 / math.max(Library.AnimSpeed or 1, 0.05), function()
+					if ft._favGen == g and w.Current == ft and ft.OnSelect then ft.OnSelect() end
+				end)
+				return
+			end
+		end
+		ft._favGen = (ft._favGen or 0) + 1
+		if on then ft._animIn = ft._animIn or {} ft._animIn[key] = true end
+		ft.OnSelect()
+	end
 end
 
 local function registerFavItem()
@@ -9168,6 +9193,7 @@ function Block:CreatePreview3D(o)
 		return out
 	end
 
+	local jumpPending, jumpT0, jumpApplied = false, nil, 0   -- saut (voir plus bas)
 	local function finishModel()
 		-- état d'origine de chaque pièce (pour les chams) + sol + Highlight
 		bodyParts, decals, hides = {}, {}, {}
@@ -9186,6 +9212,7 @@ function Block:CreatePreview3D(o)
 		floor.CFrame = CFrame.new(fit.focus.X, fit.focus.Y - fit.size.Y / 2 - 0.05, fit.focus.Z) * CFrame.Angles(0, 0, math.pi / 2)
 		if hl then hl.Adornee = rig end
 		dirty = true
+		jumpApplied = 0
 	end
 
 	local function clearRig()
@@ -9513,6 +9540,19 @@ function Block:CreatePreview3D(o)
 
 	-- ---------------------------------------------------------------- boucle de rendu
 	local t, pollT, shownT, shown, idleAcc = 0, 0, -1, true, 0
+	-- petit saut « à la Mario » (item.Jump) : le personnage monte vite puis redescend, une fois la lib chargée et l'aperçu visible
+	local JUMP_H, JUMP_DUR = 2.1, 0.62
+	local function jumpOffset()
+		if not jumpT0 then return 0 end
+		local u = (os.clock() - jumpT0) * math.max(Library.AnimSpeed or 1, 0.05) / JUMP_DUR
+		if u >= 1 then return 0, true end
+		if u < 0.4 then
+			local a = u / 0.4
+			return JUMP_H * (1 - (1 - a) * (1 - a))      -- montée rapide
+		end
+		local a = (u - 0.4) / 0.6
+		return JUMP_H * (1 - a * a)                       -- descente plus flottante
+	end
 	local function isShown()
 		local p = vp
 		while p and p:IsA("GuiObject") do
@@ -9536,7 +9576,21 @@ function Block:CreatePreview3D(o)
 			yaw += (((YAW0 - yaw + math.pi) % (2 * math.pi)) - math.pi) * k
 			pitch += (PITCH0 - pitch) * k
 		end
-		if fit.animated then poseFn(opt.Animate and math.sin(t * 3) * 0.55 or 0, t) end
+		if fit.animated then
+			poseFn(opt.Animate and math.sin(t * 3) * 0.55 or 0, t)
+			jumpApplied = 0   -- le rig factice est reposé en absolu à chaque image
+		end
+		do   -- saut : on décale toutes les pièces de la différence avec l'image précédente
+			local y, finished = jumpOffset()
+			if finished then jumpT0, y = nil, 0 end
+			local dy = y - jumpApplied
+			if dy ~= 0 then
+				jumpApplied = y
+				for _, e in ipairs(bodyParts) do
+					if e.p.Parent then e.p.CFrame = e.p.CFrame + Vector3.new(0, dy, 0) end
+				end
+			end
+		end
 
 		local tanH = math.tan(math.rad(cam.FieldOfView) / 2)
 		local asp = W / H
@@ -9650,8 +9704,11 @@ function Block:CreatePreview3D(o)
 			shown = isShown()
 		end
 		if not shown then return end
+		if jumpPending and Library._fullyLoaded then
+			jumpPending, jumpT0 = false, os.clock()
+		end
 		-- fenêtre Roblox en arrière-plan : on ne rend qu'à ~4 images/s (le temps écoulé est cumulé, l'animation reste juste)
-		if not pvFocused then
+		if not pvFocused and not jumpT0 then
 			idleAcc += dt
 			if idleAcc < 1 / math.max(tonumber(o.IdleFPS) or tonumber(Library.PreviewIdleFPS) or 4, 1) then return end
 			dt, idleAcc = idleAcc, 0
@@ -9752,6 +9809,7 @@ function Block:CreatePreview3D(o)
 		if titleLbl then titleLbl.Text = s end
 	end
 	item.Refresh = function() return refresh() end
+	item.Jump = function() jumpPending = true end   -- saut à la Mario (attend que la lib soit chargée et l'aperçu visible)
 	item.SetTarget = function(...)
 		local v = unself(item, ...)
 		if v == true then v = LP end
@@ -9938,9 +9996,16 @@ end
 -- ============================================================================
 -- V5 : HISTORIQUE DES VERSIONS (affiché dans l'onglet Home depuis la V5.3)
 -- ============================================================================
-Library.Version = "5.6.0"
+Library.Version = "5.9.0"
 Library.AppName = "Ui-Lib"
 Library.Changelog = {
+	{ Version = "5.9.0", Date = "2026-10-27", Title = "Fluidité", Notes = {
+		"+ Favoris : la ligne s'agrandit à l'ajout et se réduit avant de disparaître au retrait.",
+		"+ Bouton « = » et CollapseAll / ExpandAll : les blocs se replient / se déplient en cascade, avec un petit décalage.",
+		"+ Graphiques FPS et ping : la courbe glisse doucement à chaque nouvel échantillon au lieu d'avancer par à-coups.",
+		"+ Redimensionnement : la fenêtre suit le bord avec un lissage court, le contenu s'adapte en continu pendant que tu tires.",
+		"+ Home : le bonhomme fait un petit saut à la Mario à chaque arrivée sur l'onglet (une fois la lib entièrement chargée).",
+	} },
 	{ Version = "5.6.0", Date = "2026-10-27", Title = "Home en sous-onglets", Notes = {
 		"Home est découpé en sous-onglets : Info (page de départ), Explication et Mises à jour.",
 		"Explication : présentation de ce que contient l'UI, aperçu de l'API et démos en direct des éléments (boutons, curseurs, listes, couleurs, tableau, notifications...).",
@@ -10125,17 +10190,42 @@ function Block:CreateGraph(o)
 	end
 	local data, dirty = {}, true
 	local item = {}
+	-- glissement : à chaque nouvel échantillon, la bande de barres est décalée d'une barre vers la droite puis revient à 0
+	local slideT0, slideDur = nil, 0.45
+	local slideConn
+	local function stopSlide()
+		if slideConn then slideConn:Disconnect() slideConn = nil end
+		for i = 1, samples do bars[i].Position = UDim2.new((i - 1) / samples, 0, 1, 0) end
+	end
+	local function startSlide()
+		if not Library.Animations then return end
+		slideT0 = os.clock()
+		if slideConn then return end
+		slideConn = RunService.Heartbeat:Connect(function()
+			if not plot.Parent then stopSlide() return end
+			local d = slideDur / math.max(Library.AnimSpeed or 1, 0.05)
+			local a = math.clamp((os.clock() - slideT0) / d, 0, 1)
+			local off = (1 - (1 - (1 - a) ^ 3)) / samples   -- ease-out : 1 barre -> 0
+			for i = 1, samples do
+				bars[i].Position = UDim2.new((i - 1) / samples + off, 0, 1, 0)
+			end
+			if a >= 1 then stopSlide() end
+		end)
+	end
 	item.Push = function(...)
 		local v = tonumber((unself(item, ...)))
 		if not v then return end
 		data[#data + 1] = v
-		if #data > samples then table.remove(data, 1) end
+		local full = #data > samples
+		if full then table.remove(data, 1) end
 		dirty = true
+		item._slidePending = full
 	end
 	item.Clear = function() data = {} dirty = true end
 	item.Flush = function()
 		if not dirty then return end
 		dirty = false
+		if item._slidePending then item._slidePending = false startSlide() end
 		local n = #data
 		local mx, mn, sum = -math.huge, math.huge, 0
 		for _, v in ipairs(data) do
@@ -10566,6 +10656,16 @@ function Window:CreateHomeTab(name, icon, cfg)
 	local pv = prof:CreatePreview3D({ Name = false, Height = 260,
 		Background = Color3.fromRGB(135, 206, 235), FloorColor = Color3.fromRGB(240, 248, 255), Yaw = 180, Pitch = -0.04,
 		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = true, AutoRotate = false, Wave = true, Animate = true } })
+	-- le bonhomme fait un petit saut à chaque arrivée sur Home > Info (une fois la lib entièrement chargée)
+	do
+		local prevSel = tab.OnSelect
+		tab.OnSelect = function(...)
+			if prevSel then prevSel(...) end
+			if tab.CurrentSub == subInfo or tab.CurrentSub == nil then pv.Jump() end
+		end
+		subInfo.OnShow = function() pv.Jump() end
+		pv.Jump()
+	end
 	prof:CreateButton({ Name = "Actualiser l'aperçu", Favorite = false, Callback = function() pv:Refresh() end })
 	prof:CreateStats({ Columns = 2, CellHeight = 46, Items = {
 		{ Id = "name", Name = "Pseudo", Value = (lp.DisplayName ~= lp.Name) and (lp.DisplayName .. " (@" .. lp.Name .. ")") or lp.Name, Size = 13 },
@@ -11002,8 +11102,32 @@ function Tab:_allBlocks()
 	end
 	return out
 end
+-- replie / déplie une liste de blocs en cascade (petit décalage entre chaque bloc, ordre d'affichage)
+function Library:_cascadeCollapse(blocks, c)
+	local list = {}
+	for _, b in ipairs(blocks) do list[#list + 1] = b end
+	table.sort(list, function(a, b)
+		local fa, fb = a.Frame, b.Frame
+		local ya = (fa and fa.Parent) and fa.AbsolutePosition.Y or 0
+		local yb = (fb and fb.Parent) and fb.AbsolutePosition.Y or 0
+		if ya ~= yb then return ya < yb end
+		return (a.Index or 0) < (b.Index or 0)
+	end)
+	Library._cascadeGen = (Library._cascadeGen or 0) + 1
+	local gen = Library._cascadeGen
+	local step = math.min(0.05, 0.4 / math.max(#list, 1)) / math.max(Library.AnimSpeed or 1, 0.05)
+	for i, b in ipairs(list) do
+		if not Library.Animations or i == 1 then
+			b:SetCollapsed(c)
+		else
+			task.delay((i - 1) * step, function()
+				if Library._cascadeGen == gen then b:SetCollapsed(c) end
+			end)
+		end
+	end
+end
 function Tab:CollapseAll(c)
-	for _, b in ipairs(self:_allBlocks()) do b:SetCollapsed(c ~= false) end
+	Library:_cascadeCollapse(self:_allBlocks(), c ~= false)
 end
 function Tab:ExpandAll() self:CollapseAll(false) end
 
@@ -11821,6 +11945,7 @@ function Tab:CreateSubTabs(list)
 			if s.PillIcon then tween(s.PillIcon, { ImageColor3 = on and T.Text or T.ElementAccent }, 0.25) end
 		end
 		parent.CurrentSub = sub
+		if sub.OnShow and prev ~= nil then pcall(sub.OnShow) end
 		moveIndicator(prev ~= nil)
 		Library._busyUntil = os.clock() + 0.5
 		if Library._openDD then Library._openDD(false) end
@@ -12195,6 +12320,9 @@ function Window:CreateFavoritesTab(name, icon)
 	end
 
 	local function rebuild()
+		tab._favRows = {}
+		local animIn = tab._animIn
+		tab._animIn = nil
 		tab:ClearBlocks()
 		local rb = tab:CreateBlock({ Name = "Récemment utilisés", Side = "Right" })
 		rb._noFav = true
@@ -12216,7 +12344,27 @@ function Window:CreateFavoritesTab(name, icon)
 			local ent = Library.FavEntries[k]
 			local group = tostring(ent.Tab) .. " · " .. tostring(ent.Block)
 			if group ~= last then blk:CreateSection(group) last = group end
+			local before = {}
+			for _, c in ipairs(blk.Body:GetChildren()) do before[c] = true end
 			proxy(blk, ent)
+			local rows = {}
+			for _, c in ipairs(blk.Body:GetChildren()) do
+				if c:IsA("GuiObject") and not before[c] then rows[#rows + 1] = c end
+			end
+			tab._favRows[k] = rows
+			if animIn and animIn[k] and Library.Animations then
+				for _, fr in ipairs(rows) do
+					if fr.AutomaticSize == Enum.AutomaticSize.None then
+						local full, oldClip = fr.Size, fr.ClipsDescendants
+						fr.ClipsDescendants = true
+						fr.Size = UDim2.new(full.X.Scale, full.X.Offset, 0, 0)
+						tween(fr, { Size = full }, 0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+						task.delay(0.34 / math.max(Library.AnimSpeed or 1, 0.05), function()
+							if fr.Parent then fr.ClipsDescendants = oldClip end
+						end)
+					end
+				end
+			end
 		end
 	end
 	tab.OnSelect = rebuild
@@ -15838,7 +15986,9 @@ function Library:CreateWindow(cfg)
 			lastSize = curSize
 			tgtSize = nil
 			rsDir = Vector2.new(dx, dy)
-			rsSmooth = false
+			-- la taille suit le curseur avec un lissage court : la fenêtre et son contenu (colonnes, textes, graphiques)
+			-- se redimensionnent en continu, image par image, au lieu de sauter d'un cran à l'autre
+			rsSmooth = Library.Animations and true or false
 			startDrag(function(p)
 				local d = (Vector2.new(p.X, p.Y) - start) / sc
 				local v = viewport()
@@ -16445,7 +16595,7 @@ function Library:CreateWindow(cfg)
 		for _, b in ipairs(scope.Blocks) do
 			if b._isCollapsed and not b._isCollapsed() then anyOpen = true break end
 		end
-		for _, b in ipairs(scope.Blocks) do b:SetCollapsed(anyOpen) end
+		Library:_cascadeCollapse(scope.Blocks, anyOpen)
 	end)
 
 	-- ------------------------------------------------------------------
@@ -16743,7 +16893,7 @@ function Library:CreateWindow(cfg)
 					curSize = tgtSize
 					tgtSize = nil
 				else
-					curSize = curSize + d * (1 - math.exp(-dt * 16))
+					curSize = curSize + d * (1 - math.exp(-dt * (activeDrag ~= nil and 32 or 16)))
 				end
 			else
 				curSize = tgtSize
@@ -16977,6 +17127,8 @@ function Library:CreateWindow(cfg)
 	-- réglages sauvegardés automatiquement : restaurés dès le lancement, puis surveillés
 	Library:LoadSettings()
 	Library._settingsReady = true
+	Library._fullyLoaded = false
+	task.delay(0.9, function() Library._fullyLoaded = true end)   -- tout est construit : le bonhomme de Home peut sauter
 	Library:_startSettingsWatcher(win)
 	Library:StartUpdateWatcher()
 	if cfg.AutoLoad ~= false then
