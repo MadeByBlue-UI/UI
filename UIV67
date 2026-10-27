@@ -339,7 +339,7 @@ local Library = {
 	Ripple            = true,      -- onde au clic
 	SpinSpeed         = 1,
 	HoleVisible       = true,
-	HolePos           = "TopRight",
+	HolePos           = "Center",
 	HoleScale         = 1,
 	FontFamily        = "Gotham",
 	Defaults          = {},
@@ -6786,6 +6786,117 @@ end
 -- ============================================================================
 local tipLabel, tipShown = nil, false   -- créés par CreateWindow
 
+-- Tooltip : apparaît en fondu, posé sous l'élément (collé à son bord droit, en bas à droite), ne suit plus la souris.
+-- Il reprend à chaque affichage le style courant (Standard / Verre / Givré / Mat / Néon), les couleurs du thème
+-- (Or, Violet...), la police et les coins du type d'interface (Classique / Éclipse / Carré).
+do
+	local tok = 0
+	local FADE_IN, FADE_OUT = 0.2, 0.14
+
+	local function skin()
+		local st = Library._tipStroke
+		local sq = Library.SquareMode == true
+		local neon = Library.StyleName == "Néon"
+		tipLabel.BackgroundColor3 = T.Second
+		tipLabel.TextColor3 = T.Text
+		tipLabel.Font = (Library.Fonts and Library.Fonts[1]) or F_REG
+		tipLabel.TextSize = math.max(8, math.floor(12 * (Library.FontScale or 1) + 0.5))
+		local cr = Library._tipCorner
+		if cr then cr.CornerRadius = UDim.new(0, sq and 0 or math.floor(7 * (Library.GlobalCornerValue or 10) / 10)) end
+		-- reflet de verre sur le fond
+		local fill = tipLabel:FindFirstChild("TipGlassFill")
+		if Sty.Glass then
+			if not fill then
+				fill = Instance.new("UIGradient")
+				fill.Name = "TipGlassFill"
+				fill.Rotation = 40
+				fill.Parent = tipLabel
+			end
+			fill.Color = ColorSequence.new(lighten(T.Second, 0.22), T.Second)
+			fill.Enabled = true
+		elseif fill then
+			fill.Enabled = false
+		end
+		if st then
+			st.Color = T.Accent
+			st.Thickness = neon and 1.6 or 1
+			local g = st:FindFirstChild("GlassGrad")
+			if Sty.Glass then
+				if not g then
+					g = Instance.new("UIGradient")
+					g.Name = "GlassGrad"
+					g.Rotation = 40
+					g.Transparency = GLASS_EDGE
+					g.Parent = st
+				end
+				g.Enabled = true
+			elseif g then
+				g.Enabled = false
+			end
+		end
+	end
+
+	local function targets()
+		local bg = (Sty.PanelTr or 0.1) * 0.6
+		local stroke = Sty.PanelStroke or 0.9
+		stroke = stroke >= 1 and 1 or math.min(stroke, 0.8)
+		return math.clamp(bg, 0, 0.4), stroke
+	end
+
+	function Library._tipShow(text, anchor)
+		if not tipLabel then return end
+		tok += 1
+		local my = tok
+		local st = Library._tipStroke
+		skin()
+		tipLabel.Text = tostring(text)
+		tipShown = true
+		if not tipLabel.Visible then   -- départ du fondu
+			tipLabel.BackgroundTransparency = 1
+			tipLabel.TextTransparency = 1
+			if st then st.Transparency = 1 end
+		end
+		tipLabel.Visible = true
+		task.spawn(function()
+			task.wait()   -- laisse la taille automatique se calculer, puis on pose le tooltip une bonne fois pour toutes
+			if tok ~= my or not tipLabel then return end
+			local v = viewport()
+			local sz = tipLabel.AbsoluteSize
+			local x, y
+			if anchor and anchor.Parent then
+				local ap, as = anchor.AbsolutePosition, anchor.AbsoluteSize
+				x = ap.X + as.X                 -- bord droit de l'élément
+				y = ap.Y + as.Y + 6             -- juste sous l'élément
+				if y + sz.Y > v.Y - 4 then y = ap.Y - sz.Y - 6 end   -- pas de place en bas : au-dessus
+			else
+				local m = UIS:GetMouseLocation()
+				x, y = m.X + sz.X * 0.5, m.Y + 18
+				if y + sz.Y > v.Y - 4 then y = m.Y - sz.Y - 10 end
+			end
+			x = math.clamp(x, sz.X + 4, math.max(v.X - 4, sz.X + 4))
+			y = math.max(4, y)
+			tipLabel.AnchorPoint = Vector2.new(1, 0)
+			tipLabel.Position = UDim2.fromOffset(x, y)
+			local bg, sTr = targets()
+			tween(tipLabel, { BackgroundTransparency = bg, TextTransparency = 0 }, FADE_IN, LINEAR)
+			if st then tween(st, { Transparency = sTr }, FADE_IN, LINEAR) end
+		end)
+	end
+
+	function Library._tipHide()
+		tok += 1
+		tipShown = false
+		if not (tipLabel and tipLabel.Visible) then return end
+		local my = tok
+		local st = Library._tipStroke
+		tween(tipLabel, { BackgroundTransparency = 1, TextTransparency = 1 }, FADE_OUT, LINEAR)
+		if st then tween(st, { Transparency = 1 }, FADE_OUT, LINEAR) end
+		task.delay(FADE_OUT + 0.04, function()
+			if tok == my and tipLabel then tipLabel.Visible = false end
+		end)
+	end
+end
+
 local function attachTip(frame, text)
 	text = tostring(text)
 	local token = 0
@@ -6794,15 +6905,12 @@ local function attachTip(frame, text)
 		local my = token
 		task.delay(0.4, function()
 			if token ~= my or not tipLabel then return end
-			tipLabel.Text = text
-			tipShown = true
-			tipLabel.Visible = true
+			Library._tipShow(text, frame)
 		end)
 	end)
 	frame.MouseLeave:Connect(function()
 		token += 1
-		tipShown = false
-		if tipLabel then tipLabel.Visible = false end
+		Library._tipHide()
 	end)
 end
 
@@ -8532,11 +8640,39 @@ function Block:CreatePreview3D(o)
 		if charSrc:IsA("Player") then return charSrc.Character end
 		return charSrc
 	end
+	-- Avatar Roblox du joueur (celui de son compte, pas un « noob ») : récupéré par UserId puis mis en cache.
+	-- Pendant le chargement on montre son personnage en jeu ; le faux rig R6 ne sert qu'en tout dernier recours.
+	local avatarTpl, avatarBusy
+	local function fetchAvatar()
+		if avatarTpl and avatarTpl.Parent == nil then return avatarTpl end
+		local ok, m = pcall(function() return Players:CreateHumanoidModelFromUserId(LP.UserId) end)
+		if not (ok and typeof(m) == "Instance") then
+			ok, m = pcall(function()
+				local desc = Players:GetHumanoidDescriptionFromUserId(LP.UserId)
+				return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
+			end)
+		end
+		if ok and typeof(m) == "Instance" and m:IsA("Model") then
+			avatarTpl = m
+			return m
+		end
+		return nil
+	end
 	local function refresh()
+		local wantAvatar = (charSrc == LP) and o.Avatar ~= false
+		if wantAvatar and avatarTpl and buildCharacter(avatarTpl) then return true end
 		local src = resolveSource()
-		if src and src:IsA("Model") and buildCharacter(src) then return true end
-		buildMock()
-		return false
+		local built = src and src:IsA("Model") and buildCharacter(src)
+		if not built then buildMock() end
+		if wantAvatar and not avatarTpl and not avatarBusy then
+			avatarBusy = true
+			task.spawn(function()
+				local m = fetchAvatar()
+				avatarBusy = false
+				if m and vp.Parent then buildCharacter(m) end
+			end)
+		end
+		return built and true or false
 	end
 
 	local function applyAppearance()
@@ -9320,7 +9456,7 @@ end
 function Window:CreateHomeTab(name, icon, cfg)
 	cfg = cfg or {}
 	local win = self
-	local tab = self:CreateTab(name or "Home", nil, icon)
+	local tab = self:CreateTab(name or "Home", nil, (icon and icon ~= "") and icon or "rbxassetid://13060262529")   -- icône maison par défaut
 	tab.Button.LayoutOrder = 0   -- toujours en premier
 	self._homeTab = tab
 	Library.ShowChangelog = cfg.ChangeLog ~= false
@@ -10487,8 +10623,13 @@ function Window:CreateTab(name, _, icon, parentTab)
 	local x0 = 12 + depth * 10        -- retrait des onglets enfants
 	local x = x0
 	if icon and icon ~= "" then
-		new("ImageLabel", { BackgroundTransparency = 1, Image = icon, ImageColor3 = T.Text,
-			Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, x0, 0.5, -8) }, btn)
+		if string.sub(icon, 1, 6) == "glyph:" then   -- icône dessinée par un caractère (ex. "glyph:⌂")
+			label(btn, string.sub(icon, 7), 17, { Font = Enum.Font.GothamBold, TextXAlignment = CENTER, TextTruncate = Enum.TextTruncate.None,
+				Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, x0, 0.5, -8) })
+		else
+			new("ImageLabel", { BackgroundTransparency = 1, Image = icon, ImageColor3 = T.Text,
+				Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, x0, 0.5, -8) }, btn)
+		end
 		x = x0 + 22
 	end
 	local txt = label(btn, name or "Tab", parentTab and 12 or 13, { Position = UDim2.new(0, x, 0, 0), Size = UDim2.new(1, -x - 14, 1, 0),
@@ -14253,16 +14394,13 @@ function Library:CreateWindow(cfg)
 		task.delay(0.4, function()
 			if undoTok ~= my or not tipLabel then return end
 			local n = #Library.UndoStack
-			tipLabel.Text = n > 0 and ("Annuler : " .. tostring(Library.UndoStack[n].Label) .. "  (Ctrl+Z)") or "Rien à annuler"
-			tipShown = true
-			tipLabel.Visible = true
+			Library._tipShow(n > 0 and ("Annuler : " .. tostring(Library.UndoStack[n].Label) .. "  (Ctrl+Z)") or "Rien à annuler", undoBtn)
 		end)
 	end)
 	undoBtn.MouseLeave:Connect(function()
 		tween(undoBtn, { BackgroundTransparency = 0.93 }, 0.25)
 		undoTok += 1
-		tipShown = false
-		if tipLabel then tipLabel.Visible = false end
+		Library._tipHide()
 	end)
 	undoBtn.MouseButton1Click:Connect(function()
 		uiSnd("click")
@@ -14272,11 +14410,12 @@ function Library:CreateWindow(cfg)
 
 	-- Tooltip global
 	tipLabel = new("TextLabel", { Name = "Tooltip", AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.fromOffset(0, 0),
-		BackgroundColor3 = T.Second, BackgroundTransparency = 0.04, TextColor3 = T.Text, TextSize = 12, Font = F_REG,
-		TextWrapped = true, TextXAlignment = LEFT, Visible = false, ZIndex = 500, BorderSizePixel = 0 }, gui)
+		BackgroundColor3 = T.Second, BackgroundTransparency = 1, TextTransparency = 1, TextColor3 = T.Text, TextSize = 12, Font = F_REG,
+		TextWrapped = true, TextXAlignment = LEFT, Visible = false, ZIndex = 500, BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(1, 0) }, gui)
 	tipShown = false
-	corner(tipLabel, 7)
-	stroke(tipLabel, 0.8)
+	Library._tipCorner = corner(tipLabel, 7)
+	Library._tipStroke = stroke(tipLabel, 1)
 	new("UIPadding", { PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5),
 		PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 9) }, tipLabel)
 	new("UISizeConstraint", { MaxSize = Vector2.new(260, 400) }, tipLabel)
@@ -15245,6 +15384,7 @@ function Library:CreateWindow(cfg)
 	function win:GetStars() return Library.StarCount end
 	function win:RefreshSky() if refreshSky then refreshSky() end end
 	main:GetPropertyChangedSignal("Visible"):Connect(function()
+		if not main.Visible and Library._tipHide then Library._tipHide() end
 		win:RefreshShape()
 		win:ApplyTitle()
 	end)
@@ -15448,15 +15588,6 @@ function Library:CreateWindow(cfg)
 			dirty = true
 		end
 		if dirty then setMainPos() end
-		if tipShown and tipLabel then
-			local m = UIS:GetMouseLocation()
-			local v = viewport()
-			local sz = tipLabel.AbsoluteSize
-			local x, y = m.X + 14, m.Y + 18
-			if x + sz.X > v.X - 4 then x = m.X - sz.X - 10 end
-			if y + sz.Y > v.Y - 4 then y = m.Y - sz.Y - 10 end
-			tipLabel.Position = UDim2.fromOffset(x, y)
-		end
 	end))
 
 	local bgAcc = 0
