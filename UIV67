@@ -7,6 +7,12 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V5.6 — HOME EN SOUS-ONGLETS
+		• Home : « Info » (page de départ : aperçu 3D, FPS / ping, session, météo, serveur...), « Explication » (ce que contient l'UI,
+		  aperçu de l'API, démos en direct) et « Mises à jour » (version, vérification GitHub, nouveautés).
+		• Library:_buildHomeExplain(sous_onglet) construit la page Explication (les blocs de démo n'entrent ni dans les favoris,
+		  ni dans la palette, ni dans les configs).
+
 	V5.4 — NOUVEAU TYPE D'INTERFACE « CARRÉ »
 		• Paramètres > Apparence > Type d'interface > « Carré » (ou CreateWindow({ LayoutStyle = "Carré" }), Library:SetLayoutStyle("Carré")) :
 		  style rétro, simple et 100 % carré : onglets en texte dans une barre du haut (l'onglet actif est souligné), titre des blocs posé sur
@@ -9210,9 +9216,14 @@ end
 -- ============================================================================
 -- V5 : HISTORIQUE DES VERSIONS (affiché dans l'onglet Home depuis la V5.3)
 -- ============================================================================
-Library.Version = "5.5.0"
+Library.Version = "5.6.0"
 Library.AppName = "Ui-Lib"
 Library.Changelog = {
+	{ Version = "5.6.0", Date = "2026-10-27", Title = "Home en sous-onglets", Notes = {
+		"Home est découpé en sous-onglets : Info (page de départ), Explication et Mises à jour.",
+		"Explication : présentation de ce que contient l'UI, aperçu de l'API et démos en direct des éléments (boutons, curseurs, listes, couleurs, tableau, notifications...).",
+		"Mises à jour : le bloc de vérification GitHub et les nouveautés ont quitté Info et vivent ici.",
+	} },
 	{ Version = "5.5.0", Date = "2026-10-27", Title = "Mises à jour automatiques", Notes = {
 		"Mises à jour depuis GitHub : l'UI lit toute seule les commits de son fichier et les affiche dans Home > Nouveautés (rien à écrire dans le script).",
 		"Nouveau bloc « Mises à jour » dans Home : version chargée, dernière version GitHub, bouton « Vérifier maintenant ».",
@@ -9287,6 +9298,7 @@ end
 function Library:_buildChangelog(tab)
 	tab = tab or (Library.Window and Library.Window._homeTab)
 	if not tab then return end
+	tab = tab._changelogSub or tab   -- Home a des sous-onglets : les nouveautés vivent dans « Mises à jour »
 	for _, b in ipairs(tab._logBlocks or {}) do
 		if b.Frame then b.Frame:Destroy() end
 		for i, x in ipairs(tab.Blocks) do
@@ -9674,6 +9686,143 @@ end
 -- ---------------------------------------------------------------------------
 -- Onglet Home
 -- ---------------------------------------------------------------------------
+-- ============================================================================
+-- HOME > « Explication » : présentation de l'UI + démos en direct de ses éléments
+--   Les blocs de démo sont marqués _noFav : leurs éléments n'entrent pas dans les favoris, la palette (Ctrl+K), le HUD,
+--   le filtre « Modifiés », la remise à zéro ni les configs (aucun Flag) : ce sont juste des exemples à essayer.
+-- ============================================================================
+function Library:_buildHomeExplain(sub)
+	local function block(name, side, demo)
+		local b = sub:CreateBlock({ Name = name, Side = side })
+		if demo then b._noFav = true end
+		return b
+	end
+	local function lines(t) return table.concat(t, "\n") end
+	local function say(title, text, kind)
+		Library:Notify({ Title = title, Content = text, Type = kind or "Info", Duration = 3 })
+	end
+
+	-- ===================== COLONNE GAUCHE =====================
+	local hello = block("Bienvenue", "Left")
+	hello:CreateParagraph({ Title = tostring(Library.AppName) .. "  ·  v" .. tostring(Library.Version),
+		Content = lines({
+			"Une interface complète pour tes scripts : fenêtre au fond « trou noir » animé, thèmes, trois types de mise en page, recherche globale et une vingtaine d'éléments prêts à l'emploi.",
+			"",
+			"Cette page présente ce que contient l'UI. Tout ce qui est dans les blocs « Démo » est vivant : essaie-le.",
+		}) })
+	hello:CreateLabel({ Text = "Astuce : le type d'interface (Classique / Éclipse / Carré), les couleurs et les colonnes se changent dans l'onglet Réglages > Apparence." })
+
+	local what = block("Ce que contient l'UI", "Left")
+	what:CreateSection("Fenêtre")
+	what:CreateParagraph({ Content = lines({
+		"• Déplaçable, redimensionnable sur tous les bords, double-clic sur la barre de titre = réduire / restaurer, Ctrl+R = recentrer.",
+		"• 1 à 4 colonnes de blocs. Les blocs se replient, se déplacent (Réglages > Disposition des blocs > Mode édition) et se détachent en mini-fenêtres.",
+		"• Les réglages (position des notifications, thème, couleurs, colonnes, sons...) sont sauvegardés tout seuls.",
+	}) })
+	what:CreateSection("Apparence")
+	what:CreateParagraph({ Content = lines({
+		"• 3 types d'interface : Classique, Éclipse (menu large + barre d'état), Carré (rétro, 100 % carré, onglets en texte).",
+		"• Thèmes et préréglages, couleurs en direct, dégradés, polices, styles (Standard, Verre, Givré, Mat, Néon), flou, étoiles, trou noir.",
+		"• Transitions d'onglets (Glisser / Fondu / Zoom) et sons d'interface.",
+	}) })
+	what:CreateSection("Navigation rapide")
+	what:CreateParagraph({ Content = lines({
+		"• Barre de recherche globale : filtre les éléments de tous les onglets.",
+		"• Ctrl+T : barre de recherche seule au milieu de l'écran. Ctrl+K : palette de commandes (lance un bouton ou règle un curseur sans ouvrir la fenêtre).",
+		"• Étoile ★ sur chaque élément pour l'ajouter aux favoris, filtre « Modifiés », onglet Récents.",
+	}) })
+	what:CreateSection("Clavier")
+	what:CreateParagraph({ Content = lines({
+		"• Chaque toggle ou keybind accepte une touche (clavier ou clic souris) avec trois modes : Toggle, Hold, Always.",
+		"• Réglages > Raccourcis & configs : liste de toutes les touches, avertissement en cas de conflit, bouton « Aller ».",
+		"• HUD des actifs : petit panneau qui affiche les options activées et leur touche.",
+	}) })
+	what:CreateSection("Notifications")
+	what:CreateParagraph({ Content = lines({
+		"• 4 types (Info, Succès, Alerte, Erreur), progression, boutons d'action, historique, 6 positions.",
+		"• Styles d'entrée et de fermeture, sons par type, mode « Ne pas déranger ».",
+	}) })
+	what:CreateSection("Configs")
+	what:CreateParagraph({ Content = lines({
+		"• Sauvegarder, charger, renommer, dupliquer, exporter et importer des configs ; une config peut se charger automatiquement.",
+	}) })
+
+	local live1 = block("Démo · boutons et réglages", "Left", true)
+	live1:CreateLabel({ Text = "Chaque ligne ci-dessous est un élément réel de l'UI." })
+	live1:CreateButton({ Name = "Bouton : clique-moi", Callback = function() say("Bouton", "Le Callback du bouton s'est exécuté.", "Success") end })
+	live1:CreateButton({ Name = "Bouton à double confirmation", Confirm = true, ConfirmText = "Clique encore pour confirmer",
+		Callback = function() say("Confirmation", "Action confirmée.", "Success") end })
+	live1:CreateToggle({ Name = "Interrupteur", Default = false, Callback = function(v) say("Interrupteur", v and "Activé" or "Désactivé") end })
+	live1:CreateSlider({ Name = "Curseur", Min = 0, Max = 100, Step = 5, Default = 40, Suffix = " %" })
+	live1:CreateRangeSlider({ Name = "Curseur à deux poignées", Min = 0, Max = 100, Step = 1, MinGap = 5, Default = { Low = 20, High = 70 } })
+	live1:CreateStepper({ Name = "Compteur", Min = 0, Max = 10, Step = 1, Default = 3, Wrap = true })
+	live1:CreateLabel({ Text = "Astuce : clique sur la valeur d'un curseur pour taper un nombre exact." })
+
+	-- ===================== COLONNE DROITE =====================
+	local start = block("API · démarrage rapide", "Right")
+	start:CreateParagraph({ Title = "Créer une fenêtre", Content = lines({
+		"local Library = loadstring(readfile(\"Ui-Lib-Simple.lua\"))()",
+		"local Win = Library:CreateWindow({ Title = \"Mon script\" })",
+		"local Tab = Win:CreateTab(\"Combat\", nil, icone)",
+		"local Bloc = Tab:CreateBlock({ Name = \"Aimbot\", Side = \"Left\" })",
+		"Bloc:CreateToggle({ Name = \"Activer\", Flag = \"aim\", Callback = function(v) end })",
+		"Library:Notify({ Title = \"Salut\", Content = \"Ça marche\", Type = \"Success\" })",
+	}) })
+	start:CreateParagraph({ Title = "Options utiles de CreateWindow", Content = lines({
+		"LayoutStyle (\"Classique\" / \"Éclipse\" / \"Carré\") · Columns (1 à 4) · Home = false · ChangeLog = false · UpdateURL · Stars · Blur · Style · MinSize",
+	}) })
+
+	local els = block("API · les éléments", "Right")
+	els:CreateParagraph({ Title = "Block:Create...", Content = lines({
+		"Button, Toggle, Slider, RangeSlider, Stepper, Dropdown (Multi, Search), Input, TextArea, ColorPicker (opacité, pipette), Keybind (Toggle / Hold / Always), Radio, Progress, Table, Image.",
+		"",
+		"Texte : Section, Label, Paragraph, Divider.",
+		"Données en direct : Stats (tuiles chiffrées), Graph (histogramme glissant), Preview3D (aperçu 3D du personnage).",
+	}) })
+	els:CreateParagraph({ Title = "Onglets", Content = lines({
+		"Window:CreateTab · Tab:CreateSubTabs (comme cette page) · Tab:CreateChildTab (onglets dans un onglet)",
+		"Window:CreateConfigTab · CreateFavoritesTab · CreateRecentTab · CreateConsoleTab · CreateNotifLogTab · CreateSettingsTab",
+	}) })
+	els:CreateLabel({ Text = "Options communes : Name, Flag, Default, Callback, Tooltip, Favorite = false (pour les retirer des favoris)." })
+
+	local lib = block("API · la bibliothèque", "Right")
+	lib:CreateParagraph({ Title = "Library:...", Content = lines({
+		"Notify · SetColors · ApplyPreset · SetLayoutStyle · SetColumns · SetFont · SetBlur · SetStars",
+		"SaveConfig · LoadConfig · ListConfigs · ExportConfig · ImportConfig",
+		"OpenPalette · OpenSpotlight · AddChangelog · DetachBlock · RevealElement",
+		"Library.Flags (valeurs de tous les éléments) · Library.Items (pour les lire / écrire à la main)",
+	}) })
+
+	local live2 = block("Démo · saisie et choix", "Right", true)
+	live2:CreateInput({ Name = "Champ de texte", Placeholder = "Écris quelque chose..." })
+	live2:CreateDropdown({ Name = "Liste déroulante", Items = { "Pomme", "Poire", "Cerise", "Fraise" }, Default = "Pomme" })
+	live2:CreateDropdown({ Name = "Liste à choix multiples", Items = { "Rouge", "Vert", "Bleu", "Jaune" }, Multi = true, Default = { "Rouge" } })
+	live2:CreateRadio({ Name = "Choix unique", Items = { "Classique", "Éclipse", "Carré" }, Default = "Classique" })
+	live2:CreateColorPicker({ Name = "Sélecteur de couleur", Default = Color3.fromRGB(150, 110, 255) })
+	live2:CreateTextArea({ Name = "Zone de texte", Height = 64, Placeholder = "Plusieurs lignes possibles..." })
+
+	local live3 = block("Démo · jauges et tableau", "Right", true)
+	local bar = live3:CreateProgress({ Name = "Barre de progression", Min = 0, Max = 100, Default = 35 })
+	live3:CreateButton({ Name = "Lancer un décompte de 5 s", Callback = function()
+		bar:Countdown(5, { ShowTime = true, OnDone = function() say("Décompte", "Terminé !", "Success") end })
+	end })
+	live3:CreateTable({ Name = "Tableau triable (clique sur un en-tête)", MaxRows = 5, Columns = { "Élément", "Type", "Depuis" }, Rows = {
+		{ "Bouton", "Action", "V1" },
+		{ "Slider", "Valeur", "V1" },
+		{ "Stepper", "Valeur", "V10" },
+		{ "Radio", "Choix", "V5" },
+		{ "Table", "Données", "V5" },
+		{ "Graph", "Données", "V5.3" },
+		{ "Preview3D", "Visuel", "V5.3" },
+	} })
+
+	local live4 = block("Démo · notifications", "Right", true)
+	live4:CreateButton({ Name = "Notification Info", Callback = function() Library:Notify({ Title = "Info", Content = "Une information.", Type = "Info", Duration = 4 }) end })
+	live4:CreateButton({ Name = "Notification Succès", Callback = function() Library:Notify({ Title = "Succès", Content = "Tout s'est bien passé.", Type = "Success", Duration = 4 }) end })
+	live4:CreateButton({ Name = "Notification Alerte", Callback = function() Library:Notify({ Title = "Alerte", Content = "Fais attention à ça.", Type = "Warning", Duration = 4 }) end })
+	live4:CreateButton({ Name = "Notification Erreur", Callback = function() Library:Notify({ Title = "Erreur", Content = "Quelque chose a échoué.", Type = "Error", Duration = 4 }) end })
+end
+
 function Window:CreateHomeTab(name, icon, cfg)
 	cfg = cfg or {}
 	local win = self
@@ -9683,11 +9832,15 @@ function Window:CreateHomeTab(name, icon, cfg)
 	Library.ShowChangelog = cfg.ChangeLog ~= false
 	local lp = LP
 	local started = os.clock()
-	local function shown() return win.Open and tab.Page.Visible end
+	-- sous-onglets : Info (page de départ) · Explication · Mises à jour
+	local subs = tab:CreateSubTabs({ "Info", "Explication", "Mises à jour" })
+	local subInfo, subExplain, subUpdates = subs[1], subs[2], subs[3]
+	tab._changelogSub = subUpdates
+	local function shown() return win.Open and tab.Page.Visible and tab.CurrentSub == subInfo end
 
 	-- ===================== COLONNE GAUCHE =====================
 	-- ----- mon personnage : aperçu 3D + identité
-	local prof = tab:CreateBlock({ Name = "Mon personnage", Side = "Left" })
+	local prof = subInfo:CreateBlock({ Name = "Mon personnage", Side = "Left" })
 	local pv = prof:CreatePreview3D({ Name = false, Height = 260, Character = true,
 		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = true, AutoRotate = true, RotateSpeed = 24 } })
 	prof:CreateButton({ Name = "Actualiser l'aperçu", Favorite = false, Callback = function() pv:Refresh() end })
@@ -9699,12 +9852,12 @@ function Window:CreateHomeTab(name, icon, cfg)
 	} })
 
 	-- ----- bloc-notes (sauvegardé automatiquement avec les réglages)
-	local notes = tab:CreateBlock({ Name = "Bloc-notes", Side = "Left" })
+	local notes = subInfo:CreateBlock({ Name = "Bloc-notes", Side = "Left" })
 	notes:CreateTextArea({ Name = "Notes (sauvegardées automatiquement)", Flag = "ui.home.notes", Height = 130, MaxLength = 4000,
 		Placeholder = "Pseudos, coordonnées, idées, rappels..." })
 
 	-- ----- amis : dans le serveur + en ligne (à inviter)
-	local fr = tab:CreateBlock({ Name = "Amis", Side = "Left" })
+	local fr = subInfo:CreateBlock({ Name = "Amis", Side = "Left" })
 	local frInfo = fr:CreateLabel({ Text = "Chargement de tes amis…" })
 	local frRow = makeRow(fr, 236, "Amis")
 	local sf = new("ScrollingFrame", { Position = UDim2.new(0, 4, 0, 4), Size = UDim2.new(1, -8, 1, -8), BackgroundTransparency = 1,
@@ -9839,7 +9992,7 @@ function Window:CreateHomeTab(name, icon, cfg)
 
 	-- ===================== COLONNE DROITE =====================
 	-- ----- en direct
-	local live = tab:CreateBlock({ Name = "En direct", Side = "Right" })
+	local live = subInfo:CreateBlock({ Name = "En direct", Side = "Right" })
 	local st = live:CreateStats({ Columns = 2, CellHeight = 48, Items = {
 		{ Id = "fps", Name = "FPS" }, { Id = "ping", Name = "Ping" },
 		{ Id = "players", Name = "Joueurs" }, { Id = "mem", Name = "Mémoire" },
@@ -9847,12 +10000,12 @@ function Window:CreateHomeTab(name, icon, cfg)
 	} })
 
 	-- ----- graphiques FPS / ping (historique ~45 s)
-	local gb = tab:CreateBlock({ Name = "Graphiques", Side = "Right" })
+	local gb = subInfo:CreateBlock({ Name = "Graphiques", Side = "Right" })
 	local gFps = gb:CreateGraph({ Name = "FPS", MinMax = 60, Height = 62, Samples = 90, ColorFn = fpsColor })
 	local gPing = gb:CreateGraph({ Name = "Ping", Unit = " ms", MinMax = 100, Height = 62, Samples = 90, ColorFn = pingColor })
 
 	-- ----- session : jauge + temps de jeu total + alerte
-	local ses = tab:CreateBlock({ Name = "Session", Side = "Right" })
+	local ses = subInfo:CreateBlock({ Name = "Session", Side = "Right" })
 	local gauge = ses:CreateProgress({ Name = "Durée de la session", Min = 0, Max = 7200, Default = 0,
 		Format = function(v, _, max) return fmtDur(v) .. " / " .. fmtDur(max) end })
 	local sst = ses:CreateStats({ Columns = 2, CellHeight = 46, Items = {
@@ -9873,7 +10026,7 @@ function Window:CreateHomeTab(name, icon, cfg)
 	local lastLimit, nextAlert = nil, nil
 
 	-- ----- heure & météo (réelles, chez toi)
-	local wb = tab:CreateBlock({ Name = "Heure & météo", Side = "Right" })
+	local wb = subInfo:CreateBlock({ Name = "Heure & météo", Side = "Right" })
 	local wst = wb:CreateStats({ Columns = 2, CellHeight = 46, Items = {
 		{ Id = "time", Name = "Heure", Value = "--:--:--" }, { Id = "date", Name = "Date", Size = 13 },
 		{ Id = "temp", Name = "Température", Value = "…" }, { Id = "sky", Name = "Ciel", Size = 13 },
@@ -9955,7 +10108,7 @@ function Window:CreateHomeTab(name, icon, cfg)
 	task.delay(3, updateWeather)
 
 	-- ----- serveur
-	local srv = tab:CreateBlock({ Name = "Serveur", Side = "Right" })
+	local srv = subInfo:CreateBlock({ Name = "Serveur", Side = "Right" })
 	local exName = "Inconnu"
 	pcall(function()
 		local n, v = identifyexecutor()
@@ -9976,7 +10129,7 @@ function Window:CreateHomeTab(name, icon, cfg)
 
 	-- ----- mises à jour (depuis GitHub)
 	if Library.UpdateURL and Library.UpdateURL ~= "" then
-		local up = tab:CreateBlock({ Name = "Mises à jour", Side = "Right" })
+		local up = subUpdates:CreateBlock({ Name = "Mises à jour", Side = "Left" })
 		local us = up:CreateStats({ Columns = 1, CellHeight = 44, Items = {
 			{ Id = "cur", Name = "Version chargée", Value = "v" .. tostring(Library.Version) },
 			{ Id = "rem", Name = "Dernier commit GitHub", Value = "…" },
@@ -10017,9 +10170,19 @@ function Window:CreateHomeTab(name, icon, cfg)
 			end
 		end })
 		Library._updRefresh()
+	else
+		local up = subUpdates:CreateBlock({ Name = "Mises à jour", Side = "Left" })
+		up:CreateParagraph({ Title = "Version v" .. tostring(Library.Version),
+			Content = "Les mises à jour automatiques sont désactivées. Pour les activer, donne le lien raw GitHub de ton script : CreateWindow({ UpdateURL = \"TON_LIEN_RAW\" }). L'UI lira alors toute seule les commits et les affichera ici." })
 	end
 
-	-- ----- nouveautés (automatiques)
+	-- ----- Explication : présentation de l'UI + démos en direct
+	do
+		local oke, erre = pcall(Library._buildHomeExplain, Library, subExplain)
+		if not oke then warn("[Ui-Lib] Home > Explication : " .. tostring(erre)) end
+	end
+
+	-- ----- nouveautés (automatiques, dans « Mises à jour »)
 	Library:_buildChangelog(tab)
 
 	-- ===================== BOUCLE DE MISE À JOUR (2 fois par seconde) =====================
