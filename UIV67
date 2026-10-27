@@ -7,6 +7,16 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V5.2 — CURSEUR LIBRE, TOUCHES DU JEU, COLOR PICKER
+		• Paramètres > Fenêtre : « Libérer le curseur » et « Bloquer les touches du jeu » (Library:SetFreeCursor / SetBlockGameKeys,
+		  CreateWindow({ FreeCursor = true, BlockGameKeys = false }), Library.BlockedKeys = touches bloquées : W A S D Espace par défaut).
+		• Un seul mécanisme de curseur libre pour la fenêtre, la Palette (Ctrl+K), la barre de recherche (Ctrl+T) et la pipette :
+		  Library:AcquireCursor(proprietaire, forcer) / Library:ReleaseCursor(proprietaire).
+		• Color picker : barre d'opacité (Callback(couleur, opacité), item:GetAlpha / SetAlpha, { Opacity = false } pour la retirer),
+		  pipette (couleur d'un élément d'interface ou d'un objet du monde), 8 couleurs récentes (sauvegardées), copier / coller en hexadécimal
+		  (#RRGGBB ou #RRGGBBAA). Library:PickScreenColor(fonction) ouvre la pipette seule.
+		• Le fond « trou noir » est en mode « Léger » par défaut (Background = "full" dans CreateWindow pour l'ancien rendu).
+
 	V5.1 — CORRECTIFS
 		• Curseur libéré tant que la fenêtre est ouverte (vue 1re personne / souris verrouillée) ; rendu au jeu à la fermeture.
 		• Toggles & Keybinds : on peut assigner Clic gauche / droit / milieu (en plus du clavier). Config : "MouseButton1/2/3".
@@ -255,6 +265,11 @@ local Library = {
 	CornerObjects     = {},
 	GlobalCornerValue = 10,    -- 10 = rayon normal (le script le change via son slider)
 	FireDefaults      = false, -- true = appelle les Callback avec la valeur Default à la création
+	FreeCursor        = true,  -- true = curseur libéré tant que la fenêtre est ouverte (Paramètres > Fenêtre)
+	BlockGameKeys     = false, -- true = les touches de BlockedKeys n'agissent pas sur le jeu tant que l'interface est ouverte
+	BlockedKeys       = { Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D, Enum.KeyCode.Space },
+	RecentColors      = {},    -- couleurs récentes du color picker (hexadécimal), sauvegardées avec les réglages
+	RecentColorMax    = 8,
 	NoCanvasGroup     = true,  -- true = fenêtre en simple Frame (beaucoup plus fluide) ; false = fondu d'ouverture mais plus lourd
 	StarCount         = 20,    -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 pour désactiver)
 	ConfigFolder      = "Ui-Lib",
@@ -1024,6 +1039,116 @@ function Library:SetBlur(n)
 	Library.BlurSize = math.clamp(tonumber(n) or 0, 0, 56)
 	local w = Library.Window
 	setBlurTarget((w and w.Open) and Library.BlurSize or 0)
+end
+
+-- ============================================================================
+-- CURSEUR LIBRE + BLOCAGE DES TOUCHES DU JEU  (mécanisme PARTAGÉ)
+--   Utilisé par la fenêtre, la Palette (Ctrl+K), la barre de recherche (Ctrl+T) et la pipette du color picker.
+--   Library:AcquireCursor("nom", forcer)  : demande le curseur libre. forcer = true -> libre même si « Libérer le curseur »
+--                                           est désactivé (palette, recherche, pipette ont besoin du curseur).
+--   Library:ReleaseCursor("nom")          : rend le curseur au jeu quand plus personne ne le demande.
+--   Library:SetFreeCursor(bool)           : réglage « Libérer le curseur » (concerne la fenêtre).
+--   Library:SetBlockGameKeys(bool)        : réglage « Bloquer les touches du jeu » (Library.BlockedKeys = liste de KeyCode).
+--   Library:IsCursorFree()
+--   Un bouton « Modal » invisible (méthode native Roblox) + un rappel à chaque frame pour les jeux qui reverrouillent la souris.
+--   (bloc isolé dans un do ... end : la librairie est proche de la limite de 200 variables locales)
+-- ============================================================================
+do
+	local CAS = game:GetService("ContextActionService")
+	local PASS, SINK = Enum.ContextActionResult.Pass, Enum.ContextActionResult.Sink
+	local KEY_ACTION, STEP_NAME = "UiLibGameKeys", "UiLibCursor"
+	local owners, gui, btn, savedIcon = {}, nil, nil, nil
+	local freed, keysBound = false, false
+
+	local function wantCursor()
+		for _, mode in pairs(owners) do
+			if mode == "force" or Library.FreeCursor ~= false then return true end
+		end
+		return false
+	end
+
+	-- touche du jeu bloquée : seulement l'appui (le relâchement passe, sinon une touche tenue avant l'ouverture resterait coincée)
+	local function onKey(_, state)
+		if state ~= Enum.UserInputState.Begin then return PASS end
+		if Library._listening or UIS:GetFocusedTextBox() then return PASS end
+		return SINK
+	end
+
+	local function apply()
+		local want = wantCursor()
+		if want and not (gui and gui.Parent) then
+			gui = new("ScreenGui", { Name = "SolarisCursor", ResetOnSpawn = false, DisplayOrder = 0, IgnoreGuiInset = true })
+			mount(gui)
+			btn = new("TextButton", { Name = "CursorFree", Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1,
+				Text = "", AutoButtonColor = false, Modal = true, BorderSizePixel = 0, Visible = false }, gui)
+		end
+		if btn then btn.Visible = want end
+		if want ~= freed then
+			freed = want
+			pcall(function() RunService:UnbindFromRenderStep(STEP_NAME) end)
+			if want then
+				if savedIcon == nil then savedIcon = UIS.MouseIconEnabled end
+				pcall(function()
+					RunService:BindToRenderStep(STEP_NAME, Enum.RenderPriority.Camera.Value + 10, function()
+						if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then UIS.MouseBehavior = Enum.MouseBehavior.Default end
+						if not UIS.MouseIconEnabled then UIS.MouseIconEnabled = true end
+					end)
+				end)
+			elseif savedIcon ~= nil then
+				pcall(function() UIS.MouseIconEnabled = savedIcon end)
+				savedIcon = nil
+			end
+		end
+		local keys = Library.BlockGameKeys == true and next(owners) ~= nil
+		if keys ~= keysBound then
+			keysBound = keys
+			pcall(function() CAS:UnbindAction(KEY_ACTION) end)
+			if keys then
+				local list = {}
+				for _, k in ipairs(Library.BlockedKeys or {}) do
+					if typeof(k) == "EnumItem" then list[#list + 1] = k end
+				end
+				if #list > 0 then
+					pcall(function() CAS:BindActionAtPriority(KEY_ACTION, onKey, false, 2900, table.unpack(list)) end)
+				end
+			end
+		end
+	end
+
+	function Library:AcquireCursor(owner, force)
+		owners[owner or "default"] = force and "force" or "normal"
+		apply()
+	end
+	function Library:ReleaseCursor(owner)
+		owners[owner or "default"] = nil
+		apply()
+	end
+	function Library:IsCursorFree() return freed end
+	function Library:SetFreeCursor(v)
+		Library.FreeCursor = v and true or false
+		apply()
+	end
+	function Library:SetBlockGameKeys(v)
+		Library.BlockGameKeys = v and true or false
+		apply()
+	end
+	function Library:SetBlockedKeys(list)
+		if type(list) ~= "table" then return end
+		Library.BlockedKeys = list
+		if keysBound then
+			keysBound = false   -- on relie avec la nouvelle liste
+			apply()
+		end
+	end
+
+	Library._destroyCursor = function()
+		table.clear(owners)
+		apply()
+		pcall(function() CAS:UnbindAction(KEY_ACTION) end)
+		keysBound = false
+		if gui then pcall(function() gui:Destroy() end) end
+		gui, btn = nil, nil
+	end
 end
 
 -- ============================================================================
@@ -6164,10 +6289,177 @@ function Block:CreateKeybind(o)
 	return item
 end
 
+-- ============================================================================
+-- COLOR PICKER : opacité, pipette, couleurs récentes, copier / coller hexadécimal
+--   Callback = function(couleur, opacite)  ·  item.Get() = Color3  ·  item.GetAlpha() / SetAlpha(0..1)  ·  item.Set(couleur, opacite)
+--   Options : Opacity = false (pas de barre d'opacité), DefaultAlpha = 0..1.   Flag = { R, G, B, A }
+--   Library:PickScreenColor(function(couleur) end) : pipette seule. Library:PushRecentColor(couleur) / Library.RecentColors
+-- ============================================================================
+do
+	Library._recentViews = Library._recentViews or {}
+
+	-- "#RGB" / "#RGBA" / "#RRGGBB" / "#RRGGBBAA"  ->  Color3, opacité (ou nil)
+	Library._parseHex = function(txt)
+		txt = (string.gsub(tostring(txt or ""), "[#%s]", ""))
+		if #txt == 3 or #txt == 4 then txt = (string.gsub(txt, "(%x)", "%1%1")) end
+		if (#txt ~= 6 and #txt ~= 8) or not string.match(txt, "^%x+$") then return nil end
+		local ok, c = pcall(Color3.fromHex, string.sub(txt, 1, 6))
+		if not ok or typeof(c) ~= "Color3" then return nil end
+		local a
+		if #txt == 8 then a = (tonumber(string.sub(txt, 7, 8), 16) or 255) / 255 end
+		return c, a
+	end
+
+	function Library:_refreshRecentViews()
+		local v = Library._recentViews
+		for i = #v, 1, -1 do
+			local e = v[i]
+			if e.inst and e.inst.Parent then pcall(e.refresh) else table.remove(v, i) end
+		end
+	end
+
+	function Library:PushRecentColor(c)
+		if typeof(c) ~= "Color3" then return end
+		local hx = string.upper(c:ToHex())
+		local L = Library.RecentColors
+		for i = #L, 1, -1 do
+			if L[i] == hx then table.remove(L, i) end
+		end
+		table.insert(L, 1, hx)
+		while #L > (Library.RecentColorMax or 8) do table.remove(L) end
+		Library.Flags["ui.recentcolors"] = table.clone(L)
+		Library:_refreshRecentViews()
+	end
+
+	-- sauvegardé avec les réglages (clé « ui.recentcolors »)
+	function Library:_registerRecentColors()
+		Library.Flags["ui.recentcolors"] = table.clone(Library.RecentColors)
+		Library.Defaults["ui.recentcolors"] = {}
+		Library.Items["ui.recentcolors"] = {
+			Get = function() return table.clone(Library.RecentColors) end,
+			Set = function(_, list)
+				table.clear(Library.RecentColors)
+				if type(list) == "table" then
+					for _, hx in ipairs(list) do
+						if type(hx) == "string" and string.match(hx, "^%x%x%x%x%x%x$")
+							and #Library.RecentColors < (Library.RecentColorMax or 8) then
+							Library.RecentColors[#Library.RecentColors + 1] = string.upper(hx)
+						end
+					end
+				end
+				Library.Flags["ui.recentcolors"] = table.clone(Library.RecentColors)
+				Library:_refreshRecentViews()
+			end,
+		}
+	end
+
+	-- ───────────── Pipette ─────────────
+	-- Clique sur un élément d'interface (couleur de fond) ou sur un objet du monde (couleur de la pièce / du terrain).
+	local pip
+	local function sampleAt(m)
+		local inset = guiInset()
+		local gx, gy = m.X - inset.X, m.Y - inset.Y
+		for _, root in ipairs({ CoreGui, LP:FindFirstChild("PlayerGui") }) do
+			if root then
+				local ok, objs = pcall(function() return root:GetGuiObjectsAtPosition(gx, gy) end)
+				if ok and type(objs) == "table" then
+					for _, g in ipairs(objs) do
+						if not (pip and g:IsDescendantOf(pip.gui)) and g.BackgroundTransparency < 0.9 then
+							return g.BackgroundColor3
+						end
+					end
+				end
+			end
+		end
+		local cam = workspace.CurrentCamera
+		if cam then
+			local ray = cam:ViewportPointToRay(m.X, m.Y)
+			local ok, res = pcall(function() return workspace:Raycast(ray.Origin, ray.Direction * 1500) end)
+			if ok and res and res.Instance then
+				if res.Instance:IsA("Terrain") then
+					local ok2, c = pcall(function() return workspace.Terrain:GetMaterialColor(res.Material) end)
+					if ok2 and typeof(c) == "Color3" then return c end
+				elseif res.Instance:IsA("BasePart") then
+					return res.Instance.Color
+				end
+			end
+		end
+		return nil
+	end
+
+	local function closePip()
+		local p = pip
+		if not p then return end
+		pip = nil
+		for _, c in ipairs(p.conns) do pcall(function() c:Disconnect() end) end
+		pcall(function() p.gui:Destroy() end)
+		Library:ReleaseCursor("pipette")
+	end
+	Library._destroyPipette = closePip
+
+	function Library:PickScreenColor(onPick)
+		if pip then return false end
+		local gui = new("ScreenGui", { Name = "SolarisPipette", ResetOnSpawn = false, DisplayOrder = 1200,
+			ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
+		mount(gui)
+		local P = { gui = gui, conns = {} }
+		pip = P
+		Library:AcquireCursor("pipette", true)
+
+		local catcher = new("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "",
+			AutoButtonColor = false, BorderSizePixel = 0, Active = true }, gui)
+		local card = new("Frame", { Size = UDim2.fromOffset(112, 38), BackgroundColor3 = T.Main, BackgroundTransparency = 0.05,
+			BorderSizePixel = 0, ZIndex = 5 }, gui)
+		corner(card, 10)
+		stroke(card, 0.5)
+		local sw = new("Frame", { Position = UDim2.fromOffset(6, 6), Size = UDim2.fromOffset(26, 26),
+			BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 6 }, card)
+		corner(sw, 6)
+		new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 1, Transparency = 0.4, ApplyStrokeMode = BORDER }, sw)
+		local lb = label(card, "#FFFFFF", 12, { Position = UDim2.fromOffset(38, 0), Size = UDim2.new(1, -44, 1, 0),
+			Font = F_BOLD, ZIndex = 6 })
+		local hint = label(gui, "Clique pour choisir une couleur  ·  Échap pour annuler", 13, { AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, 30), Size = UDim2.fromOffset(420, 24), TextXAlignment = CENTER, ZIndex = 6,
+			TextStrokeTransparency = 0.5 })
+
+		local current
+		local acc = 0
+		P.conns[#P.conns + 1] = RunService.RenderStepped:Connect(function(dt)
+			local m = UIS:GetMouseLocation()
+			local vp = viewport()
+			card.Position = UDim2.fromOffset(math.clamp(m.X + 18, 0, vp.X - 120), math.clamp(m.Y + 18, 0, vp.Y - 46))
+			acc += dt
+			if acc < 1 / 30 then return end
+			acc = 0
+			local c = sampleAt(m)
+			if c then
+				current = c
+				sw.BackgroundColor3 = c
+				lb.Text = "#" .. string.upper(c:ToHex())
+			else
+				current = nil
+				lb.Text = "—"
+			end
+		end)
+		P.conns[#P.conns + 1] = catcher.InputBegan:Connect(function(i)
+			if not isPress(i) then return end
+			local c = sampleAt(UIS:GetMouseLocation()) or current
+			closePip()
+			if c then fire(onPick, c) end
+		end)
+		P.conns[#P.conns + 1] = UIS.InputBegan:Connect(function(i)
+			if i.KeyCode == Enum.KeyCode.Escape then closePip() end
+		end)
+		return true
+	end
+end
+
 function Block:CreateColorPicker(o)
 	o = o or {}
 	local col = o.Default or Color3.new(1, 1, 1)
 	local h, s, v = col:ToHSV()
+	local useAlpha = o.Opacity ~= false
+	local alpha = useAlpha and math.clamp(tonumber(o.DefaultAlpha or o.Alpha) or 1, 0, 1) or 1
 
 	local holder = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1 }, self.Body)
 	new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = BYORDER }, holder)
@@ -6184,16 +6476,18 @@ function Block:CreateColorPicker(o)
 	label(head, o.Name or "Color", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -66, 1, 0) })
 	local swatch = new("Frame", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.new(0, 34, 0, 18),
-		BackgroundColor3 = col, BorderSizePixel = 0,
+		BackgroundColor3 = col, BackgroundTransparency = (1 - alpha) * 0.8, BorderSizePixel = 0,
 	}, head)
 	corner(swatch, 5)
 	stroke(swatch, 0.55)
 	swatch:SetAttribute("NoAccent", true)
 
+	-- hauteur du tiroir : carré + teinte (112) · opacité (22) · hexadécimal (30) · boutons (30) · récents (30)
+	local PH = 112 + (useAlpha and 22 or 0) + 90
 	local dr = drawer(holder, 2)
-	dr:Resize(146)
+	dr:Resize(PH)
 	local panel = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 146), BackgroundColor3 = T.Panel, BackgroundTransparency = 0.1, BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 0, PH), BackgroundColor3 = T.Panel, BackgroundTransparency = 0.1, BorderSizePixel = 0,
 	}, dr.Wrap)
 	corner(panel, 8)
 	trackStyled(panel, stroke(panel, 0.9), "panel")
@@ -6233,31 +6527,111 @@ function Block:CreateColorPicker(o)
 	new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1 }, hueMark)
 	local hueHit = new("TextButton", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "" }, hue)
 
-	-- Champ hexadécimal
+	-- Barre d'opacité (fond gris + dégradé de la couleur, de transparent à opaque)
+	local commit
+	local aFill, aMark
+	local y = 112
+	if useAlpha then
+		local abar = new("Frame", { Position = UDim2.new(0, 8, 0, y + 1), Size = UDim2.new(1, -16, 0, 12),
+			BackgroundColor3 = Color3.fromRGB(105, 105, 112), BorderSizePixel = 0 }, panel)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, abar)
+		aFill = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = col, BorderSizePixel = 0 }, abar)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, aFill)
+		new("UIGradient", { Transparency = NumberSequence.new(1, 0) }, aFill)
+		aMark = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(alpha, 0, 0.5, 0),
+			Size = UDim2.fromOffset(6, 16), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, abar)
+		new("UICorner", { CornerRadius = UDim.new(0, 3) }, aMark)
+		new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1 }, aMark)
+		local aHit = new("TextButton", { Position = UDim2.new(0, 0, 0, -6), Size = UDim2.new(1, 0, 1, 12),
+			BackgroundTransparency = 1, Text = "" }, abar)
+		aHit.InputBegan:Connect(function(i)
+			if isPress(i) then
+				startDrag(function(p)
+					local m = Library._pointerPos(p)
+					alpha = math.clamp((m.X - abar.AbsolutePosition.X) / math.max(abar.AbsoluteSize.X, 1), 0, 1)
+					commit()
+				end, self.Scroll, i.Position, function() Library:PushRecentColor(Color3.fromHSV(h, s, v)) end)
+			end
+		end)
+		y = y + 22
+	end
+
+	-- Hexadécimal + boutons Copier / Coller / Pipette
 	local hex = new("TextBox", {
-		Position = UDim2.new(0, 8, 0, 114), Size = UDim2.new(1, -16, 0, 24), BackgroundColor3 = T.Off,
+		Position = UDim2.new(0, 8, 0, y), Size = UDim2.new(1, -16, 0, 24), BackgroundColor3 = T.Off,
 		BackgroundTransparency = 0.4, Text = "", PlaceholderText = "#FFFFFF", TextColor3 = T.Text, TextSize = 12,
 		Font = F_MED, ClearTextOnFocus = false, BorderSizePixel = 0,
 	}, panel)
 	corner(hex, 6)
 	trackStyled(hex, nil, "input")
+	y = y + 30
+
+	local row = new("Frame", { Position = UDim2.new(0, 8, 0, y), Size = UDim2.new(1, -16, 0, 24), BackgroundTransparency = 1 }, panel)
+	new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = BYORDER }, row)
+	local function mkBtn(text, order)
+		local b = new("TextButton", { Size = UDim2.new(1 / 3, -3, 1, 0), BackgroundColor3 = T.Off, BackgroundTransparency = 0.4,
+			Text = text, TextColor3 = T.Text, TextSize = 12, Font = F_MED, AutoButtonColor = false, BorderSizePixel = 0,
+			LayoutOrder = order }, row)
+		corner(b, 6)
+		trackStyled(b, stroke(b, 0.9), "input")
+		b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0.2 }, 0.15) end)
+		b.MouseLeave:Connect(function() tween(b, { BackgroundTransparency = Sty.InputTr }, 0.2) end)
+		return b
+	end
+	local copyBtn, pasteBtn, pipBtn = mkBtn("Copier", 1), mkBtn("Coller", 2), mkBtn("Pipette", 3)
+	y = y + 30
+
+	-- Couleurs récentes (partagées par tous les color pickers)
+	local rrow = new("Frame", { Position = UDim2.new(0, 8, 0, y), Size = UDim2.new(1, -16, 0, 22), BackgroundTransparency = 1 }, panel)
+	new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = BYORDER,
+		VerticalAlignment = Enum.VerticalAlignment.Center }, rrow)
 
 	local item = {}
+	local function hexText()
+		local t = "#" .. string.upper(col:ToHex())
+		if useAlpha and alpha < 0.999 then t = t .. string.format("%02X", math.floor(alpha * 255 + 0.5)) end
+		return t
+	end
 	local function refreshHex()
-		if not hex:IsFocused() then hex.Text = "#" .. string.upper(col:ToHex()) end
+		if not hex:IsFocused() then hex.Text = hexText() end
 	end
 	local function visuals()
 		sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
 		cursor.Position = UDim2.new(s, 0, 1 - v, 0)
 		hueMark.Position = UDim2.new(0.5, 0, h, 0)
 		swatch.BackgroundColor3 = col
+		swatch.BackgroundTransparency = (1 - alpha) * 0.8
+		if aFill then
+			aFill.BackgroundColor3 = col
+			aMark.Position = UDim2.new(alpha, 0, 0.5, 0)
+		end
 		refreshHex()
 	end
-	local function commit(silent)
+	commit = function(silent)
 		col = Color3.fromHSV(h, s, v)
-		if o.Flag then Library.Flags[o.Flag] = { R = col.R, G = col.G, B = col.B } end
+		if o.Flag then Library.Flags[o.Flag] = { R = col.R, G = col.G, B = col.B, A = alpha } end
 		visuals()
-		if not silent then fire(o.Callback, col) end
+		if not silent then fire(o.Callback, col, alpha) end
+	end
+
+	local function applyColor(c, a)
+		local nh, ns, nv = c:ToHSV()
+		if ns > 0.001 and nv > 0.001 then h = nh end
+		s, v = ns, nv
+		if useAlpha and tonumber(a) then alpha = math.clamp(tonumber(a), 0, 1) end
+		commit()
+		col = c   -- on garde exactement la couleur demandée
+		swatch.BackgroundColor3 = c
+		if aFill then aFill.BackgroundColor3 = c end
+		refreshHex()
+	end
+
+	local function applyHex(txt)
+		local c, a = Library._parseHex(txt)
+		if not c then return false end
+		applyColor(c, a)
+		Library:PushRecentColor(col)
+		return true
 	end
 
 	svHit.InputBegan:Connect(function(i)
@@ -6267,7 +6641,7 @@ function Block:CreateColorPicker(o)
 				s = math.clamp((m.X - sv.AbsolutePosition.X) / math.max(sv.AbsoluteSize.X, 1), 0, 1)
 				v = 1 - math.clamp((m.Y - sv.AbsolutePosition.Y) / math.max(sv.AbsoluteSize.Y, 1), 0, 1)
 				commit()
-			end, self.Scroll, i.Position)
+			end, self.Scroll, i.Position, function() Library:PushRecentColor(col) end)
 		end
 	end)
 	hueHit.InputBegan:Connect(function(i)
@@ -6276,38 +6650,97 @@ function Block:CreateColorPicker(o)
 				local m = Library._pointerPos(p)
 				h = math.min(math.clamp((m.Y - hue.AbsolutePosition.Y) / math.max(hue.AbsoluteSize.Y, 1), 0, 1), 0.999)
 				commit()
-			end, self.Scroll, i.Position)
+			end, self.Scroll, i.Position, function() Library:PushRecentColor(col) end)
 		end
 	end)
 	head.MouseButton1Click:Connect(function() uiSnd(dr.Open and "close" or "open") dr:Set(not dr.Open) end)
 
+	hex.FocusLost:Connect(function()
+		if not applyHex(hex.Text) then hex.Text = hexText() end
+	end)
+
+	copyBtn.MouseButton1Click:Connect(function()
+		uiSnd("click")
+		local ok = Library:CopyText(hexText())
+		Library:Notify({ Title = "Couleur", Type = ok and "Success" or "Warning", Duration = 2.5,
+			Content = ok and (hexText() .. " copié dans le presse-papiers.") or "Presse-papiers indisponible : copie le code du champ." })
+	end)
+	pasteBtn.MouseButton1Click:Connect(function()
+		uiSnd("click")
+		local getc = (type(getclipboard) == "function" and getclipboard) or (type(fromclipboard) == "function" and fromclipboard) or nil
+		local ok, txt = false, nil
+		if getc then ok, txt = pcall(getc) end
+		if ok and type(txt) == "string" and applyHex(txt) then
+			Library:Notify({ Title = "Couleur", Type = "Success", Duration = 2.5, Content = "Collée : " .. hexText() })
+		else
+			Library:Notify({ Title = "Couleur", Type = "Warning", Duration = 3.5,
+				Content = getc and "Le presse-papiers ne contient pas de code hexadécimal valide."
+					or "Lecture du presse-papiers indisponible : colle (Ctrl+V) directement dans le champ hexadécimal." })
+		end
+	end)
+	pipBtn.MouseButton1Click:Connect(function()
+		uiSnd("click")
+		Library:PickScreenColor(function(c)
+			applyColor(c)
+			Library:PushRecentColor(col)
+		end)
+	end)
+
+	local function refreshRecent()
+		for _, c in ipairs(rrow:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		local L = Library.RecentColors
+		if #L == 0 then
+			label(rrow, "Aucune couleur récente", 10, { Size = UDim2.new(1, 0, 1, 0), TextColor3 = T.ElementAccent })
+			return
+		end
+		for idx, hx in ipairs(L) do
+			local okc, c = pcall(Color3.fromHex, hx)
+			if okc and typeof(c) == "Color3" then
+				local b = new("TextButton", { Size = UDim2.fromOffset(22, 22), BackgroundColor3 = c, Text = "",
+					AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = idx }, rrow)
+				corner(b, 6)
+				new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 1, Transparency = 0.75, ApplyStrokeMode = BORDER }, b)
+				b.MouseEnter:Connect(function() tween(b, { Size = UDim2.fromOffset(25, 25) }, 0.15, BACK) end)
+				b.MouseLeave:Connect(function() tween(b, { Size = UDim2.fromOffset(22, 22) }, 0.2) end)
+				b.MouseButton1Click:Connect(function()
+					uiSnd("pick")
+					applyColor(c)
+					Library:PushRecentColor(c)
+				end)
+			end
+		end
+	end
+	Library._recentViews[#Library._recentViews + 1] = { inst = panel, refresh = refreshRecent }
+	refreshRecent()
+
 	item.Set = function(...)
-		local c = unself(item, ...)
-		if type(c) == "table" then
+		local c, a = unself(item, ...)
+		if type(c) == "string" then
+			local pc, pa = Library._parseHex(c)
+			c, a = pc, (a ~= nil) and a or pa
+		elseif type(c) == "table" then
+			a = (a ~= nil) and a or c.A or c.a
 			c = Color3.new(c.R or c.r or 1, c.G or c.g or 1, c.B or c.b or 1)
 		end
 		if typeof(c) ~= "Color3" then return end
-		local nh, ns, nv = c:ToHSV()
-		if ns > 0.001 and nv > 0.001 then h = nh end
-		s, v = ns, nv
-		commit()
-		-- on garde exactement la couleur demandée
-		col = c
-		swatch.BackgroundColor3 = c
-		refreshHex()
+		applyColor(c, a)
 	end
 	item.Get = function() return col end
-
-	hex.FocusLost:Connect(function()
-		local txt = string.gsub(hex.Text, "#", "")
-		local ok, c = pcall(Color3.fromHex, txt)
-		if ok and typeof(c) == "Color3" then item.Set(c) end
-		hex.Text = "#" .. string.upper(col:ToHex())
-	end)
+	item.GetAlpha = function() return alpha end
+	item.SetAlpha = function(...)
+		local a = tonumber((unself(item, ...)))
+		if a and useAlpha then
+			alpha = math.clamp(a, 0, 1)
+			commit()
+		end
+	end
+	item.GetHex = hexText
 
 	commit(true)
-	register(o.Flag, item, { R = col.R, G = col.G, B = col.B })
-	if Library.FireDefaults then fire(o.Callback, col) end
+	register(o.Flag, item, { R = col.R, G = col.G, B = col.B, A = alpha })
+	if Library.FireDefaults then fire(o.Callback, col, alpha) end
 	return item
 end
 
@@ -6740,6 +7173,10 @@ function Library:_trackModified(kind, item, frame, opts, blk)
 			local ok2, k = pcall(item.GetKey)
 			sg = sg .. "|" .. tostring(ok2 and k or "")
 		end
+		if type(item.GetAlpha) == "function" then
+			local okA, al = pcall(item.GetAlpha)
+			sg = sg .. "|a" .. string.format("%.3f", okA and tonumber(al) or 1)
+		end
 		return sg
 	end
 	en.Base = en.Get()
@@ -6864,6 +7301,10 @@ do
 			local ok2, kk = pcall(it.GetKey)
 			if ok2 then k = kk end
 		end
+		if k == nil and type(it.GetAlpha) == "function" then
+			local okA, al = pcall(it.GetAlpha)
+			if okA then k = al end
+		end
 		return ok and copyVal(v) or nil, k
 	end
 	Library._undoSnap = snap
@@ -6955,7 +7396,8 @@ do
 			local en = c.En
 			if en.Frame and en.Frame.Parent then
 				pcall(en.Item.Set, en.Item, copyVal(c.Old))
-				if c.OldKey ~= nil and en.Item.SetKey then pcall(en.Item.SetKey, en.Item, c.OldKey) end
+				if c.OldKey ~= nil and en.Item.SetKey then pcall(en.Item.SetKey, en.Item, c.OldKey)
+				elseif c.OldKey ~= nil and en.Item.SetAlpha then pcall(en.Item.SetAlpha, en.Item, c.OldKey) end
 				en.USig = en.Get()
 				en.UVal, en.UKey = snap(en)
 			end
@@ -7000,7 +7442,7 @@ do
 			if ok and cur ~= nil then o.Default = cur end
 			o.Callback = function(...)
 				local a, b = ...
-				pcall(item.Set, item, (b ~= nil) and { a, b } or a)
+				pcall(item.Set, item, (b ~= nil and typeof(a) ~= "Color3") and { a, b } or a, typeof(a) == "Color3" and b or nil)
 			end
 			pcall(function() blk["Create" .. en.Kind](blk, o) end)
 		end
@@ -7917,9 +8359,15 @@ end
 -- ============================================================================
 -- V5 : ONGLET « Change-Log » (À propos + historique des versions)
 -- ============================================================================
-Library.Version = "5.1.0"
+Library.Version = "5.2.0"
 Library.AppName = "Ui-Lib"
 Library.Changelog = {
+	{ Version = "5.2.0", Date = "2026-10-27", Title = "Curseur, touches et couleurs", Notes = {
+		"Nouveaux réglages : « Libérer le curseur » et « Bloquer les touches du jeu » (Paramètres > Fenêtre).",
+		"Le curseur libre est un mécanisme unique, partagé par la fenêtre, la Palette, le Spotlight et la pipette.",
+		"Color picker : barre d'opacité, pipette, couleurs récentes, copier / coller en hexadécimal.",
+		"Le fond « trou noir » démarre en mode Léger (meilleures performances).",
+	} },
 	{ Version = "5.1.0", Date = "2026-10-25", Title = "Types d'interface", Notes = {
 		"Nouveau : Réglages > Style > « Type d'interface » (Classique / Éclipse), sauvegardé automatiquement.",
 		"Éclipse : menu large avec marque et carte utilisateur, en-tête avec titre de page + recherche, barre d'état en bas.",
@@ -9174,7 +9622,7 @@ function Window:CreateFavoritesTab(name, icon)
 			if ok and cur ~= nil then o.Default = cur end
 			o.Callback = function(...)
 				local a, b = ...
-				pcall(item.Set, item, (b ~= nil) and { a, b } or a)   -- plage : (min, max)
+				pcall(item.Set, item, (b ~= nil and typeof(a) ~= "Color3") and { a, b } or a, typeof(a) == "Color3" and b or nil)   -- plage : (min, max)
 			end
 		end
 		pcall(function() blk["Create" .. ent.Kind](blk, o) end)
@@ -10155,6 +10603,12 @@ function Window:CreateSettingsTab(name, icon, docked)
 			Library.AutoSaveSettings = v and true or false
 			if Library._settingsReady and (Library._restoring or 0) == 0 then Library:SaveSettings() end
 		end })
+	D:CreateToggle({ Name = "Libérer le curseur", Flag = "ui.freecursor", Default = Library.FreeCursor ~= false,
+		Tooltip = "Tant que la fenêtre est ouverte, le curseur reste libre même en vue à la première personne ou quand le jeu verrouille la souris. Il est rendu au jeu à la fermeture. La palette (Ctrl+K), la barre de recherche (Ctrl+T) et la pipette libèrent toujours le curseur.",
+		Callback = function(v) Library:SetFreeCursor(v) end })
+	D:CreateToggle({ Name = "Bloquer les touches du jeu", Flag = "ui.blockkeys", Default = Library.BlockGameKeys == true,
+		Tooltip = "Tant que l'interface est ouverte, W A S D et Espace n'agissent plus sur ton personnage (Library.BlockedKeys pour changer la liste). Rien n'est bloqué pendant la saisie de texte ou l'assignation d'une touche.",
+		Callback = function(v) Library:SetBlockGameKeys(v) end })
 	D:CreateToggle({ Name = "Verrouiller la position", Flag = "ui.lockpos", Default = Library.LockPosition == true,
 		Tooltip = "La fenêtre ne peut plus être déplacée ni redimensionnée à la souris (le double-clic pour réduire et Ctrl+R restent possibles).",
 		Callback = function(v) Library:SetLockPosition(v) end })
@@ -10744,7 +11198,7 @@ end
 
 		-- voile (bouton « Modal » : libère aussi le curseur en vue à la première personne)
 		P.dim = new("TextButton", { Name = "Dim", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
-			BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Modal = true, BorderSizePixel = 0 }, gui)
+			BackgroundTransparency = 1, Text = "", AutoButtonColor = false, BorderSizePixel = 0 }, gui)
 		P.dim.MouseButton1Click:Connect(function() Library:ClosePalette() end)
 
 		P.root = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
@@ -11143,12 +11597,7 @@ end
 
 		-- on bloque les touches du jeu (chiffres, Tab, flèches, molette...) et on garde le curseur libre
 		pcall(function() CAS:BindActionAtPriority("UiLibPalette", casHandler, false, 3000, table.unpack(CAS_KEYS)) end)
-		pcall(function()
-			RunService:BindToRenderStep("UiLibPaletteMouse", Enum.RenderPriority.Camera.Value + 10, function()
-				UIS.MouseBehavior = Enum.MouseBehavior.Default
-				UIS.MouseIconEnabled = true
-			end)
-		end)
+		Library:AcquireCursor("palette", true)
 
 		render(true, true)
 	end
@@ -11158,7 +11607,7 @@ end
 		P.open = false
 		uiSnd("palclose")
 		pcall(function() CAS:UnbindAction("UiLibPalette") end)
-		pcall(function() RunService:UnbindFromRenderStep("UiLibPaletteMouse") end)
+		Library:ReleaseCursor("palette")
 		if P.view and P.view.capture then Library._listening = false end
 		P.typing = false
 		if P.search then P.search:ReleaseFocus() end
@@ -11230,7 +11679,7 @@ end
 	Library._destroyPalette = function()
 		P.open = false
 		pcall(function() CAS:UnbindAction("UiLibPalette") end)
-		pcall(function() RunService:UnbindFromRenderStep("UiLibPaletteMouse") end)
+		Library:ReleaseCursor("palette")
 		stopSpin()
 		if P.gui then pcall(function() P.gui:Destroy() end) end
 		P.gui, P.slots, P.shown, P.stack, P.view = nil, {}, {}, {}, nil
@@ -11827,7 +12276,7 @@ local spotOk, spotErr = pcall(function()
 		uiSnd("spotclose")
 		if S.capture then pcall(S.capture) end
 		pcall(function() CAS:UnbindAction("UiLibSpotlight") end)
-		pcall(function() RunService:UnbindFromRenderStep("UiLibSpotlightMouse") end)
+		Library:ReleaseCursor("spotlight")
 		if S.box then pcall(function() S.box:ReleaseFocus() end) end
 		local sess = S.sess
 		if sess then
@@ -11888,7 +12337,7 @@ local spotOk, spotErr = pcall(function()
 
 		-- voile noir (bouton « Modal » : libère aussi le curseur en vue première personne) ; clic dehors = fermer
 		local dim = new("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
-			BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Modal = true, BorderSizePixel = 0 }, gui)
+			BackgroundTransparency = 1, Text = "", AutoButtonColor = false, BorderSizePixel = 0 }, gui)
 		dim.MouseButton1Click:Connect(function() Library:CloseSpotlight() end)
 		tween(dim, { BackgroundTransparency = 0.1 }, 0.35)
 		S.dim = dim
@@ -12049,12 +12498,7 @@ local spotOk, spotErr = pcall(function()
 
 		-- Échap : bloqué côté jeu (sinon il ouvre le menu Roblox) ; curseur libre
 		pcall(function() CAS:BindActionAtPriority("UiLibSpotlight", casHandler, false, 3000, KC.Escape) end)
-		pcall(function()
-			RunService:BindToRenderStep("UiLibSpotlightMouse", Enum.RenderPriority.Camera.Value + 10, function()
-				UIS.MouseBehavior = Enum.MouseBehavior.Default
-				UIS.MouseIconEnabled = true
-			end)
-		end)
+		Library:AcquireCursor("spotlight", true)
 
 		refresh()
 		task.delay(0.08, function()
@@ -12092,7 +12536,7 @@ local spotOk, spotErr = pcall(function()
 	Library._destroySpotlight = function()
 		S.open = false
 		pcall(function() CAS:UnbindAction("UiLibSpotlight") end)
-		pcall(function() RunService:UnbindFromRenderStep("UiLibSpotlightMouse") end)
+		Library:ReleaseCursor("spotlight")
 		if S.sess then teardown(S.sess) end
 		S.sess, S.box, S.list, S.caption, S.ui, S.barScale, S.dim, S.stageScale = nil, nil, nil, nil, nil, nil, nil, nil
 		S.rows = {}
@@ -12126,6 +12570,9 @@ function Library:CreateWindow(cfg)
 	if cfg.WindowAnim ~= nil then Library.WindowAnim = cfg.WindowAnim and true or false end
 	if cfg.LockPosition ~= nil then Library.LockPosition = cfg.LockPosition and true or false end
 	if cfg.ToggleStyle and TOGGLE_STYLES[cfg.ToggleStyle] then Library.ToggleStyle = cfg.ToggleStyle end
+	if cfg.FreeCursor ~= nil then Library.FreeCursor = cfg.FreeCursor and true or false end
+	if cfg.BlockGameKeys ~= nil then Library.BlockGameKeys = cfg.BlockGameKeys and true or false end
+	if type(cfg.BlockedKeys) == "table" then Library.BlockedKeys = cfg.BlockedKeys end
 
 	-- Nettoie une ancienne instance (relance du script)
 	for _, p in ipairs({ CoreGui, LP:FindFirstChild("PlayerGui") }) do
@@ -12359,7 +12806,7 @@ function Library:CreateWindow(cfg)
 	for _ = 1, 22 do addStar() end
 
 	-- Fond animé : "full" (tout), "light" (moitié d'étoiles), "off" (aucun fond, le plus fluide)
-	local bgMode = cfg.Background or "full"
+	local bgMode = cfg.Background or "light"
 	local starLim = #stars
 	local function applyBg()
 		space.Visible = bgMode ~= "off"
@@ -13171,24 +13618,8 @@ function Library:CreateWindow(cfg)
 	-- tu peux bouger le curseur et cliquer. Bouton « Modal » invisible (méthode native Roblox) + rappel à chaque
 	-- frame pour les jeux qui reverrouillent la souris eux-mêmes. À la fermeture, l'état du jeu est rendu.
 	-- ------------------------------------------------------------------
-	local cursorBtn = new("TextButton", { Name = "CursorFree", Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1,
-		Text = "", AutoButtonColor = false, Modal = true, BorderSizePixel = 0, Visible = false }, gui)
-	local savedIcon
 	local function setCursorFree(on)
-		cursorBtn.Visible = on and true or false
-		pcall(function() RunService:UnbindFromRenderStep("UiLibWindowMouse") end)
-		if on then
-			if savedIcon == nil then savedIcon = UIS.MouseIconEnabled end
-			pcall(function()
-				RunService:BindToRenderStep("UiLibWindowMouse", Enum.RenderPriority.Camera.Value + 10, function()
-					if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then UIS.MouseBehavior = Enum.MouseBehavior.Default end
-					if not UIS.MouseIconEnabled then UIS.MouseIconEnabled = true end
-				end)
-			end)
-		elseif savedIcon ~= nil then
-			pcall(function() UIS.MouseIconEnabled = savedIcon end)
-			savedIcon = nil
-		end
+		if on then Library:AcquireCursor("window") else Library:ReleaseCursor("window") end
 	end
 	Library._setCursorFree = setCursorFree
 	setCursorFree(win.Open)
@@ -13546,6 +13977,7 @@ function Library:CreateWindow(cfg)
 	registerFavItem()
 	Library._registerSilenced()
 	Library._registerNotifCustom()
+	Library._registerRecentColors()
 	-- position du HUD : restaurée avec les réglages
 	Library.Items["ui.hudpos"] = {
 		Get = function() return Library.HudPos end,
@@ -13630,6 +14062,8 @@ function Library:Destroy()
 	if Library._setCursorFree then pcall(Library._setCursorFree, false) end
 	pcall(function() RunService:UnbindFromRenderStep("UiLibWindowMouse") end)
 	Library._setCursorFree = nil
+	if Library._destroyCursor then pcall(Library._destroyCursor) end
+	if Library._destroyPipette then pcall(Library._destroyPipette) end
 	do
 		local CASd = game:GetService("ContextActionService")
 		for n = 1, (Library._ddNavId or 0) do pcall(function() CASd:UnbindAction("UiLibDDNav" .. n) end) end
