@@ -7,6 +7,12 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V5.1 — CORRECTIFS
+		• Curseur libéré tant que la fenêtre est ouverte (vue 1re personne / souris verrouillée) ; rendu au jeu à la fermeture.
+		• Toggles & Keybinds : on peut assigner Clic gauche / droit / milieu (en plus du clavier). Config : "MouseButton1/2/3".
+		• Color picker (et glisser de bloc) : position du pointeur alignée sur le curseur (GetMouseLocation).
+		• Animations « Back » : les couleurs / transparences ne dépassent plus la cible (fini le flash noir <-> blanc du style Pilule).
+
 	V5 — NOUVEAUTÉS
 		• Correctif : la fenêtre garde sa taille après fermeture / réouverture (taille « dépliée » de référence).
 		• Keybinds : sélecteur de mode sur chaque ligne -> Toggle / Hold / Always.
@@ -495,6 +501,26 @@ end
 local tweenInfoCache = {}
 local function tween(o, props, t, style, dir)
 	t = t or 0.25
+	-- Back / Elastic dépassent la valeur cible : sur une COULEUR ou une TRANSPARENCE ça fait un flash (noir <-> blanc
+	-- pas net). On sépare donc : géométrie avec l'easing demandé, couleurs / transparences en douceur (sans dépassement).
+	if style == BACK or style == Enum.EasingStyle.Elastic or style == Enum.EasingStyle.Bounce then
+		local smooth, geo
+		for k, v in pairs(props) do
+			if typeof(v) == "Color3" or string.find(k, "Transparency", 1, true) then
+				smooth = smooth or {}
+				smooth[k] = v
+			else
+				geo = geo or {}
+				geo[k] = v
+			end
+		end
+		if smooth and geo then
+			tween(o, smooth, t, nil, dir)
+			return tween(o, geo, t, style, dir)
+		elseif smooth then
+			style = nil
+		end
+	end
 	style = style or QUINT
 	dir = dir or OUT
 	if not Library.Animations then
@@ -650,6 +676,17 @@ end
 local function guiInset()
 	local ok, v = pcall(function() return GuiService:GetGuiInset() end)
 	return ok and v or Vector2.new(0, 0)
+end
+
+-- Position du pointeur dans le MÊME repère que AbsolutePosition (les ScreenGui sont en IgnoreGuiInset = true).
+-- Souris : GetMouseLocation (fiable, même en vue 1re personne / souris verrouillée puis libérée).
+-- Tactile : InputObject.Position décalé de l'inset. Remplace l'ancien « p.Y + GetGuiInset().Y » qui décalait le curseur.
+Library._pointerPos = function(p)
+	local okT, last = pcall(function() return UIS:GetLastInputType() end)
+	if okT and last == Enum.UserInputType.Touch then
+		return Vector2.new(p.X, p.Y + guiInset().Y)
+	end
+	return UIS:GetMouseLocation()
 end
 
 local function viewport()
@@ -4196,10 +4233,71 @@ end
 
 -- Noms de touches raccourcis (puces des toggles et HUD)
 local KEY_SHORT = { LeftShift = "LShift", RightShift = "RShift", LeftControl = "LCtrl", RightControl = "RCtrl",
-	LeftAlt = "LAlt", RightAlt = "RAlt", Return = "Enter", Backspace = "Back", Escape = "Esc" }
+	LeftAlt = "LAlt", RightAlt = "RAlt", Return = "Enter", Backspace = "Back", Escape = "Esc",
+	MouseButton1 = "Clic G", MouseButton2 = "Clic D", MouseButton3 = "Clic M" }
 local function shortKey(k)
 	if typeof(k) ~= "EnumItem" or k == Enum.KeyCode.Unknown then return nil end
 	return KEY_SHORT[k.Name] or k.Name
+end
+
+-- Touches ET boutons de souris : une « touche » est soit un Enum.KeyCode, soit Enum.UserInputType.MouseButton1/2/3
+-- (clic gauche / droit / milieu). (rangé dans Library._kb : la librairie est proche de la limite de 200 variables locales)
+do
+local MOUSE_KEYS = { MouseButton1 = true, MouseButton2 = true, MouseButton3 = true }
+Library._kb = {
+	-- cet évènement d'entrée correspond-il à la touche / au bouton assigné ?
+	hit = function(i, key)
+		if typeof(key) ~= "EnumItem" or key == Enum.KeyCode.Unknown then return false end
+		if key.EnumType == Enum.KeyCode then
+			return i.UserInputType == Enum.UserInputType.Keyboard and i.KeyCode == key
+		end
+		return i.UserInputType == key
+	end,
+	-- "F" / "MouseButton2" / EnumItem -> EnumItem (ou nil)
+	parse = function(v)
+		if typeof(v) == "EnumItem" then return v end
+		if type(v) ~= "string" then return nil end
+		local ok, k = pcall(function() return Enum.KeyCode[v] end)
+		if ok and typeof(k) == "EnumItem" then return k end
+		if MOUSE_KEYS[v] then return Enum.UserInputType[v] end
+		return nil
+	end,
+	text = function(k)
+		return shortKey(k) or "Aucune"
+	end,
+	-- Écoute la prochaine touche OU le prochain clic (gauche / droit / milieu). Un calque invisible plein écran
+	-- absorbe le clic pendant l'écoute : il n'active donc rien dans l'interface ni dans le jeu.
+	-- Retourne un objet avec :Disconnect() (idempotent), comme une connexion.
+	listen = function(onPick)
+		local sinkGui, conn
+		local handle = {}
+		function handle:Disconnect()
+			if conn then conn:Disconnect() conn = nil end
+			if sinkGui then sinkGui:Destroy() sinkGui = nil end
+		end
+		pcall(function()
+			sinkGui = new("ScreenGui", { Name = "SolarisKeySink", ResetOnSpawn = false, DisplayOrder = 1100,
+				ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
+			mount(sinkGui)
+			new("TextButton", { Name = "Sink", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "",
+				AutoButtonColor = false, BorderSizePixel = 0 }, sinkGui)
+		end)
+		conn = track(UIS.InputBegan:Connect(function(i)
+			local ut, k = i.UserInputType, nil
+			if ut == Enum.UserInputType.Keyboard then
+				if i.KeyCode == Enum.KeyCode.Unknown then return end
+				k = i.KeyCode
+			elseif MOUSE_KEYS[ut.Name] then
+				k = ut
+			else
+				return
+			end
+			handle:Disconnect()
+			onPick(k)
+		end))
+		return handle
+	end,
+}
 end
 
 -- ---------------------------------------------------------------------------
@@ -4600,8 +4698,7 @@ function Block:CreateToggle(o)
 			if bindConn then return end
 			bindConn = track(UIS.InputBegan:Connect(function(i, gp)
 				if gp or listening or Library._listening then return end
-				if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
-				if key == Enum.KeyCode.Unknown or i.KeyCode ~= key then return end
+				if not Library._kb.hit(i, key) then return end
 				if keyMode == "Always" then return end
 				if os.clock() - lastBind < 0.2 or not f.Parent then return end
 				if UIS:GetFocusedTextBox() then return end
@@ -4609,7 +4706,7 @@ function Block:CreateToggle(o)
 				uiSnd(state and "on" or "off")
 			end))
 			endConn = track(UIS.InputEnded:Connect(function(i)
-				if keyMode == "Hold" and state and key ~= Enum.KeyCode.Unknown and i.KeyCode == key then
+				if keyMode == "Hold" and state and Library._kb.hit(i, key) then
 					apply(false)
 					uiSnd("off")
 				end
@@ -4650,28 +4747,24 @@ function Block:CreateToggle(o)
 			end
 			-- l'interface se masque pendant l'écoute : on annule (sinon la prochaine touche du jeu serait capturée)
 			Library._abortListen = function() stop() chip.Text = shortKey(key) or "—" refreshLook() end
-			c = track(UIS.InputBegan:Connect(function(i)
-				if i.UserInputType ~= Enum.UserInputType.Keyboard or i.KeyCode == Enum.KeyCode.Unknown then return end
+			c = Library._kb.listen(function(k)   -- touche du clavier OU clic gauche / droit / milieu
 				stop()
-				if i.KeyCode == Enum.KeyCode.Escape then
+				if k == Enum.KeyCode.Escape then
 					chip.Text = shortKey(key) or "—"   -- annulé : la touche actuelle est gardée
 					refreshLook()
-				elseif i.KeyCode == Enum.KeyCode.Backspace or i.KeyCode == Enum.KeyCode.Delete then
+				elseif k == Enum.KeyCode.Backspace or k == Enum.KeyCode.Delete then
 					setKey(Enum.KeyCode.Unknown)
 				else
-					setKey(i.KeyCode)
+					setKey(k)
 				end
-			end))
+			end)
 		end
 		chip.MouseButton1Click:Connect(startListen)
 		btn.MouseButton2Click:Connect(startListen)   -- clic droit sur la ligne du toggle
 
 		keyItem.Set = function(...)
 			local k = unself(keyItem, ...)
-			if type(k) == "string" then
-				local ok, res = pcall(function() return Enum.KeyCode[k] end)
-				k = ok and res or nil
-			end
+			if type(k) == "string" then k = Library._kb.parse(k) end
 			if typeof(k) == "EnumItem" then setKey(k, (Library._silentSound or 0) > 0) end   -- config / auto-load : silencieux
 		end
 		keyItem.Get = function() return key end
@@ -5961,7 +6054,7 @@ function Block:CreateKeybind(o)
 	label(f, o.Name or "Keybind", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -190, 1, 0) })
 	local btn = new("TextButton", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.new(0, 88, 0, 24),
-		BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = (key == Enum.KeyCode.Unknown) and "Aucune" or key.Name,
+		BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = Library._kb.text(key),
 		TextColor3 = T.Text, TextSize = 12, Font = F_MED, AutoButtonColor = false,
 	}, f)
 	corner(btn, 6)
@@ -6002,7 +6095,7 @@ function Block:CreateKeybind(o)
 
 	local function apply(k, silent)
 		key = k
-		btn.Text = (k == Enum.KeyCode.Unknown) and "Aucune" or k.Name
+		btn.Text = Library._kb.text(k)
 		if o.Flag then Library.Flags[o.Flag] = k.Name end
 		if Library._hudRefresh then Library._hudRefresh() end
 		if Library.RefreshKeybindConflicts then Library:RefreshKeybindConflicts() end
@@ -6028,28 +6121,25 @@ function Block:CreateKeybind(o)
 			Library._abortListen = nil
 			tween(bst, { Transparency = Sty.InputStroke }, 0.3)
 		end
-		local function label0() btn.Text = (key == Enum.KeyCode.Unknown) and "Aucune" or key.Name end
+		local function label0() btn.Text = Library._kb.text(key) end
 		Library._abortListen = function() stop() label0() end   -- interface masquée pendant l'écoute
-		c = track(UIS.InputBegan:Connect(function(i)
-			if i.UserInputType ~= Enum.UserInputType.Keyboard or i.KeyCode == Enum.KeyCode.Unknown then return end
+		c = Library._kb.listen(function(k)   -- touche du clavier OU clic gauche / droit / milieu
 			stop()
-			if i.KeyCode == Enum.KeyCode.Escape then
+			if k == Enum.KeyCode.Escape then
 				label0()                                  -- annulé : la touche actuelle est gardée
-			elseif i.KeyCode == Enum.KeyCode.Backspace or i.KeyCode == Enum.KeyCode.Delete then
+			elseif k == Enum.KeyCode.Backspace or k == Enum.KeyCode.Delete then
 				apply(Enum.KeyCode.Unknown)               -- retirer la touche
 			else
-				apply(i.KeyCode)
+				apply(k)
 			end
-		end))
+		end)
 	end)
+
 
 	local item = {}
 	item.Set = function(...)
 		local k = unself(item, ...)
-		if type(k) == "string" then
-			local ok, res = pcall(function() return Enum.KeyCode[k] end)
-			k = ok and res or nil
-		end
+		if type(k) == "string" then k = Library._kb.parse(k) end
 		if typeof(k) == "EnumItem" then apply(k) end
 	end
 	item.Get = function() return key end
@@ -6058,13 +6148,13 @@ function Block:CreateKeybind(o)
 	item.SetMode = function(...) setMode((unself(item, ...))) end
 	-- la touche agit selon le mode : Hold = actif tant qu'elle est tenue, Toggle = bascule, Always = toujours actif
 	track(UIS.InputBegan:Connect(function(i, gp)
-		if gp or Library._listening or key == Enum.KeyCode.Unknown or i.KeyCode ~= key then return end
-		if i.UserInputType ~= Enum.UserInputType.Keyboard or mode == "Always" then return end
+		if gp or Library._listening or not Library._kb.hit(i, key) then return end
+		if mode == "Always" then return end
 		if UIS:GetFocusedTextBox() or not f.Parent then return end
 		if mode == "Hold" then setActive(true) else setActive(not active) end
 	end))
 	track(UIS.InputEnded:Connect(function(i)
-		if mode == "Hold" and key ~= Enum.KeyCode.Unknown and i.KeyCode == key then setActive(false) end
+		if mode == "Hold" and Library._kb.hit(i, key) then setActive(false) end
 	end))
 	local modeItem = {}
 	modeItem.Get = function() return mode end
@@ -6173,9 +6263,9 @@ function Block:CreateColorPicker(o)
 	svHit.InputBegan:Connect(function(i)
 		if isPress(i) then
 			startDrag(function(p)
-				local y = p.Y + guiInset().Y
-				s = math.clamp((p.X - sv.AbsolutePosition.X) / math.max(sv.AbsoluteSize.X, 1), 0, 1)
-				v = 1 - math.clamp((y - sv.AbsolutePosition.Y) / math.max(sv.AbsoluteSize.Y, 1), 0, 1)
+				local m = Library._pointerPos(p)
+				s = math.clamp((m.X - sv.AbsolutePosition.X) / math.max(sv.AbsoluteSize.X, 1), 0, 1)
+				v = 1 - math.clamp((m.Y - sv.AbsolutePosition.Y) / math.max(sv.AbsoluteSize.Y, 1), 0, 1)
 				commit()
 			end, self.Scroll, i.Position)
 		end
@@ -6183,8 +6273,8 @@ function Block:CreateColorPicker(o)
 	hueHit.InputBegan:Connect(function(i)
 		if isPress(i) then
 			startDrag(function(p)
-				local y = p.Y + guiInset().Y
-				h = math.min(math.clamp((y - hue.AbsolutePosition.Y) / math.max(hue.AbsoluteSize.Y, 1), 0, 1), 0.999)
+				local m = Library._pointerPos(p)
+				h = math.min(math.clamp((m.Y - hue.AbsolutePosition.Y) / math.max(hue.AbsoluteSize.Y, 1), 0, 1), 0.999)
 				commit()
 			end, self.Scroll, i.Position)
 		end
@@ -8244,7 +8334,7 @@ function Library:_dragBlock(blk, startPos)
 		if not moved then
 			if (last - startPos).Magnitude > 5 then create() else return end
 		end
-		local cur = Vector2.new(last.X, last.Y + inset.Y)
+		local cur = Library._pointerPos(last)
 		ghost.Position = UDim2.fromOffset(cur.X - gx, cur.Y - headH / 2)
 
 		-- colonne visée : la plus proche horizontalement
@@ -10113,7 +10203,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	local kbRows = {}
 	local function keyText(it)
 		local ok, k = pcall(function() return it.Get() end)
-		return (ok and typeof(k) == "EnumItem") and k.Name or "—"
+		return (ok and typeof(k) == "EnumItem") and (shortKey(k) or k.Name) or "—"
 	end
 	local conflictMarks = {}   -- [entrée] = true quand sa touche est partagée
 	local warnItem
@@ -13075,11 +13165,40 @@ function Library:CreateWindow(cfg)
 	local toggleToken = 0
 	local hintShown = false
 	local toggleKey = cfg.ToggleKey or Enum.KeyCode.RightShift
+
+	-- ------------------------------------------------------------------
+	-- Curseur libéré tant que l'interface est ouverte : en vue 1re personne (ou souris verrouillée au centre)
+	-- tu peux bouger le curseur et cliquer. Bouton « Modal » invisible (méthode native Roblox) + rappel à chaque
+	-- frame pour les jeux qui reverrouillent la souris eux-mêmes. À la fermeture, l'état du jeu est rendu.
+	-- ------------------------------------------------------------------
+	local cursorBtn = new("TextButton", { Name = "CursorFree", Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1,
+		Text = "", AutoButtonColor = false, Modal = true, BorderSizePixel = 0, Visible = false }, gui)
+	local savedIcon
+	local function setCursorFree(on)
+		cursorBtn.Visible = on and true or false
+		pcall(function() RunService:UnbindFromRenderStep("UiLibWindowMouse") end)
+		if on then
+			if savedIcon == nil then savedIcon = UIS.MouseIconEnabled end
+			pcall(function()
+				RunService:BindToRenderStep("UiLibWindowMouse", Enum.RenderPriority.Camera.Value + 10, function()
+					if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then UIS.MouseBehavior = Enum.MouseBehavior.Default end
+					if not UIS.MouseIconEnabled then UIS.MouseIconEnabled = true end
+				end)
+			end)
+		elseif savedIcon ~= nil then
+			pcall(function() UIS.MouseIconEnabled = savedIcon end)
+			savedIcon = nil
+		end
+	end
+	Library._setCursorFree = setCursorFree
+	setCursorFree(win.Open)
+
 	function win:Toggle(v)
 		if v == nil then v = not self.Open end
 		v = v and true or false
 		if v == self.Open then return end
 		self.Open = v
+		setCursorFree(v)
 		if Library._floatsVisible then pcall(Library._floatsVisible, v) end
 		if not Library._quietWin then uiSnd(v and "winopen" or "winclose") end
 		if Library._ddKeyClose then pcall(Library._ddKeyClose) end
@@ -13508,6 +13627,9 @@ function Library:Destroy()
 	Library._openDD = nil
 	Library._listening = false
 	Library._abortListen = nil
+	if Library._setCursorFree then pcall(Library._setCursorFree, false) end
+	pcall(function() RunService:UnbindFromRenderStep("UiLibWindowMouse") end)
+	Library._setCursorFree = nil
 	do
 		local CASd = game:GetService("ContextActionService")
 		for n = 1, (Library._ddNavId or 0) do pcall(function() CASd:UnbindAction("UiLibDDNav" .. n) end) end
