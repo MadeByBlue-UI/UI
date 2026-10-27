@@ -7,6 +7,19 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V5.9 — TRANSITIONS PLUS FLUIDES
+		• Liste déroulante : le tiroir s'ouvre / se ferme en glissant, les options apparaissent une à une (fondu + léger glissement)
+		  et la flèche pivote en même temps, avec la même durée et la même courbe.
+		• Glisser-déposer d'un bloc : les autres blocs s'écartent en glissant (l'emplacement grandit, l'ancien se referme),
+		  au lieu de sauter d'un coup. L'emplacement a la hauteur réelle du bloc : au dépôt, plus aucun saut.
+		• Réduire / restaurer (double-clic) : le contenu se fond dans l'arrière-plan pendant que la fenêtre rétrécit, et réapparaît
+		  en fondu pendant qu'elle se redéplie (au lieu de disparaître d'un coup).
+		• Color picker : les poignées (carré, teinte, opacité) glissent jusqu'à la nouvelle couleur quand on tape un code hexadécimal
+		  (appliqué en direct dès que le code est complet), colle, utilise la pipette ou clique une couleur récente.
+		  Pendant un glisser à la souris, rien ne change : le curseur suit toujours le pointeur sans retard.
+		• Changement du nombre de colonnes : chaque bloc glisse de son ancienne place vers la nouvelle (la cible est relue à chaque
+		  image, donc ça suit aussi l'agrandissement de la fenêtre). Library.Animations = false coupe tout cela.
+
 	V5.8 — COLOR PICKER REFAIT, FONDU DU TEXTE, APERÇU DU PERSONNAGE
 		• Color picker refait : carré saturation / valeur pleine largeur, barre de teinte horizontale, poignées qui prennent la couleur choisie.
 		  Le pointeur est maintenant lu dans le repère réel de l'UI (correction automatique du décalage vertical de la barre du haut) ;
@@ -5857,6 +5870,39 @@ do
 	end
 end
 
+-- ============================================================================
+-- TIROIR ANIMÉ (liste déroulante, color picker) : dr.Wrap = cadre rogné qui s'ouvre / se ferme en glissant,
+-- dr:Set(bool), dr:Resize(hauteur), dr.Open, dr.Height. Stocké dans Library (pas de variable locale en plus).
+-- ============================================================================
+Library._drawer = function(holder, order)
+	local d = { Open = false, Height = 0 }
+	local wrap = new("Frame", { Name = "Drawer", Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1,
+		BorderSizePixel = 0, ClipsDescendants = true, LayoutOrder = order or 2, Visible = false }, holder)
+	d.Wrap = wrap
+	local gen = 0
+	function d:Resize(h)
+		d.Height = h
+		if d.Open then tween(wrap, { Size = UDim2.new(1, 0, 0, h) }, 0.28) end
+	end
+	function d:Set(v)
+		v = v and true or false
+		if v == d.Open then return end
+		d.Open = v
+		gen += 1
+		local my = gen
+		if v then
+			wrap.Visible = true
+			tween(wrap, { Size = UDim2.new(1, 0, 0, d.Height) }, 0.34)
+		else
+			local tw = tween(wrap, { Size = UDim2.new(1, 0, 0, 0) }, 0.26)
+			tw.Completed:Connect(function()
+				if gen == my and not d.Open then wrap.Visible = false end
+			end)
+		end
+	end
+	return d
+end
+
 function Block:CreateDropdown(o)
 	o = o or {}
 	local multi = (o.Multi == true) or (o.MultiSelect == true) or (o.MultipleOptions == true)
@@ -5965,7 +6011,7 @@ function Block:CreateDropdown(o)
 	valL:GetPropertyChangedSignal("Text"):Connect(layoutHead)
 	task.defer(layoutHead)
 
-	local dr = drawer(holder, 2)
+	local dr = Library._drawer(holder, 2)
 	local panel = new("Frame", {
 		Size = UDim2.new(1, 0, 0, 100), BackgroundColor3 = T.Panel, BackgroundTransparency = 0.1, BorderSizePixel = 0,
 	}, dr.Wrap)
@@ -6421,6 +6467,29 @@ function Block:CreateDropdown(o)
 		end))
 	end
 
+	-- ouverture : les options apparaissent une à une (fondu + léger glissement de gauche à droite)
+	local cascadeGen = 0
+	local function cascadeIn()
+		if not Library.Animations then return end
+		cascadeGen += 1
+		local my = cascadeGen
+		local rows = {}
+		for _, text in ipairs(items) do
+			local b = btns[text]
+			if b and b.Shown then rows[#rows + 1] = b end
+		end
+		local step = math.min(0.04, 0.36 / math.max(#rows, 1)) / math.max(Library.AnimSpeed or 1, 0.05)
+		for i, b in ipairs(rows) do
+			b.Btn.TextTransparency = 1
+			b.Pad.PaddingLeft = UDim.new(0, 24)
+			task.delay((i - 1) * step, function()
+				if cascadeGen ~= my or not b.Btn.Parent then return end
+				tween(b.Btn, { TextTransparency = 0 }, 0.3)
+				tween(b.Pad, { PaddingLeft = UDim.new(0, 10) }, 0.34)
+			end)
+		end
+	end
+
 	setOpen = function(v)
 		v = v and true or false
 		if v == isOpen then return end
@@ -6435,6 +6504,7 @@ function Block:CreateDropdown(o)
 			search.Text = ""
 			pressedPick = false
 			layout()
+			cascadeIn()
 			-- 🛠️ FIX : si la liste dépasse en bas de la zone visible, on fait défiler pour qu'elle soit entièrement cliquable
 			task.delay(0.38, function()
 				if not isOpen or not holder.Parent then return end
@@ -6478,7 +6548,8 @@ function Block:CreateDropdown(o)
 		end
 		isOpen = v
 		dr:Set(v)
-		tween(arrow, { Rotation = v and 90 or 0 }, 0.3)
+		-- même durée et même courbe que le tiroir : la flèche pivote exactement pendant que la liste se déploie
+		tween(arrow, { Rotation = v and 90 or 0 }, v and 0.34 or 0.26)
 	end
 
 	search:GetPropertyChangedSignal("Text"):Connect(function()
@@ -7123,7 +7194,7 @@ function Block:CreateColorPicker(o)
 
 	-- hauteur du tiroir : carré (104) · teinte (12) · opacité (12) · hexadécimal · boutons · récents
 	local PH = 142 + (useAlpha and 22 or 0) + 30 + 30 + 22 + 8
-	local dr = drawer(holder, 2)
+	local dr = Library._drawer(holder, 2)
 	dr:Resize(PH)
 	local panel = new("Frame", {
 		Size = UDim2.new(1, 0, 0, PH), BackgroundColor3 = T.Panel, BackgroundTransparency = 0.1, BorderSizePixel = 0,
@@ -7251,16 +7322,26 @@ function Block:CreateColorPicker(o)
 	local function refreshHex()
 		if not hex:IsFocused() then hex.Text = hexText() end
 	end
+	-- glissement des poignées : fx.glide = true seulement quand la couleur vient d'ailleurs que du pointeur (hexadécimal,
+	-- collage, pipette, couleur récente, script). Pendant un glisser à la souris : réglage direct, aucun retard.
+	local fx = { glide = false, tw = {} }
+	local function put(key, obj, props)
+		local old = fx.tw[key]
+		if old then old:Cancel() fx.tw[key] = nil end
+		if fx.glide and Library.Animations then
+			fx.tw[key] = tween(obj, props, 0.42)
+		else
+			for k2, val in pairs(props) do obj[k2] = val end
+		end
+	end
 	local function visuals()
-		sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
-		cursor.Position = UDim2.new(s, 0, 1 - v, 0)
-		cursor.BackgroundColor3 = Color3.fromHSV(h, s, v)
-		hueMark.Position = UDim2.new(h, 0, 0.5, 0)
-		swatch.BackgroundColor3 = col
-		swatch.BackgroundTransparency = (1 - alpha) * 0.8
+		put("svbg", sv, { BackgroundColor3 = Color3.fromHSV(h, 1, 1) })
+		put("cursor", cursor, { Position = UDim2.new(s, 0, 1 - v, 0), BackgroundColor3 = Color3.fromHSV(h, s, v) })
+		put("hue", hueMark, { Position = UDim2.new(h, 0, 0.5, 0) })
+		put("swatch", swatch, { BackgroundColor3 = col, BackgroundTransparency = (1 - alpha) * 0.8 })
 		if aFill then
-			aFill.BackgroundColor3 = col
-			aMark.Position = UDim2.new(alpha, 0, 0.5, 0)
+			put("afill", aFill, { BackgroundColor3 = col })
+			put("amark", aMark, { Position = UDim2.new(alpha, 0, 0.5, 0) })
 		end
 		refreshHex()
 	end
@@ -7276,10 +7357,12 @@ function Block:CreateColorPicker(o)
 		if ns > 0.001 and nv > 0.001 then h = nh end
 		s, v = ns, nv
 		if useAlpha and tonumber(a) then alpha = math.clamp(tonumber(a), 0, 1) end
+		fx.glide = true
 		commit()
 		col = c   -- on garde exactement la couleur demandée
-		swatch.BackgroundColor3 = c
-		if aFill then aFill.BackgroundColor3 = c end
+		put("swatch", swatch, { BackgroundColor3 = c, BackgroundTransparency = (1 - alpha) * 0.8 })
+		if aFill then put("afill", aFill, { BackgroundColor3 = c }) end
+		fx.glide = false
 		refreshHex()
 	end
 
@@ -7311,6 +7394,13 @@ function Block:CreateColorPicker(o)
 	end)
 	head.MouseButton1Click:Connect(function() uiSnd(dr.Open and "close" or "open") dr:Set(not dr.Open) end)
 
+	hex:GetPropertyChangedSignal("Text"):Connect(function()
+		if not hex:IsFocused() then return end
+		local digits = (string.gsub(hex.Text, "[#%s]", ""))
+		if #digits ~= 6 and #digits ~= 8 then return end
+		local c, a = Library._parseHex(hex.Text)
+		if c then applyColor(c, a) end   -- glisse jusqu'à la couleur tapée (sans l'ajouter aux récentes avant la validation)
+	end)
 	hex.FocusLost:Connect(function()
 		if not applyHex(hex.Text) then hex.Text = hexText() end
 	end)
@@ -7389,7 +7479,9 @@ function Block:CreateColorPicker(o)
 		local a = tonumber((unself(item, ...)))
 		if a and useAlpha then
 			alpha = math.clamp(a, 0, 1)
+			fx.glide = true
 			commit()
+			fx.glide = false
 		end
 	end
 	item.GetHex = hexText
@@ -11249,30 +11341,73 @@ function Library:SetLayoutEdit(v)
 	end
 end
 
--- Glisser un bloc par son en-tête : un emplacement suit le curseur, le bloc « fantôme » est le curseur
+-- Glisser un bloc par son en-tête : un emplacement suit le curseur, le bloc « fantôme » est le curseur.
+-- Les autres blocs s'écartent en glissant : l'emplacement visé GRANDIT de 0 à la hauteur du bloc, l'ancien se REFERME,
+-- et le trou laissé par le bloc soulevé se referme aussi. Les LayoutOrder sont pairs (2, 4, 6...) pendant le geste,
+-- les emplacements prennent les impairs : un emplacement qui se referme ne change donc jamais de place.
 function Library:_dragBlock(blk, startPos)
 	local win, tab = Library.Window, blk.Tab
 	if not (win and win.Gui) or Library._blockDragging then return end
 	Library._blockDragging = true
 
-	local inset = guiInset()
 	local sc = pxScale()
 	local frame = blk.Frame
 	local fAbs, fSize = frame.AbsolutePosition, frame.AbsoluteSize
 	local gx = math.clamp(startPos.X - fAbs.X, 12, math.max(12, fSize.X - 12))
 	local headH = 34 * sc
+	local slotH = math.max(fSize.Y / math.max(sc, 0.05), 34)   -- hauteur du bloc, en unités d'UI : celle de l'emplacement
 
 	local last = startPos
 	local moved = false
-	local ghost, placeholder, hb
+	local ghost, placeholder, hb, originGap
 	local curCol, curAt
+	local dying = {}
+	local SLIDE = 0.26
+
+	local function makeSlot(parent, order, h, transp)
+		local f = new("Frame", { Name = "BlockPlaceholder", Size = UDim2.new(1, 0, 0, h), LayoutOrder = order,
+			BackgroundColor3 = T.Accent, BackgroundTransparency = transp, BorderSizePixel = 0 }, parent)
+		new("UICorner", { CornerRadius = UDim.new(0, 10) }, f)
+		new("UIStroke", { Color = T.Accent, Transparency = (transp >= 1) and 1 or 0.45, Thickness = 1.5, ApplyStrokeMode = BORDER }, f)
+		return f
+	end
+	local function growSlot(f)
+		tween(f, { Size = UDim2.new(1, 0, 0, slotH), BackgroundTransparency = 0.9 }, SLIDE)
+		local st = f:FindFirstChildOfClass("UIStroke")
+		if st then tween(st, { Transparency = 0.45 }, SLIDE) end
+	end
+	local function shrinkSlot(f)
+		if not f then return end
+		dying[f] = true
+		tween(f, { Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1 }, 0.22)
+		local st = f:FindFirstChildOfClass("UIStroke")
+		if st then tween(st, { Transparency = 1 }, 0.18) end
+		task.delay(0.4, function()
+			dying[f] = nil
+			if f.Parent then f:Destroy() end
+		end)
+	end
+
+	-- ordres pairs et stables dans chaque colonne (l'ordre visible ne change pas)
+	local function normalise()
+		for _, col in ipairs(tab.Cols) do
+			local list = {}
+			for _, b in ipairs(tab.Blocks) do
+				if b.Frame.Parent == col then list[#list + 1] = b end
+			end
+			table.sort(list, function(x, y)
+				if x.Frame.LayoutOrder ~= y.Frame.LayoutOrder then return x.Frame.LayoutOrder < y.Frame.LayoutOrder end
+				return x.Index < y.Index
+			end)
+			for j, b in ipairs(list) do b.Frame.LayoutOrder = j * 2 end
+		end
+	end
 
 	local function create()
 		moved = true
-		placeholder = new("Frame", { Name = "BlockPlaceholder", Size = UDim2.new(1, 0, 0, 40),
-			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, BorderSizePixel = 0 })
-		new("UICorner", { CornerRadius = UDim.new(0, 10) }, placeholder)
-		new("UIStroke", { Color = T.Accent, Transparency = 0.45, Thickness = 1.5, ApplyStrokeMode = BORDER }, placeholder)
+		normalise()
+		-- le bloc soulevé laisse un trou de sa hauteur, qui se referme doucement
+		originGap = makeSlot(frame.Parent, frame.LayoutOrder, slotH, 1)
 		ghost = new("Frame", { Name = "BlockGhost", Size = UDim2.fromOffset(fSize.X, headH), ZIndex = 500,
 			BackgroundColor3 = T.Second, BackgroundTransparency = 0.12, BorderSizePixel = 0 }, win.Gui)
 		new("UICorner", { CornerRadius = UDim.new(0, math.floor(10 * sc)) }, ghost)
@@ -11281,6 +11416,7 @@ function Library:_dragBlock(blk, startPos)
 			Font = F_BOLD, ZIndex = 501 })
 		lb.TextSize = math.max(9, math.floor(13 * sc * (Library.FontScale or 1) + 0.5))
 		frame.Visible = false
+		shrinkSlot(originGap)
 		uiSnd("fold")
 	end
 
@@ -11316,9 +11452,9 @@ function Library:_dragBlock(blk, startPos)
 		for _, b in ipairs(tab.Blocks) do
 			if b ~= blk and b.Frame.Parent == col and b.Frame.Visible then sibs[#sibs + 1] = b end
 		end
-		table.sort(sibs, function(a, c)
-			if a.Frame.LayoutOrder ~= c.Frame.LayoutOrder then return a.Frame.LayoutOrder < c.Frame.LayoutOrder end
-			return a.Index < c.Index
+		table.sort(sibs, function(x, y)
+			if x.Frame.LayoutOrder ~= y.Frame.LayoutOrder then return x.Frame.LayoutOrder < y.Frame.LayoutOrder end
+			return x.Index < y.Index
 		end)
 		local at = #sibs + 1
 		for k, b in ipairs(sibs) do
@@ -11327,9 +11463,13 @@ function Library:_dragBlock(blk, startPos)
 		end
 		if col ~= curCol or at ~= curAt then
 			curCol, curAt = col, at
-			placeholder.Parent = col
-			for k, b in ipairs(sibs) do b.Frame.LayoutOrder = (k < at) and k or (k + 1) end
-			placeholder.LayoutOrder = at
+			if placeholder then shrinkSlot(placeholder) end   -- l'ancien emplacement se referme...
+			local ord
+			if #sibs == 0 then ord = 1
+			elseif at <= #sibs then ord = sibs[at].Frame.LayoutOrder - 1
+			else ord = sibs[#sibs].Frame.LayoutOrder + 1 end
+			placeholder = makeSlot(col, ord, 0, 1)           -- ...et le nouveau s'ouvre : les blocs voisins glissent
+			growSlot(placeholder)
 		end
 	end
 
@@ -11339,14 +11479,21 @@ function Library:_dragBlock(blk, startPos)
 		if hb then hb:Disconnect() hb = nil end
 		Library._blockDragging = false
 		if not moved then return end
-		local pp, ps = placeholder.AbsolutePosition, placeholder.AbsoluteSize
-		if curCol then
+		local pp, ps = ghost.Position, Vector2.new(fSize.X, headH)
+		if placeholder then
+			pp = placeholder.AbsolutePosition
+			ps = Vector2.new(placeholder.AbsoluteSize.X, slotH * sc)
+		end
+		if curCol and placeholder then
 			frame.Parent = curCol
-			frame.LayoutOrder = curAt
+			frame.LayoutOrder = placeholder.LayoutOrder
 			blk.Scroll = curCol
 		end
 		frame.Visible = true
-		placeholder:Destroy()
+		for f in pairs(dying) do if f.Parent then f:Destroy() end end
+		table.clear(dying)
+		if placeholder then placeholder:Destroy() end
+		if originGap and originGap.Parent then originGap:Destroy() end
 		tab:_commitLayout()
 		-- le fantôme glisse vers l'emplacement puis disparaît
 		tween(ghost, { Position = UDim2.fromOffset(pp.X, pp.Y), Size = UDim2.fromOffset(ps.X, ps.Y),
@@ -11368,11 +11515,109 @@ function Tab:_layoutColumns()
 	end
 end
 
+-- ---------------------------------------------------------------------------
+-- GLISSEMENT DES BLOCS AU CHANGEMENT DE COLONNES
+-- Avant le changement : on photographie (Clone) chaque bloc visible + sa position. Après : les vraies colonnes sont masquées
+-- quelques instants, et les copies glissent de l'ancienne place vers la nouvelle. La cible est relue à CHAQUE image (le layout
+-- continue de se calculer même masqué), donc la copie suit aussi l'agrandissement de la fenêtre.
+-- ---------------------------------------------------------------------------
+function Library._guiShown(g)
+	while g and g ~= game do
+		if g:IsA("GuiObject") and not g.Visible then return false end
+		if g:IsA("ScreenGui") and not g.Enabled then return false end
+		g = g.Parent
+	end
+	return g == game
+end
+
+function Library._endGlide()
+	local g = Library._glide
+	if not g then return end
+	Library._glide = nil
+	Library._glideOn = false
+	if g.conn then g.conn:Disconnect() end
+	if g.overlay then g.overlay:Destroy() end
+	for _, col in ipairs(g.cols or {}) do
+		if col.Parent then col.Visible = true end
+	end
+end
+
+function Library._snapBlocks(tab)
+	local win = Library.Window
+	if not (Library.Animations and win and win.Gui and win.Gui.Parent and win.Open and win.Content) then return nil end
+	local snap = {}
+	for _, b in ipairs(tab.Blocks) do
+		local f = b.Frame
+		if #snap >= 40 then break end
+		if not b._float and f and f.Parent and Library._guiShown(f) and f.AbsoluteSize.X > 4 and f.AbsoluteSize.Y > 4 then
+			local ok, c = pcall(function() return f:Clone() end)
+			if ok and c then snap[#snap + 1] = { blk = b, clone = c, pos = f.AbsolutePosition, size = f.AbsoluteSize } end
+		end
+	end
+	if #snap == 0 then return nil end
+	Library._endGlide()   -- un glissement précédent encore en cours : on le termine proprement
+	return snap
+end
+
+function Library._glideBlocks(tab, snap)
+	local win = Library.Window
+	if not snap then return end
+	local content = win.Content
+	local sc = math.max(pxScale(), 0.05)
+	local overlay = new("Frame", { Name = "ColumnGlide", BackgroundTransparency = 1, BorderSizePixel = 0,
+		ClipsDescendants = true, ZIndex = 400, Active = false }, win.Gui)
+	local used = {}
+	for _, s in ipairs(snap) do
+		local h = new("Frame", { BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 400 }, overlay)
+		new("UIScale", { Scale = sc }, h)
+		local c = s.clone
+		c.AutomaticSize = AN
+		c.Size = UDim2.fromScale(1, 1)
+		c.Position = UDim2.new()
+		c.Parent = h
+		s.holder = h
+		used[#used + 1] = s
+	end
+	local cols = {}
+	for _, col in ipairs(tab.Cols) do cols[#cols + 1] = col col.Visible = false end
+
+	local g = { overlay = overlay, cols = cols }
+	Library._glide = g
+	Library._glideOn = true
+	Library._busyUntil = os.clock() + 0.7
+	local t0 = os.clock()
+	local dur = 0.46 / math.max(Library.AnimSpeed or 1, 0.05)
+	g.conn = RunService.RenderStepped:Connect(function()
+		if Library._glide ~= g then return end
+		local ok = pcall(function()
+			local cp, cs = content.AbsolutePosition, content.AbsoluteSize
+			overlay.Position = UDim2.fromOffset(cp.X, cp.Y)
+			overlay.Size = UDim2.fromOffset(cs.X, cs.Y)
+			local a = math.clamp((os.clock() - t0) / dur, 0, 1)
+			local e = TweenService:GetValue(a, QUINT, OUT)
+			for _, s in ipairs(used) do
+				local f = s.blk.Frame
+				local np, ns = f.AbsolutePosition, f.AbsoluteSize
+				local x = s.pos.X + (np.X - s.pos.X) * e
+				local y = s.pos.Y + (np.Y - s.pos.Y) * e
+				local w = s.size.X + (ns.X - s.size.X) * e
+				local h = s.size.Y + (ns.Y - s.size.Y) * e
+				s.holder.Position = UDim2.fromOffset(x - cp.X, y - cp.Y)
+				s.holder.Size = UDim2.fromOffset(math.max(w, 1) / sc, math.max(h, 1) / sc)
+			end
+			Library._busyUntil = os.clock() + 0.3
+			if a >= 1 then Library._endGlide() end
+		end)
+		if not ok then Library._endGlide() end
+	end)
+end
+
 -- Change le nombre de colonnes (1 à 4) et replace tous les blocs déjà créés
 function Tab:SetColumns(n)
 	n = math.clamp(math.floor(tonumber(n) or 1), 1, 4)
 	for _, s in ipairs(self.SubTabs or {}) do s:SetColumns(n) end   -- les sous-onglets suivent
 	if n == self.NumCols then return end
+	local snap = Library._snapBlocks(self)   -- photo des blocs avant le changement (voir plus haut)
 	self.NumCols = n
 	self.TwoCols = n >= 2
 	while #self.Cols < n do self.Cols[#self.Cols + 1] = self._newColumn() end
@@ -11388,6 +11633,7 @@ function Tab:SetColumns(n)
 	while #self.Cols > n do table.remove(self.Cols):Destroy() end
 	self:_layoutColumns()
 	self.ColL, self.ColR = self.Cols[1], self.Cols[math.min(2, n)]
+	if snap then Library._glideBlocks(self, snap) end
 end
 
 -- ───────────── Type « Carré » : colonnes plus aérées + bloc dont le titre est posé sur la bordure ─────────────
@@ -16030,6 +16276,39 @@ function Library:CreateWindow(cfg)
 	-- Réduire (barre de titre seule) / recentrer / mise en page sauvegardée
 	-- ------------------------------------------------------------------
 	local parts = { search, sidebar, vline, content, footer }
+	-- voile de la couleur du fond posé sur le contenu : il s'opacifie pendant que la fenêtre rétrécit (le contenu « se fond »),
+	-- et s'efface en fondu pendant qu'elle se redéplie. (Champs dans « ec » : trop de variables locales dans cette fonction.)
+	ec.minGen = 0
+	ec.fadeCover = function(toHide)
+		ec.minGen += 1
+		local my = ec.minGen
+		if not Library.Animations then
+			if ec.minCover then ec.minCover.Visible = false end
+			return
+		end
+		if not ec.minCover then
+			ec.minCover = new("Frame", { Name = "MinimizeFade", BorderSizePixel = 0, ZIndex = 90, Active = false, Visible = false }, main)
+			new("UICorner", { CornerRadius = mainCorner.CornerRadius }, ec.minCover)
+		end
+		local cv = ec.minCover
+		cv.BackgroundColor3 = T.Main
+		cv.Position = UDim2.new(0, 0, 0, ec.collapsedH)
+		cv.Size = UDim2.new(1, 0, 1, -ec.collapsedH)
+		cv.Visible = true
+		if toHide then
+			cv.BackgroundTransparency = 1
+			tween(cv, { BackgroundTransparency = 0 }, 0.28)
+		else
+			cv.BackgroundTransparency = 0
+			task.delay(0.08, function()
+				if ec.minGen ~= my then return end
+				local tw = tween(cv, { BackgroundTransparency = 1 }, 0.34)
+				tw.Completed:Connect(function()
+					if ec.minGen == my then cv.Visible = false end
+				end)
+			end)
+		end
+	end
 	setMinimized = function(v)
 		v = v and true or false
 		if v == collapsed then return end
@@ -16039,6 +16318,7 @@ function Library:CreateWindow(cfg)
 		-- (sinon la fenêtre se « rapetisse » toute seule à la réouverture).
 		local fullSz = Vector2.new(math.max(fullSize.X, minW), math.max(fullSize.Y, minH))
 		curSize, lastSize, rsDir, rsSmooth = sz, sz, Vector2.new(0, 1), true
+		ec.fadeCover(v)
 		if v then
 			preSize = fullSz
 			tgtSize = Vector2.new(fullSz.X, ec.collapsedH)
@@ -16136,7 +16416,7 @@ function Library:CreateWindow(cfg)
 
 		for _, t in ipairs(win.Tabs) do t:SetColumns(eff) end
 
-		if oldEff and oldEff ~= eff and win.Veil and not collapsed then
+		if oldEff and oldEff ~= eff and win.Veil and not collapsed and not Library._glideOn then
 			win.VeilToken = (win.VeilToken or 0) + 1
 			local my = win.VeilToken
 			win.Veil.Visible = true
