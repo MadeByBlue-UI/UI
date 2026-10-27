@@ -7,6 +7,12 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V5.7 — CHAMP DE TEXTE EXTENSIBLE & SOUS-ONGLETS REFAITS
+		• CreateInput : plus de « ... » en fin de texte ; le champ s'agrandit avec une transition (vers la gauche, jusqu'à la largeur de la ligne,
+		  le nom s'efface en fondu) et se rétracte quand le texte raccourcit. Au-delà de la ligne, le texte défile pendant la saisie.
+		• Tab:CreateSubTabs : plus de grossissement au survol (le texte restait flou / rogné). Une pastille unique glisse et se redimensionne
+		  vers le sous-onglet choisi, le texte garde sa taille, la page arrive du bon côté, la barre défile si un sous-onglet est hors de vue.
+
 	V5.6 — HOME EN SOUS-ONGLETS
 		• Home : « Info » (page de départ : aperçu 3D, FPS / ping, session, météo, serveur...), « Explication » (ce que contient l'UI,
 		  aperçu de l'API, démos en direct) et « Mises à jour » (version, vérification GitHub, nouveautés).
@@ -6342,14 +6348,14 @@ end
 function Block:CreateInput(o)
 	o = o or {}
 	local f, st = makeRow(self, 34, o.Name)
-	label(f, o.Name or "Input", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0.4, -12, 1, 0) })
+	local lbl = label(f, o.Name or "Input", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0.4, -12, 1, 0) })
 	local tb = new("TextBox", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.new(0.6, -14, 0, 24),
 		BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0,
 		Text = o.Default and tostring(o.Default) or "", PlaceholderText = o.Placeholder or o.PlaceholderText or "",
 		PlaceholderColor3 = Color3.fromRGB(125, 125, 132), TextColor3 = T.Text, TextSize = 12,
-		Font = F_REG, ClearTextOnFocus = o.ClearOnFocus == true, TextTruncate = Enum.TextTruncate.AtEnd,
-		TextXAlignment = LEFT,
+		Font = F_REG, ClearTextOnFocus = o.ClearOnFocus == true, TextTruncate = Enum.TextTruncate.None,
+		TextXAlignment = LEFT, ClipsDescendants = true, ZIndex = 2,
 	}, f)
 	corner(tb, 6)
 	local tst = stroke(tb, 0.9)
@@ -6357,9 +6363,52 @@ function Block:CreateInput(o)
 	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, tb)
 	hover(f, st)
 
-	tb.Focused:Connect(function() uiSnd("focus") tween(tst, { Transparency = 0.35 }, 0.2) end)
+	-- ------------------------------------------------------------------------
+	-- Le champ s'AGRANDIT (vers la gauche, avec une transition) quand le texte est trop long, au lieu d'afficher « ... ».
+	-- Il grandit jusqu'à la largeur de la ligne (le nom du champ s'efface en fondu quand il passe dessous) ; si le texte
+	-- dépasse encore, il défile pendant la saisie et se termine par « ... » seulement quand le champ n'est pas sélectionné.
+	-- ------------------------------------------------------------------------
+	local TextService = game:GetService("TextService")
+	local PADX, STEP = 22, 12          -- marges internes + curseur / pas d'agrandissement (évite un tween à chaque lettre)
+	local lastW, focused = nil, false
+	local function rowW() return f.AbsoluteSize.X / pxScale() end
+	local function fit(animate, force)
+		local rw = rowW()
+		if rw < 60 then return end   -- ligne pas encore mise en page (ou bloc replié)
+		local base, max = rw * 0.6 - 14, rw - 16
+		local want = base
+		if tb.Text ~= "" then
+			local ok, b = pcall(TextService.GetTextSize, TextService, tb.Text, tb.TextSize, tb.Font, Vector2.new(10000, 100))
+			if ok then want = math.ceil((b.X + PADX) / STEP) * STEP end
+		end
+		local w = math.clamp(want, base, max)
+		tb.TextTruncate = (want > max and not focused) and Enum.TextTruncate.AtEnd or Enum.TextTruncate.None
+		if not force and lastW and math.abs(w - lastW) < 0.5 then return end
+		lastW = w
+		local size = UDim2.new(0, w, 0, 24)
+		local hide = (rw - 8 - w) < (12 + lbl.TextBounds.X + 10)   -- le champ recouvre le nom -> on l'efface
+		if animate then
+			tween(tb, { Size = size }, 0.32)
+			tween(lbl, { TextTransparency = hide and 1 or 0 }, 0.22)
+		else
+			tb.Size = size
+			lbl.TextTransparency = hide and 1 or 0
+		end
+	end
+	f:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() fit(false, true) end)
+	fit(false, true)
+	task.defer(fit, false, true)
+
+	tb.Focused:Connect(function()
+		focused = true
+		uiSnd("focus")
+		tween(tst, { Transparency = 0.35 }, 0.2)
+		fit(true)
+	end)
 	tb.FocusLost:Connect(function()
+		focused = false
 		tween(tst, { Transparency = Sty.InputStroke }, 0.3)
+		fit(true)
 		fire(o.Callback, tb.Text)
 	end)
 	tb:GetPropertyChangedSignal("Text"):Connect(function()
@@ -6373,6 +6422,7 @@ function Block:CreateInput(o)
 			if clean ~= tb.Text then tb.Text = clean return end
 		end
 		if o.Flag then Library.Flags[o.Flag] = tb.Text end
+		fit(true)
 		if o.LiveUpdate then fire(o.Callback, tb.Text) end
 	end)
 
@@ -11195,30 +11245,75 @@ function Tab:CreateSubTabs(list)
 	parent.Page:SetAttribute("HasSubs", true)
 	for _, c in ipairs(parent.Cols) do c.Visible = false end
 
+	-- V5.7 : plus de grossissement au survol (le texte était déformé et rognait sur les bords). Une seule pastille
+	-- « curseur » glisse et se redimensionne d'un sous-onglet à l'autre ; les textes gardent toujours la même taille.
 	local strip = new("ScrollingFrame", { Name = "SubTabs", Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1,
-		BorderSizePixel = 0, ScrollBarThickness = 0, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.X,
+		BorderSizePixel = 0, ScrollBarThickness = 0, CanvasSize = UDim2.new(),
 		ScrollingDirection = Enum.ScrollingDirection.X }, parent.Page)
-	new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6),
-		SortOrder = BYORDER, VerticalAlignment = Enum.VerticalAlignment.Center }, strip)
-	new("UIPadding", { PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 6), PaddingTop = UDim.new(0, 1) }, strip)
+
+	local GAP, X0, H = 6, 2, 24
+	local canvasW = 0
+	local ind = new("Frame", { Name = "Indicator", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, X0, 0.5, 0),
+		Size = UDim2.new(0, 0, 0, H), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.82, BorderSizePixel = 0,
+		Visible = false, ZIndex = 1 }, strip)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, ind)
+	new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.4, ApplyStrokeMode = BORDER }, ind)
+
+	-- place la pastille sous le sous-onglet actif (avec transition) et le fait défiler dans la vue si besoin
+	local function moveIndicator(animate)
+		local sub = parent.CurrentSub
+		if not sub or not sub.PillW then return end
+		local pos, size = UDim2.new(0, sub.PillX, 0.5, 0), UDim2.new(0, sub.PillW, 0, H)
+		if animate and ind.Visible then
+			tween(ind, { Position = pos, Size = size }, 0.38)
+		else
+			ind.Position, ind.Size = pos, size
+			ind.Visible = true
+		end
+		local vis = strip.AbsoluteSize.X / pxScale()
+		local cx = strip.CanvasPosition.X
+		if vis > 0 and (sub.PillX < cx or sub.PillX + sub.PillW > cx + vis) then
+			local target = math.clamp(sub.PillX - 12, 0, math.max(0, canvasW - vis))
+			tween(strip, { CanvasPosition = Vector2.new(target, 0) }, 0.35)
+		end
+	end
+
+	-- positions des pastilles (placées à la main : leur largeur suit le texte)
+	local function relayout()
+		local x = X0
+		for _, s in ipairs(parent.SubTabs) do
+			s.PillX = x
+			s.Pill.Position = UDim2.new(0, x, 0.5, 0)
+			x = x + (s.PillW or 60) + GAP
+		end
+		canvasW = x + 4
+		strip.CanvasSize = UDim2.fromOffset(canvasW, 0)
+		moveIndicator(false)
+	end
 
 	local function select(sub)
+		local prev = parent.CurrentSub
+		local prevIdx = prev and table.find(parent.SubTabs, prev)
+		local newIdx = table.find(parent.SubTabs, sub)
 		for _, s in ipairs(parent.SubTabs) do
 			local on = s == sub
 			if on then
 				if not s.Page.Visible then
-					s.Page.Position = UDim2.new(0, 12, 0, 36)
+					-- la page arrive du côté d'où l'on vient (droite si on avance, gauche si on recule)
+					local dir = (prevIdx and newIdx and newIdx < prevIdx) and -1 or 1
+					s.Page.Position = UDim2.new(0, 14 * dir, 0, 36)
 					tween(s.Page, { Position = UDim2.new(0, 0, 0, 36) }, 0.4)
 				end
 				s.Page.Visible = true
 			else
 				s.Page.Visible = false
 			end
-			tween(s.Pill, { BackgroundTransparency = on and 0.8 or 0.94 }, 0.2)
-			tween(s.PillStroke, { Transparency = on and 0.35 or 0.9 }, 0.2)
-			tween(s.PillLabel, { TextColor3 = on and T.Text or T.ElementAccent }, 0.2)
+			tween(s.Pill, { BackgroundTransparency = 1 }, 0.2)
+			tween(s.PillLabel, { TextColor3 = on and T.Text or T.ElementAccent }, 0.25)
+			if s.PillIcon then tween(s.PillIcon, { ImageColor3 = on and T.Text or T.ElementAccent }, 0.25) end
 		end
 		parent.CurrentSub = sub
+		moveIndicator(prev ~= nil)
 		Library._busyUntil = os.clock() + 0.5
 		if Library._openDD then Library._openDD(false) end
 	end
@@ -11226,26 +11321,22 @@ function Tab:CreateSubTabs(list)
 	for idx, d in ipairs(list or {}) do
 		local name = type(d) == "table" and tostring(d.Name or d[1] or ("Page " .. idx)) or tostring(d)
 		local icon = type(d) == "table" and d.Icon or nil
-		-- largeur FIXE calculée depuis le texte (pas d'AutomaticSize : l'onde du clic, un enfant de la pastille,
-		-- agrandissait la pastille puis l'onde suivante était mesurée sur la pastille agrandie -> croissance infinie)
-		local pill = new("TextButton", { Size = UDim2.new(0, 60, 0, 24),
-			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.94, Text = "", AutoButtonColor = false,
-			BorderSizePixel = 0, LayoutOrder = idx, ClipsDescendants = true }, strip)
+		local hasIcon = icon and icon ~= ""
+		local padL, padR = hasIcon and 30 or 14, 14
+
+		-- zone cliquable transparente ; la largeur est calculée depuis le texte (jamais d'AutomaticSize : voir plus haut)
+		local pill = new("TextButton", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, X0, 0.5, 0),
+			Size = UDim2.new(0, 60, 0, H), BackgroundColor3 = T.Accent, BackgroundTransparency = 1, Text = "",
+			AutoButtonColor = false, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 2 }, strip)
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, pill)
-		local pst = new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.9, ApplyStrokeMode = BORDER }, pill)
-		new("UIPadding", { PaddingLeft = UDim.new(0, icon and 28 or 13), PaddingRight = UDim.new(0, 13) }, pill)
-		if icon and icon ~= "" then
-			new("ImageLabel", { BackgroundTransparency = 1, Image = icon, ImageColor3 = T.Text,
-				Size = UDim2.fromOffset(14, 14), Position = UDim2.new(0, -17, 0.5, -7) }, pill)
+		local pic
+		if hasIcon then
+			pic = new("ImageLabel", { BackgroundTransparency = 1, Image = icon, ImageColor3 = T.ElementAccent,
+				Size = UDim2.fromOffset(14, 14), Position = UDim2.new(0, 10, 0.5, -7), ZIndex = 3 }, pill)
 		end
-		local pl = new("TextLabel", { Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X,
-			BackgroundTransparency = 1, Text = name, TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED }, pill)
-		do
-			local padL = icon and 28 or 13
-			local function fit() pill.Size = UDim2.new(0, math.ceil(pl.TextBounds.X) + padL + 13, 0, 24) end
-			fit()
-			pl:GetPropertyChangedSignal("TextBounds"):Connect(fit)
-		end
+		local pl = new("TextLabel", { Position = UDim2.new(0, padL, 0, 0), Size = UDim2.new(1, -padL, 1, 0),
+			BackgroundTransparency = 1, Text = name, TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED,
+			TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.None, ZIndex = 3 }, pill)
 
 		local page = new("Frame", { Name = "Sub_" .. name, Position = UDim2.new(0, 0, 0, 36), Size = UDim2.new(1, 0, 1, -36),
 			BackgroundTransparency = 1, Visible = false }, parent.Page)
@@ -11259,30 +11350,52 @@ function Tab:CreateSubTabs(list)
 		end
 		local sub = setmetatable({ Name = tostring(parent.Name) .. " / " .. name, SubName = name, Page = page,
 			Button = parent.Button, Blocks = {}, Cols = {}, NumCols = 0, _newColumn = newColumn, Parent = parent,
-			Pill = pill, PillStroke = pst, PillLabel = pl }, Tab)
+			Pill = pill, PillLabel = pl, PillIcon = pic }, Tab)
 		sub:SetColumns(parent.NumCols)
 		function sub:Select()
 			local win = Library.Window
 			if win and win.Current ~= parent then parent:Select() end
 			select(sub)
 		end
-		local pillScale = new("UIScale", { Scale = 1 }, pill)   -- grossissement au survol (n'affecte pas la mise en page)
+
+		parent.SubTabs[#parent.SubTabs + 1] = sub
+		parent.SubTabs[name] = sub
+
+		-- largeur = texte + marges ; recalculée si la police / la taille change
+		local function measure()
+			local w = math.ceil(pl.TextBounds.X) + padL + padR
+			if w ~= sub.PillW then
+				sub.PillW = w
+				pill.Size = UDim2.new(0, w, 0, H)
+				relayout()
+			end
+		end
+		measure()
+		pl:GetPropertyChangedSignal("TextBounds"):Connect(measure)
+
+		-- survol : simple éclaircissement du fond et du texte (aucun changement de taille)
 		pill.MouseEnter:Connect(function()
-			tween(pillScale, { Scale = 1.12 }, 0.25, Enum.EasingStyle.Back)
-			if parent.CurrentSub ~= sub then uiSnd("tabhover") tween(pill, { BackgroundTransparency = 0.88 }, 0.15) end
+			if parent.CurrentSub ~= sub then
+				uiSnd("tabhover")
+				tween(pill, { BackgroundTransparency = 0.92 }, 0.18)
+				tween(pl, { TextColor3 = T.Text }, 0.18)
+				if pic then tween(pic, { ImageColor3 = T.Text }, 0.18) end
+			end
 		end)
 		pill.MouseLeave:Connect(function()
-			tween(pillScale, { Scale = 1 }, 0.3, Enum.EasingStyle.Back)
-			if parent.CurrentSub ~= sub then tween(pill, { BackgroundTransparency = 0.94 }, 0.2) end
+			if parent.CurrentSub ~= sub then
+				tween(pill, { BackgroundTransparency = 1 }, 0.25)
+				tween(pl, { TextColor3 = T.ElementAccent }, 0.25)
+				if pic then tween(pic, { ImageColor3 = T.ElementAccent }, 0.25) end
+			end
 		end)
 		pill.MouseButton1Click:Connect(function()
 			ripple(pill)
 			if parent.CurrentSub ~= sub then uiSnd("tab") end
 			select(sub)
 		end)
-		parent.SubTabs[#parent.SubTabs + 1] = sub
-		parent.SubTabs[name] = sub
 	end
+	relayout()
 	if parent.SubTabs[1] then select(parent.SubTabs[1]) end
 	return parent.SubTabs
 end
