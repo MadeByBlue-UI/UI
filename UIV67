@@ -7,6 +7,14 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V5.4 — NOUVEAU TYPE D'INTERFACE « CARRÉ »
+		• Paramètres > Apparence > Type d'interface > « Carré » (ou CreateWindow({ LayoutStyle = "Carré" }), Library:SetLayoutStyle("Carré")) :
+		  style rétro, simple et 100 % carré : onglets en texte dans une barre du haut (l'onglet actif est souligné), titre des blocs posé sur
+		  la bordure, tous les coins carrés, police monospace. Le type Classique / Éclipse revient tel quel (rien n'est perdu).
+		• Réglages du type Carré (Paramètres > Apparence > « Type Carré ») : police monospace, titre des blocs sur la bordure.
+		  Library.Square = { Mono = true, TitleOnBorder = true } · Library:SetSquareOption(nom, valeur).
+		• Nouveau préréglage de couleurs « Violet rétro » (fond violet foncé, accent violet vif) pour retrouver le look de la capture.
+
 	V5.3 — HOME, APERÇU 3D, CHANGE-LOG AUTOMATIQUE
 		• Onglet « Home » créé automatiquement en premier : aperçu 3D de ton personnage, FPS, ping, joueurs, mémoire, session, serveur
 		  + nouveautés de l'UI (Library.Changelog / Library:AddChangelog). CreateWindow({ Home = false }) pour le retirer,
@@ -338,11 +346,14 @@ local Library = {
 	TitleFont         = "Michroma",
 	TitleFonts        = { "Michroma", "Gotham Black", "Fredoka", "Oswald", "Bangers", "Jura", "Sci-Fi", "Arcade", "Normale" },
 	TitleShine        = true,
-	LayoutStyle       = "Classique",                 -- type d'interface : "Classique" | "Éclipse"
-	LayoutStyleOrder  = { "Classique", "Éclipse" },
+	LayoutStyle       = "Classique",                 -- type d'interface : "Classique" | "Éclipse" | "Carré"
+	LayoutStyleOrder  = { "Classique", "Éclipse", "Carré" },
+	SquareMode        = false,                       -- vrai quand le type « Carré » est appliqué (coins à 0, police monospace)
+	Square            = { Mono = true, TitleOnBorder = true },
 	LayoutStyleInfo   = {
 		["Classique"] = "L'interface d'origine : menu compact à gauche, barre de titre en haut.",
 		["Éclipse"]   = "Moderne : menu large avec marque et carte utilisateur, titre de page + recherche en haut, barre d'état en bas. Idéal avec 3 ou 4 colonnes.",
+		["Carré"]     = "Rétro et simple : onglets en texte dans une barre du haut, blocs à bordure avec le titre posé dessus, coins carrés, police monospace. Essaie le préréglage de couleurs « Violet rétro ».",
 	},
 	Eclipse           = {                            -- réglages propres au type « Éclipse »
 		SidebarWidth    = 176,
@@ -504,9 +515,19 @@ local function track(c) Conns[#Conns + 1] = c return c end
 
 local TEXTCLASS = { TextLabel = true, TextButton = true, TextBox = true }
 
+-- type « Carré » : vrai si `parent` est dans la fenêtre principale (les notifications gardent leurs coins)
+local function sqUnder(parent)
+	local w = Library.Window
+	return Library.SquareMode == true and w ~= nil and w.Main ~= nil and parent ~= nil and parent:IsDescendantOf(w.Main)
+end
+
 local function new(class, props, parent)
 	local o = Instance.new(class)
 	for k, v in pairs(props or {}) do o[k] = v end
+	if class == "UICorner" and sqUnder(parent) then
+		o:SetAttribute("SqOrig", o.CornerRadius)
+		o.CornerRadius = UDim.new(0, 0)
+	end
 	if TEXTCLASS[class] then
 		-- taille de base mémorisée : permet la « taille de police globale »
 		o:SetAttribute("BaseSize", o.TextSize)
@@ -567,6 +588,10 @@ local function corner(parent, base)
 	local c = Instance.new("UICorner")
 	c.CornerRadius = UDim.new(0, math.floor(base * Library.GlobalCornerValue / 10))
 	c.Parent = parent
+	if sqUnder(parent) then
+		c:SetAttribute("SqOrig", c.CornerRadius)
+		c.CornerRadius = UDim.new(0, 0)
+	end
 	table.insert(Library.CornerObjects, { Corner = c, BaseRadius = base })
 	return c
 end
@@ -3797,8 +3822,10 @@ local FONT_FAMILIES = {
 Library.FontFamilies = { "Gotham", "Builder Sans", "Source Sans", "Ubuntu", "Nunito", "Arimo", "Code" }
 
 function Library:SetFont(name)
-	local fam = FONT_FAMILIES[name]
-	if not fam then return end
+	if not FONT_FAMILIES[name] then return end
+	-- type « Carré » : police monospace imposée (sans toucher au choix mémorisé de l'utilisateur)
+	local eff = (Library.SquareMode and Library.Square.Mono ~= false) and "Code" or name
+	local fam = FONT_FAMILIES[eff]
 	local base = { F_REG, F_MED, F_BOLD }
 	local fonts = {}
 	for i = 1, 3 do
@@ -3806,7 +3833,7 @@ function Library:SetFont(name)
 		fonts[i] = (ok and f) or base[i]
 	end
 	Library.FontFamily = name
-	Library.Fonts = (name ~= "Gotham") and fonts or nil
+	Library.Fonts = (eff ~= "Gotham") and fonts or nil
 	local use = Library.Fonts or base
 	for _, root in ipairs(guiRoots()) do
 		for _, d in ipairs(root:GetDescendants()) do
@@ -3840,11 +3867,12 @@ function Library:SetStars(n)
 	if Library.Window then Library.Window:SetStars(n) end
 end
 
-Library.PresetOrder = { "Trou noir", "Océan", "Violet", "Rouge sang", "Émeraude", "Or", "Sakura", "Clair" }
+Library.PresetOrder = { "Trou noir", "Océan", "Violet", "Violet rétro", "Rouge sang", "Émeraude", "Or", "Sakura", "Clair" }
 Library.Presets = {
 	["Trou noir"] = { Main = "#000000", Second = "#070709", Accent = "#FFFFFF", Text = "#F5F5F7", ElementAccent = "#A5A5AC" },
 	["Océan"]     = { Main = "#020B14", Second = "#061A2B", Accent = "#4CC9F0", Text = "#E8F6FF", ElementAccent = "#7FA7BD" },
 	["Violet"]    = { Main = "#0A0612", Second = "#130B22", Accent = "#B388FF", Text = "#F3ECFF", ElementAccent = "#A394BD" },
+	["Violet rétro"] = { Main = "#220B33", Second = "#150620", Accent = "#A64CFF", Text = "#E9DAF7", ElementAccent = "#B592DB" },
 	["Rouge sang"] = { Main = "#0C0204", Second = "#190609", Accent = "#FF4D5E", Text = "#FFEDEF", ElementAccent = "#BE9096" },
 	["Émeraude"]  = { Main = "#010A07", Second = "#06150F", Accent = "#3DDC97", Text = "#E8FFF4", ElementAccent = "#86B5A0" },
 	["Or"]        = { Main = "#0B0802", Second = "#171105", Accent = "#FFC857", Text = "#FFF6E0", ElementAccent = "#BFAE85" },
@@ -4185,7 +4213,7 @@ end
 function Library:SetCornerRadius(v)
 	Library.GlobalCornerValue = v
 	for _, c in ipairs(Library.CornerObjects) do
-		if c.Corner and c.Corner.Parent then
+		if c.Corner and c.Corner.Parent and c.Corner:GetAttribute("SqOrig") == nil then
 			c.Corner.CornerRadius = UDim.new(0, math.floor(c.BaseRadius * v / 10))
 		end
 	end
@@ -7207,7 +7235,7 @@ function Library:_paintModChip()
 	if not chip or not chip.Parent then return end
 	local on = Library.ModFilter
 	chip.Text = Library.ModCount > 99 and "99+" or tostring(Library.ModCount)
-	tween(chip, { BackgroundColor3 = on and T.Accent or T.Element, BackgroundTransparency = on and 0.1 or 0.4 }, 0.15)
+	tween(chip, { BackgroundColor3 = on and T.Accent or T.Text, BackgroundTransparency = on and 0.1 or 0.88 }, 0.15)
 	chip.TextColor3 = on and T.Main or T.Text
 end
 
@@ -9046,9 +9074,16 @@ end
 -- ============================================================================
 -- V5 : HISTORIQUE DES VERSIONS (affiché dans l'onglet Home depuis la V5.3)
 -- ============================================================================
-Library.Version = "5.3.0"
+Library.Version = "5.4.0"
 Library.AppName = "Ui-Lib"
 Library.Changelog = {
+	{ Version = "5.4.0", Date = "2026-10-27", Title = "Type d'interface « Carré »", Notes = {
+		"Nouveau type d'interface « Carré » (Paramètres > Apparence > Type d'interface) : style rétro, simple et 100 % carré.",
+		"Onglets en texte dans une barre du haut (l'onglet actif est souligné), titre des blocs posé sur la bordure, tous les coins carrés, police monospace.",
+		"Réglages « Type Carré » : police monospace et titre des blocs sur la bordure. Nouveau préréglage de couleurs « Violet rétro ».",
+		"Repasser en Classique ou Éclipse remet tout comme avant (coins, police, onglets).",
+		"Barre de recherche refaite : pilule de verre bien arrondie, large, avec loupe, placée dans la barre du titre et centrée (Classique et Carré). Le menu de gauche remonte d'autant.",
+	} },
 	{ Version = "5.3.0", Date = "2026-10-27", Title = "Accueil et aperçu 3D", Notes = {
 		"Nouvel onglet Home, toujours en premier : aperçu 3D de ton personnage, bloc-notes, amis, FPS / ping, joueurs, mémoire, session et infos serveur.",
 		"Home : graphiques de FPS et de ping, jauge de session (limite réglable + alerte), temps de jeu total, heure et météo réelles (ville auto ou choisie), amis dans le serveur / en ligne à inviter.",
@@ -10114,6 +10149,92 @@ function Tab:SetColumns(n)
 	self.ColL, self.ColR = self.Cols[1], self.Cols[math.min(2, n)]
 end
 
+-- ───────────── Type « Carré » : colonnes plus aérées + bloc dont le titre est posé sur la bordure ─────────────
+function Library._sqApplyCol(sf)
+	if not (sf and sf.Parent) then return end
+	local lay = sf:FindFirstChildOfClass("UIListLayout")
+	local pad = sf:FindFirstChildOfClass("UIPadding")
+	local on = Library.SquareMode and Library.Square.TitleOnBorder ~= false
+	if lay then lay.Padding = UDim.new(0, on and 16 or 8) end
+	if pad then pad.PaddingTop = UDim.new(0, on and 10 or 2) end
+end
+
+function Library._sqApplyBlock(blk)
+	local sq = blk and blk._sq
+	if not (sq and sq.head and sq.head.Parent) then return end
+	local on = Library.SquareMode and Library.Square.TitleOnBorder ~= false
+	local nameLbl, arrow = sq.name, sq.arrow
+	local pad = nameLbl:FindFirstChild("SqPad")
+	local pop = sq.head:FindFirstChild("Detach")
+	if on then
+		sq.head.Size = UDim2.new(1, 0, 0, 14)
+		nameLbl.AnchorPoint = Vector2.new(0, 0.5)
+		nameLbl.Position = UDim2.new(0, 8, 0, 0)
+		nameLbl.AutomaticSize = Enum.AutomaticSize.X
+		nameLbl.Size = UDim2.new(0, 0, 0, 14)
+		nameLbl.TextTruncate = Enum.TextTruncate.None
+		nameLbl.BackgroundColor3 = T.Main
+		nameLbl.BackgroundTransparency = 0
+		nameLbl.ZIndex = 3
+		if not pad then
+			new("UIPadding", { Name = "SqPad", PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }, nameLbl)
+		end
+		arrow.AnchorPoint = Vector2.new(1, 0.5)
+		arrow.Position = UDim2.new(1, -8, 0, 0)
+		arrow.Size = UDim2.new(0, 16, 0, 14)
+		arrow.BackgroundColor3 = T.Main
+		arrow.BackgroundTransparency = 0
+		arrow.ZIndex = 3
+		if pop then pop.Visible = false end
+		if sq.line then sq.line.Visible = false end
+	else
+		sq.head.Size = UDim2.new(1, 0, 0, 34)
+		nameLbl.AnchorPoint = Vector2.new(0, 0.5)
+		nameLbl.Position = UDim2.new(0, sq.x, 0.5, 0)
+		nameLbl.AutomaticSize = Enum.AutomaticSize.None
+		nameLbl.Size = UDim2.new(1, -sq.x - 58, 1, 0)
+		nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+		nameLbl.BackgroundTransparency = 1
+		nameLbl.ZIndex = 1
+		if pad then pad:Destroy() end
+		arrow.AnchorPoint = Vector2.new(0.5, 0.5)
+		arrow.Position = UDim2.new(1, -20, 0.5, 0)
+		arrow.Size = UDim2.new(0, 16, 1, 0)
+		arrow.BackgroundTransparency = 1
+		arrow.ZIndex = 1
+		if pop then pop.Visible = true end
+		if sq.line then sq.line.Visible = true end
+	end
+end
+
+-- réapplique le type Carré (colonnes + blocs) à tous les onglets de la fenêtre
+function Library._sqRefreshAll(win)
+	if not (win and win.Tabs) then return end
+	local function doTab(t)
+		for _, sf in ipairs(t.Cols or {}) do Library._sqApplyCol(sf) end
+		for _, b in ipairs(t:_allBlocks()) do Library._sqApplyBlock(b) end
+		for _, st in ipairs(t.SubTabs or {}) do
+			for _, sf in ipairs(st.Cols or {}) do Library._sqApplyCol(sf) end
+		end
+	end
+	for _, t in ipairs(win.Tabs) do pcall(doTab, t) end
+end
+
+-- Library:SetSquareOption("Mono" | "TitleOnBorder", vrai/faux)
+function Library:SetSquareOption(k, v)
+	local o = Library.Square
+	if type(k) ~= "string" or o[k] == nil then return false end
+	o[k] = v and true or false
+	if k == "Mono" then Library:SetFont(Library.FontFamily or "Gotham") end
+	local w = Library.Window
+	if w then
+		Library._sqRefreshAll(w)
+		if w.RefreshLayoutStyle then w:RefreshLayoutStyle() end
+		if w.ApplyTitle then w:ApplyTitle() end
+	end
+	return true
+end
+
 function Tab:CreateBlock(o)
 	o = o or {}
 	local side = tostring(o.Side):lower() == "right" and "right" or "left"
@@ -10162,7 +10283,7 @@ function Tab:CreateBlock(o)
 	end
 	head.MouseEnter:Connect(function() hoverFx(true) end)
 	head.MouseLeave:Connect(function() hoverFx(false) end)
-	fadeLine(head, { Position = UDim2.new(0, 10, 1, -1), Size = UDim2.new(1, -20, 0, 1) })
+	local headLine = fadeLine(head, { Position = UDim2.new(0, 10, 1, -1), Size = UDim2.new(1, -20, 0, 1) })
 
 	-- Corps repliable (animé)
 	local clip = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
@@ -10274,6 +10395,8 @@ function Tab:CreateBlock(o)
 			if blk._float then Library:AttachBlock(blk) else Library:DetachBlock(blk) end
 		end)
 	end
+	blk._sq = { head = head, name = nameLbl, arrow = arrow, line = headLine, x = x }
+	if Library.SquareMode then Library._sqApplyBlock(blk) end
 	return blk
 end
 
@@ -10381,6 +10504,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 		}, page)
 		new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, sf)
 		new("UIPadding", { PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 10), PaddingTop = UDim.new(0, 2) }, sf)
+		if Library.SquareMode then Library._sqApplyCol(sf) end
 		return sf
 	end
 
@@ -10661,6 +10785,7 @@ end
 function Tab:SetExpanded(on, instant)
 	local holder = self._holder
 	if not holder then return end
+	if Library.SquareMode then return end   -- type Carré : les onglets enfants sont à plat dans la barre du haut
 	on = on and true or false
 	if self.Expanded == on then return end
 	self.Expanded = on
@@ -11196,7 +11321,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	local layoutInfo
 	ST:CreateDropdown({ Name = "Type d'interface", Flag = "ui.layoutstyle", Items = Library.LayoutStyleOrder, Search = false,
 		Favorite = false, Default = Library.LayoutStyle,
-		Tooltip = "Change toute la mise en page : Classique (d'origine) ou Éclipse (menu large, en-tête, barre d'état).",
+		Tooltip = "Change toute la mise en page : Classique (d'origine), Éclipse (menu large, en-tête, barre d'état) ou Carré (rétro, onglets en haut, coins carrés).",
 		Callback = function(v)
 			win:SetLayoutStyle(v)
 			if layoutInfo then layoutInfo.Set({ Title = v, Content = Library.LayoutStyleInfo[v] or "" }) end
@@ -11237,6 +11362,17 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Placeholder = "En ligne", Callback = ecOpt("Status") })
 	EC:CreateInput({ Name = "Sous-titre par défaut", Flag = "ui.ec.defsub", Default = Library.Eclipse.DefaultSubtitle,
 		Callback = ecOpt("DefaultSubtitle") })
+
+	-- ───────────── Type Carré ─────────────
+	local SQB = BK("Apparence", { Name = "Type Carré", Side = "Right" })
+	SQB:CreateParagraph({ Title = "Réglages du type Carré",
+		Content = "Ils s'appliquent quand « Type d'interface » est sur Carré (mémorisés même si tu repasses en Classique). Pour le look violet de la capture : Thèmes > Préréglage > « Violet rétro »." })
+	SQB:CreateToggle({ Name = "Police monospace", Flag = "ui.sq.mono", Default = Library.Square.Mono,
+		Tooltip = "Police à chasse fixe (style terminal) dans tout le type Carré.",
+		Callback = function(v) Library:SetSquareOption("Mono", v) end })
+	SQB:CreateToggle({ Name = "Titre des blocs sur la bordure", Flag = "ui.sq.border", Default = Library.Square.TitleOnBorder,
+		Tooltip = "Le titre du bloc est posé sur son cadre. Désactivé : en-tête classique (avec le bouton de mini-fenêtre).",
+		Callback = function(v) Library:SetSquareOption("TitleOnBorder", v) end })
 
 	-- ───────────── Thèmes ─────────────
 	local TH = BK("Thèmes", { Name = "Thèmes", Side = "Left" })
@@ -14148,25 +14284,57 @@ function Library:CreateWindow(cfg)
 	-- ------------------------------------------------------------------
 	-- Recherche + barre latérale + contenu
 	-- ------------------------------------------------------------------
+	-- Barre de recherche « verre » : pilule bien arrondie, large et visible, placée dans la barre du titre (voir ec.placeSearch)
+	local function glassEdge(parent, tr)
+		local st = new("UIStroke", { Color = T.Text, Thickness = 1, Transparency = tr, ApplyStrokeMode = BORDER }, parent)
+		new("UIGradient", { Rotation = 40, Transparency = GLASS_EDGE }, st)   -- bord lumineux en haut à gauche, qui s'éteint vers le bas
+		return st
+	end
+	local function roundOf(parent)   -- coins en pilule, gardés ronds même dans le type Carré
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(0.5, 0)
+		c:SetAttribute("KeepRound", true)
+		c.Parent = parent
+		return c
+	end
 	local search = new("TextBox", {
-		Position = UDim2.new(0, 10, 0, 52), Size = UDim2.new(0, 84, 0, 28), BackgroundColor3 = T.Element,
-		BackgroundTransparency = 0.4, Text = "", PlaceholderText = "Rechercher",
-		PlaceholderColor3 = Color3.fromRGB(120, 120, 126), TextColor3 = T.Text, TextSize = 12, Font = F_REG,
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, 21), Size = UDim2.fromOffset(240, 30),
+		BackgroundColor3 = T.Text, BackgroundTransparency = 0.9, Text = "", PlaceholderText = "Rechercher",
+		PlaceholderColor3 = Color3.fromRGB(150, 150, 158), TextColor3 = T.Text, TextSize = 13, Font = F_MED,
 		ClearTextOnFocus = false, TextXAlignment = LEFT, BorderSizePixel = 0,
 	}, main)
-	corner(search, 8)
-	local sst = stroke(search, 0.92)
-	trackStyled(search, sst, "input")
-	new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 8) }, search)
-	search.Focused:Connect(function() uiSnd("focus") tween(sst, { Transparency = 0.4 }, 0.2) end)
-	search.FocusLost:Connect(function() tween(sst, { Transparency = Sty.InputStroke }, 0.3) end)
+	roundOf(search)
+	local sst = glassEdge(search, 0.3)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 36), PaddingRight = UDim.new(0, 14) }, search)
+	-- loupe dessinée (le padding décale les enfants : on la recale à gauche)
+	local sIcon = new("Frame", { Name = "SearchIcon", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, -24, 0.5, 0), Size = UDim2.fromOffset(16, 16) }, search)
+	local ring = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromOffset(10, 10), BorderSizePixel = 0 }, sIcon)
+	do
+		local rc = Instance.new("UICorner")
+		rc.CornerRadius = UDim.new(1, 0)
+		rc:SetAttribute("KeepRound", true)
+		rc.Parent = ring
+	end
+	new("UIStroke", { Color = T.ElementAccent, Thickness = 1.6, ApplyStrokeMode = BORDER }, ring)
+	new("Frame", { BackgroundColor3 = T.ElementAccent, BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(12.5, 12.5), Size = UDim2.fromOffset(6, 1.6), Rotation = 45 }, sIcon)
+	search.Focused:Connect(function()
+		uiSnd("focus")
+		tween(sst, { Transparency = 0.05 }, 0.2)
+		tween(search, { BackgroundTransparency = 0.8 }, 0.2)
+	end)
+	search.FocusLost:Connect(function()
+		tween(sst, { Transparency = 0.3 }, 0.3)
+		tween(search, { BackgroundTransparency = 0.9 }, 0.3)
+	end)
 
 	-- puce « Modifiés » : n'affiche que les éléments qui ne sont plus à leur valeur par défaut (le nombre est affiché)
-	local modChip = new("TextButton", { Name = "ModChip", Position = UDim2.new(0, 100, 0, 52), Size = UDim2.new(0, 26, 0, 28),
-		BackgroundColor3 = T.Element, BackgroundTransparency = 0.4, Text = "0", TextColor3 = T.Text, TextSize = 11,
-		Font = F_BOLD, AutoButtonColor = false, BorderSizePixel = 0 }, main)
-	corner(modChip, 8)
-	trackStyled(modChip, stroke(modChip, 0.92), "input")
+	local modChip = new("TextButton", { Name = "ModChip", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0.5, 130, 0, 21),
+		Size = UDim2.fromOffset(30, 30), BackgroundColor3 = T.Text, BackgroundTransparency = 0.88, Text = "0", TextColor3 = T.Text,
+		TextSize = 12, Font = F_BOLD, AutoButtonColor = false, BorderSizePixel = 0 }, main)
+	roundOf(modChip)
+	glassEdge(modChip, 0.4)
 	attachTip(modChip, "Filtre « Modifiés » : n'affiche que les éléments qui ne sont plus à leur valeur par défaut (le chiffre = leur nombre).")
 	modChip.MouseButton1Click:Connect(function()
 		uiSnd(Library.ModFilter and "off" or "on")
@@ -14527,7 +14695,7 @@ function Library:CreateWindow(cfg)
 		local on = Library.LayoutStyle == "Éclipse"
 		local o = Library.Eclipse
 		local open = not collapsed
-		vline.Visible = open and not on
+		vline.Visible = open and not on and Library.LayoutStyle ~= "Carré"
 		ec.side.Visible = open and on
 		ec.brand.Visible = on
 		ec.user.Visible = open and on and o.UserCard ~= false
@@ -14570,22 +14738,129 @@ function Library:CreateWindow(cfg)
 	ec.styleTab = function(tab)
 		local btn = tab.Button
 		if not btn then return end
+		local txt = tab.Label
 		local on = Library.LayoutStyle == "Éclipse"
+		local sq = Library.LayoutStyle == "Carré"
+		-- état d'origine (mémorisé au tout premier passage, avant toute modification)
+		local orig = tab._sqOrig
+		if not orig and txt then
+			orig = { pos = txt.Position, size = txt.Size, align = txt.TextXAlignment, order = btn.LayoutOrder }
+			tab._sqOrig = orig
+		end
 		local docked = btn.Parent == footer
-		btn.Size = UDim2.new(1, 0, 0, tab.ParentTab and 30 or ((on and not docked) and 38 or 34))
-		if tab.Corner then tab.Corner.CornerRadius = UDim.new(0, on and 12 or 8) end
+		local isChild = tab.ParentTab ~= nil
+		-- taille du bouton : en Carré, la largeur suit le texte (barre horizontale)
+		if sq then
+			if docked then
+				btn.Size = UDim2.new(1, 0, 1, 0)
+			else
+				local w = 60
+				if txt then
+					local ok, b = pcall(function()
+						return game:GetService("TextService"):GetTextSize(txt.Text, txt.TextSize, txt.Font, Vector2.new(1000, 100))
+					end)
+					w = ((ok and b) and math.ceil(b.X) or (#txt.Text * 8)) + 28
+				end
+				btn.Size = UDim2.new(0, w, 1, 0)
+			end
+		else
+			btn.Size = UDim2.new(1, 0, 0, isChild and 30 or ((on and not docked) and 38 or 34))
+		end
+		if tab.Corner and not sq then tab.Corner.CornerRadius = UDim.new(0, on and 12 or 8) end
 		local st = btn:FindFirstChild("EcSel")
 		if on and not st then
 			st = new("UIStroke", { Name = "EcSel", Color = T.Accent, Thickness = 1, ApplyStrokeMode = BORDER,
 				Transparency = (win.Current == tab) and 0.72 or 1 }, btn)
 		end
 		if st then st.Enabled = on end
-		if tab.Bar then tab.Bar.Visible = not on end
+		if tab.Bar then tab.Bar.Visible = not on and not sq end
+		-- type Carré : soulignement de l'onglet actif
+		local ln = btn:FindFirstChild("SqLine")
+		if sq and not ln then
+			ln = new("Frame", { Name = "SqLine", AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 6, 1, 0),
+				Size = UDim2.new(1, -12, 0, 2), BackgroundColor3 = T.Accent, BorderSizePixel = 0, BackgroundTransparency = 1 }, btn)
+		end
+		if ln then
+			ln.Visible = sq
+			ln.BackgroundTransparency = (sq and win.Current == tab) and 0 or 1
+		end
+		-- texte : centré dans la barre du haut (Carré), position d'origine sinon (le bouton docké garde sa mise en page)
+		if txt and not docked and orig then
+			if sq then
+				txt.Position = UDim2.new(0, 4, 0, 0)
+				txt.Size = UDim2.new(1, -8, 1, 0)
+				txt.TextXAlignment = Enum.TextXAlignment.Center
+				txt:SetAttribute("BaseX", 4)
+			else
+				txt.Position = orig.pos
+				local sz = orig.size
+				if tab._arrow then sz = UDim2.new(sz.X.Scale, sz.X.Offset - 20, sz.Y.Scale, sz.Y.Offset) end
+				txt.Size = sz
+				txt.TextXAlignment = orig.align
+				txt:SetAttribute("BaseX", nil)
+			end
+		end
+		if tab.Dot then
+			if sq then
+				tab.Dot.AnchorPoint = Vector2.new(1, 0)
+				tab.Dot.Position = UDim2.new(1, -3, 0, 3)
+			else
+				tab.Dot.AnchorPoint = Vector2.new(1, 0.5)
+				tab.Dot.Position = UDim2.new(1, -8, 0.5, 0)
+			end
+		end
+		if tab._arrow then tab._arrow.Visible = not sq end
+		-- les onglets enfants passent à plat dans la barre du haut, puis reviennent dans leur parent
+		if isChild and orig then
+			if sq then
+				if btn.Parent ~= sidebar then btn.Parent = sidebar end
+			else
+				local inner = tab.ParentTab._holder and tab.ParentTab._holder.Inner
+				if inner and btn.Parent ~= inner then btn.Parent = inner end
+				btn.LayoutOrder = orig.order
+			end
+		elseif not isChild and not docked and not sq and tab._sqRealOrder then
+			btn.LayoutOrder = tab._sqRealOrder
+			tab._sqRealOrder = nil
+		end
 		if win.Current == tab then btn.BackgroundTransparency = on and 0.88 or 0.92 end
+		if sq and ec.sqOrder then ec.sqOrder() end
+	end
+
+	-- ordre des onglets dans la barre du haut : chaque onglet suivi de ses enfants
+	ec.sqOrder = function()
+		local tops = {}
+		for _, t in ipairs(win.Tabs) do
+			if not t.ParentTab and t.Button and t.Button.Parent == sidebar then
+				if t._sqRealOrder == nil then t._sqRealOrder = t.Button.LayoutOrder end
+				tops[#tops + 1] = t
+			end
+		end
+		table.sort(tops, function(a, b) return a._sqRealOrder < b._sqRealOrder end)
+		for n, t in ipairs(tops) do
+			t.Button.LayoutOrder = n * 100
+			if t._arrow then   -- la flèche des sous-menus (créée après le 1er passage) n'a pas sa place dans la barre du haut
+				t._arrow.Visible = false
+				if t.Label and t.Button.Parent == sidebar then t.Label.Size = UDim2.new(1, -8, 1, 0) end
+			end
+			local k = 0
+			for _, c in ipairs(t.Children) do
+				if c.Button and c.Button.Parent == sidebar then
+					k += 1
+					c.Button.LayoutOrder = n * 100 + k
+				end
+			end
+		end
 	end
 	win._ecStyleTab = ec.styleTab
 
 	win._ecTabSelected = function(tab)
+		if Library.LayoutStyle == "Carré" then
+			for _, t in ipairs(win.Tabs) do
+				local l = t.Button and t.Button:FindFirstChild("SqLine")
+				if l then tween(l, { BackgroundTransparency = (t == tab) and 0 or 1 }, 0.2) end
+			end
+		end
 		if Library.LayoutStyle == "Éclipse" then
 			for _, t in ipairs(win.Tabs) do
 				local st = t.Button and t.Button:FindFirstChild("EcSel")
@@ -14594,6 +14869,65 @@ function Library:CreateWindow(cfg)
 			tween(tab.Button, { BackgroundTransparency = 0.88 }, 0.25)
 		end
 		ec.page(tab)
+	end
+
+	-- type Carré : coins à 0 dans toute la fenêtre, police monospace, blocs à titre sur la bordure (ne refait rien si l'état est inchangé)
+	ec.squareApply = function(sq)
+		if ec.sqState == sq then return end
+		ec.sqState = sq
+		Library.SquareMode = sq
+		for _, d in ipairs(main:GetDescendants()) do
+			if d:IsA("UICorner") and d:GetAttribute("KeepRound") == nil then
+				if sq then
+					if d:GetAttribute("SqOrig") == nil then d:SetAttribute("SqOrig", d.CornerRadius) end
+					d.CornerRadius = UDim.new(0, 0)
+				else
+					local orig = d:GetAttribute("SqOrig")
+					if orig ~= nil then
+						d.CornerRadius = orig
+						d:SetAttribute("SqOrig", nil)
+					end
+				end
+			end
+		end
+		if not sq then
+			Library:SetCornerRadius(Library.GlobalCornerValue)
+			if win.RefreshShape then win:RefreshShape() end
+		end
+		Library:SetFont(Library.FontFamily or "Gotham")
+		Library._sqRefreshAll(win)
+	end
+
+	-- barre de recherche : à droite du titre, centrée dans la fenêtre (ou dans l'espace libre s'il est trop étroit), large
+	ec.placeSearch = function()
+		local ls = Library.LayoutStyle
+		if ls == "Éclipse" then return end
+		local sqm = ls == "Carré"
+		local W = main.Size.X.Offset
+		local tbw = 0
+		pcall(function() tbw = title.TextBounds.X end)
+		if tbw <= 0 then tbw = #tostring(title.Text) * 9 end
+		local left = (sqm and 10 or tx) + tbw + 18
+		local right = undoBtn.Visible and 256 or 88          -- boutons FPS / annuler / replier / réduire
+		local h = sqm and 24 or 30
+		local gap = 8
+		local avail = W - left - right
+		local w = math.floor(math.clamp(avail - h - gap, 90, 400))
+		local cy = sqm and 14 or 21
+		local cx = W / 2
+		if cx - w / 2 < left or cx + w / 2 + gap + h > W - right then
+			cx = math.max(left + (avail - (w + gap + h)) / 2 + w / 2, left + w / 2)
+		end
+		search.AnchorPoint = Vector2.new(0.5, 0.5)
+		search.Position = UDim2.fromOffset(math.floor(cx + 0.5), cy)
+		search.Size = UDim2.fromOffset(w, h)
+		modChip.AnchorPoint = Vector2.new(0, 0.5)
+		modChip.Position = UDim2.fromOffset(math.floor(cx + w / 2 + gap + 0.5), cy)
+		modChip.Size = UDim2.fromOffset(h, h)
+	end
+	for _, sig in ipairs({ main:GetPropertyChangedSignal("Size"), title:GetPropertyChangedSignal("TextBounds"),
+		undoBtn:GetPropertyChangedSignal("Visible") }) do
+		track(sig:Connect(function() ec.placeSearch() end))
 	end
 
 	-- applique le type d'interface courant (positions, tailles, visibilité)
@@ -14605,6 +14939,12 @@ function Library:CreateWindow(cfg)
 		local userOn = on and o.UserCard ~= false
 		local barOn = on and o.FooterBar ~= false
 		local oldPad = SIDE_PAD
+		local sq = Library.LayoutStyle == "Carré"
+		ec.squareApply(sq)
+		-- valeurs communes (le type Carré les redéfinit plus bas)
+		footer.AnchorPoint = Vector2.new(0, 0)
+		title.Position = UDim2.new(0, tx, 0, 0)
+		title.Size = UDim2.new(1, -tx - 190, 1, 0)
 
 		if on then
 			local cx = sw + 18                 -- x du contenu
@@ -14627,11 +14967,11 @@ function Library:CreateWindow(cfg)
 			ec.titleLine.Position = UDim2.new(0, cx, 0, 57)
 			ec.titleLine.Size = UDim2.new(1, -(cx + 10), 0, 1)
 			search.AnchorPoint = Vector2.new(1, 0)
-			search.Position = UDim2.new(1, -114, 0, 13)
-			search.Size = UDim2.fromOffset(170, 30)
+			search.Position = UDim2.new(1, -116, 0, 13)
+			search.Size = UDim2.fromOffset(220, 30)
 			modChip.AnchorPoint = Vector2.new(1, 0)
-			modChip.Position = UDim2.new(1, -82, 0, 13)
-			modChip.Size = UDim2.fromOffset(26, 30)
+			modChip.Position = UDim2.new(1, -78, 0, 13)
+			modChip.Size = UDim2.fromOffset(30, 30)
 			content.Position = UDim2.new(0, cx, 0, 66)
 			content.Size = UDim2.new(1, -SIDE_PAD, 1, -(66 + (barOn and 52 or 12)))
 			ec.bar.Position = UDim2.new(0, cx, 1, -44)
@@ -14640,24 +14980,54 @@ function Library:CreateWindow(cfg)
 			fpsLabel.Position = UDim2.new(1, -12, 0.5, 0)
 			undoBtn.Parent = ec.bar
 			undoBtn.Position = UDim2.new(1, -122, 0.5, 0)
+		elseif sq then
+			-- barre du haut : ligne 1 = titre + recherche (verre, centrée) + boutons, ligne 2 = onglets (texte) ; le contenu dessous
+			SIDE_PAD = 16
+			ec.collapsedH = 30
+			local hasDock = false
+			for _, c in ipairs(footer:GetChildren()) do
+				if c:IsA("GuiButton") then hasDock = true break end
+			end
+			local dockW = hasDock and 118 or 0
+			local reserved = 6 + (hasDock and (dockW + 4) or 0) + 6   -- gauche + onglet docké + marge
+			titleBar.Position = UDim2.new(0, 0, 0, 0)
+			titleBar.Size = UDim2.new(1, 0, 0, 28)
+			title.Position = UDim2.new(0, 10, 0, 0)
+			title.Size = UDim2.new(1, -260, 1, 0)
+			ec.titleLine.Position = UDim2.new(0, 6, 0, 58)
+			ec.titleLine.Size = UDim2.new(1, -12, 0, 1)
+			sidebar.Position = UDim2.new(0, 6, 0, 30)
+			sidebar.Size = UDim2.new(1, -reserved, 0, 26)
+			ec.sidePad.PaddingLeft, ec.sidePad.PaddingRight, ec.sidePad.PaddingTop = UDim.new(0, 0), UDim.new(0, 0), UDim.new(0, 0)
+			footer.AnchorPoint = Vector2.new(1, 0)
+			footer.Position = UDim2.new(1, -8, 0, 30)
+			footer.Size = UDim2.fromOffset(dockW, 26)
+			content.Position = UDim2.new(0, 8, 0, 62)
+			content.Size = UDim2.new(1, -16, 1, -70)
+			fpsLabel.Parent = titleBar
+			fpsLabel.Position = UDim2.new(1, -80, 0.5, 0)
+			undoBtn.Parent = titleBar
+			undoBtn.Position = UDim2.new(1, -192, 0.5, 0)
+			if not ec.sqWheel then   -- molette = défilement horizontal des onglets
+				ec.sqWheel = true
+				track(sidebar.InputChanged:Connect(function(i)
+					if Library.LayoutStyle == "Carré" and i.UserInputType == Enum.UserInputType.MouseWheel then
+						sidebar.CanvasPosition = Vector2.new(math.max(0, sidebar.CanvasPosition.X - i.Position.Z * 40), 0)
+					end
+				end))
+			end
 		else
 			SIDE_PAD = 156
 			ec.collapsedH = 44
 			footer.Position = UDim2.new(0, 10, 1, -48)
 			footer.Size = UDim2.new(0, 116, 0, 34)
-			sidebar.Position = UDim2.new(0, 10, 0, 88)
-			sidebar.Size = UDim2.new(0, 116, 1, -140)
+			sidebar.Position = UDim2.new(0, 10, 0, 54)
+			sidebar.Size = UDim2.new(0, 116, 1, -106)
 			ec.sidePad.PaddingLeft, ec.sidePad.PaddingRight, ec.sidePad.PaddingTop = UDim.new(0, 0), UDim.new(0, 0), UDim.new(0, 0)
 			titleBar.Position = UDim2.new(0, 0, 0, 0)
 			titleBar.Size = UDim2.new(1, 0, 0, 42)
 			ec.titleLine.Position = UDim2.new(0, 14, 0, 42)
 			ec.titleLine.Size = UDim2.new(1, -28, 0, 1)
-			search.AnchorPoint = Vector2.new(0, 0)
-			search.Position = UDim2.new(0, 10, 0, 52)
-			search.Size = UDim2.new(0, 84, 0, 28)
-			modChip.AnchorPoint = Vector2.new(0, 0)
-			modChip.Position = UDim2.new(0, 100, 0, 52)
-			modChip.Size = UDim2.new(0, 26, 0, 28)
 			content.Position = UDim2.new(0, 146, 0, 52)
 			content.Size = UDim2.new(1, -156, 1, -64)
 			fpsLabel.Parent = titleBar
@@ -14666,10 +15036,31 @@ function Library:CreateWindow(cfg)
 			undoBtn.Position = UDim2.new(1, -192, 0.5, 0)
 		end
 
-		sidebar:FindFirstChildOfClass("UIListLayout").Padding = UDim.new(0, on and 4 or 3)
+		local sideLay = sidebar:FindFirstChildOfClass("UIListLayout")
+		if sq then
+			sideLay.FillDirection = Enum.FillDirection.Horizontal
+			sideLay.VerticalAlignment = Enum.VerticalAlignment.Center
+			sideLay.Padding = UDim.new(0, 2)
+			sidebar.AutomaticCanvasSize = Enum.AutomaticSize.X
+			sidebar.ScrollingDirection = Enum.ScrollingDirection.X
+		else
+			sideLay.FillDirection = Enum.FillDirection.Vertical
+			sideLay.VerticalAlignment = Enum.VerticalAlignment.Top
+			sideLay.Padding = UDim.new(0, on and 4 or 3)
+			sidebar.AutomaticCanvasSize = AY
+			sidebar.ScrollingDirection = Enum.ScrollingDirection.XY
+			sidebar.CanvasPosition = Vector2.new(0, 0)
+		end
 		title.Visible = not on
-		if ec.logo then ec.logo.Visible = not on end
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		if ec.logo then ec.logo.Visible = not on and not sq end
 		for _, t in ipairs(win.Tabs) do ec.styleTab(t) end
+		for _, t in ipairs(win.Tabs) do   -- sous-menus dépliants : cachés dans la barre du haut, rétablis ensuite
+			if t._holder then t._holder.Visible = (not sq) and t.Expanded == true end
+		end
+		if sq then ec.sqOrder() end
+		if win.ApplyTitle then win:ApplyTitle() end
+		ec.placeSearch()
 		ec.vis()
 		ec.texts()
 		ec.page()
@@ -14762,7 +15153,12 @@ function Library:CreateWindow(cfg)
 		sheenEntry.BaseRadius = base
 		glintEntry.BaseRadius = base
 		for _, e in ipairs({ mainEntry, horizonEntry, sheenEntry, glintEntry }) do
-			e.Corner.CornerRadius = UDim.new(0, math.floor(e.BaseRadius * Library.GlobalCornerValue / 10))
+			if Library.SquareMode then
+				if e.Corner:GetAttribute("SqOrig") == nil then e.Corner:SetAttribute("SqOrig", e.Corner.CornerRadius) end
+				e.Corner.CornerRadius = UDim.new(0, 0)
+			else
+				e.Corner.CornerRadius = UDim.new(0, math.floor(e.BaseRadius * Library.GlobalCornerValue / 10))
+			end
 		end
 	end
 
@@ -14804,14 +15200,27 @@ function Library:CreateWindow(cfg)
 		end
 		title.Font = f or (Library.Fonts and Library.Fonts[3]) or F_BOLD
 		title.Text = (Library.TitleStretch ~= false) and Library._stretch(titleRaw) or titleRaw
+		local sqm = Library.SquareMode == true
+		title.TextScaled = not sqm
+		if sqm then   -- type Carré : « Nom v1.0 | » en police monospace, couleur discrète, sans reflet
+			title.Font = (Library.Fonts and Library.Fonts[3]) or Enum.Font.Code
+			title.Text = titleRaw .. " v" .. tostring(Library.Version or "1.0") .. "  |"
+			title:SetAttribute("BaseSize", 13)
+			title.TextSize = math.max(8, math.floor(13 * (Library.FontScale or 1) + 0.5))
+			title.TextColor3 = T.ElementAccent
+		else
+			title:SetAttribute("BaseSize", 16)
+			title.TextColor3 = T.Text
+		end
+		titleGrad.Enabled = not sqm
 		if ec.brandName and ec.texts then ec.texts() end
 		if ec.page and win.Current then ec.page() end
-		titleStroke.Enabled = Library.TitleBold ~= false
+		titleStroke.Enabled = Library.TitleBold ~= false and not sqm
 		if shineTw then
 			shineTw:Cancel()
 			shineTw = nil
 		end
-		if Library.TitleShine ~= false and Library.Animations and main.Visible then
+		if Library.TitleShine ~= false and Library.Animations and main.Visible and not sqm then
 			titleGrad.Offset = Vector2.new(-1, 0)
 			shineTw = TweenService:Create(titleGrad,
 				TweenInfo.new(1.8, QUINT, Enum.EasingDirection.InOut, -1, false, 1.6), { Offset = Vector2.new(1, 0) })
