@@ -7,10 +7,14 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
-	V5.3 — APERÇU 3D (rig R6 dans un ViewportFrame)
-		• Block:CreatePreview3D({ Name, Height, Options }) : aperçu 3D piloté en direct par tes options (voir le bloc « V5.3 : APERÇU 3D »).
-		  Highlight, Chams, Box (Full / Corner), Squelette, Nom, Vie, Distance, Traceur, Point sur la tête. Glisser pour tourner.
-		  pv:Bind("Box", "flag" ou élément) / pv:BindAll({...}) / pv:Set("Box", true).
+	V5.3 — HOME, APERÇU 3D, CHANGE-LOG AUTOMATIQUE
+		• Onglet « Home » créé automatiquement en premier : aperçu 3D de ton personnage, FPS, ping, joueurs, mémoire, session, serveur
+		  + nouveautés de l'UI (Library.Changelog / Library:AddChangelog). CreateWindow({ Home = false }) pour le retirer,
+		  { ChangeLog = false } pour masquer seulement les nouveautés, HomeName / HomeIcon pour le nom / l'icône.
+		• Block:CreatePreview3D({ Name, Height, Character, Options }) : rig R6 ou vrai personnage dans un ViewportFrame, piloté en direct
+		  (Highlight, Chams, Box Full / Corner, Squelette, Nom, Vie, Distance, Traceur, Point sur la tête). pv:Bind / pv:BindAll / pv:Set.
+		• Block:CreateStats({ Columns, CellHeight, Items }) : grille de tuiles chiffrées (stats:Set(id, texte, couleur)).
+		• Block:CreateGraph({ Name, Samples, Unit, MinMax, ColorFn }) : histogramme glissant (g:Push(v), g:Flush()).
 
 	V5.2 — CURSEUR LIBRE, TOUCHES DU JEU, COLOR PICKER
 		• Paramètres > Fenêtre : « Libérer le curseur » et « Bloquer les touches du jeu » (Library:SetFreeCursor / SetBlockGameKeys,
@@ -35,7 +39,7 @@
 		    Keybind : CreateKeybind({ Mode = "Hold", OnState = function(actif) end })  item:IsActive() / GetMode() / SetMode()
 		• Mini-fenêtres : bouton dans l'en-tête de chaque bloc (limite 1 à 5 dans Paramètres), Library:DetachBlock(bloc).
 		• Nouveaux éléments : Block:CreateTextArea / CreateRadio / CreateTable / CreateImage.
-		• Onglet « Change-Log » (À propos + versions) : Library:AddChangelog(version, { notes }), CreateWindow({ Version = "1.0" }).
+		• Change-Log : affiché dans l'onglet Home (plus d'onglet séparé) : Library:AddChangelog(version, { notes }) le met à jour tout seul.
 		• Onglet « Éditeur de thème » : aperçu en direct + dégradés (Library:SetGradient({...})). ChangeLog = false /
 		  ThemeEditor = false dans CreateWindow pour les masquer.
 
@@ -8196,6 +8200,7 @@ end
 -- ============================================================================
 -- V5.3 : APERÇU 3D  (rig R6 dans un ViewportFrame, piloté en direct par tes toggles / options)
 --   local pv = block:CreatePreview3D({ Name = "Aperçu", Height = 240,
+--       Character = true,                                     -- ton vrai personnage (ou un Player / Model) au lieu du rig R6 factice
 --       Options = { Box = true, Skeleton = true },            -- valeurs de départ (facultatif)
 --   })
 --   -- Lier une option de l'aperçu à un Flag OU à un élément (toggle, slider, color picker, dropdown) :
@@ -8211,6 +8216,8 @@ end
 --     Tracer · TracerColor · TracerOrigin ("Bottom" | "Center" | "Top") · HeadDot · HeadDotColor
 --     AutoRotate · RotateSpeed (°/s) · Animate (balancement des membres) · Floor · Zoom (1 = normal)
 --   Glisser avec la souris / le doigt pour tourner l'aperçu. pv:ResetView() · pv:SetRotation(deg) · pv:SetHeight(px)
+--   Mode personnage : pv:Refresh() (re-clone l'avatar : tenue changée, respawn...) · pv:SetTarget(Player | Model | nil)
+--   Le personnage est cloné (statique : l'option Animate ne concerne que le rig factice) ; rechargé tout seul au respawn.
 -- ============================================================================
 local PV_WHITE = Color3.fromRGB(255, 255, 255)
 local PV_DEFAULTS = {
@@ -8301,97 +8308,232 @@ function Block:CreatePreview3D(o)
 	end
 	for k, v in pairs(o.Options or o.Defaults or {}) do setOpt(k, v) end
 
-	-- ---------------------------------------------------------------- rig R6
-	local rig = new("Model", { Name = "R6Rig" }, vp)
-	local parts, baseColor = {}, {}
-	local function mk(name, size, color)
-		local p = Instance.new("Part")
-		p.Name = name
-		p.Size = size
-		p.Color = color
-		p.Material = Enum.Material.SmoothPlastic
-		p.Anchored = true
-		p.CanCollide, p.CanTouch, p.CanQuery, p.CastShadow = false, false, false, false
-		p.TopSurface, p.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
-		p.Parent = rig
-		parts[#parts + 1] = p
-		baseColor[p] = color
-		return p
-	end
-	local skin = Color3.fromRGB(245, 205, 48)
-	local head = mk("Head", Vector3.new(2, 1, 1), skin)
-	local hm = Instance.new("SpecialMesh")
-	hm.MeshType = Enum.MeshType.Head
-	hm.Scale = Vector3.new(1.25, 1.25, 1.25)
-	hm.Parent = head
-	local face
-	pcall(function()
-		face = Instance.new("Decal")
-		face.Face = Enum.NormalId.Front
-		face.Texture = "rbxasset://textures/face.png"
-		face.Parent = head
-	end)
-	local torso = mk("Torso", Vector3.new(2, 2, 1), Color3.fromRGB(13, 105, 172))
-	local armL = mk("Left Arm", Vector3.new(1, 2, 1), skin)
-	local armR = mk("Right Arm", Vector3.new(1, 2, 1), skin)
-	local legL = mk("Left Leg", Vector3.new(1, 2, 1), Color3.fromRGB(40, 127, 71))
-	local legR = mk("Right Leg", Vector3.new(1, 2, 1), Color3.fromRGB(40, 127, 71))
-	head.CFrame = CFrame.new(0, 1.5, 0)
-	torso.CFrame = CFrame.new(0, 0, 0)
+	-- ---------------------------------------------------------------- modèle (rig R6 factice OU ton personnage)
+	local rig, fit
+	local J = {}
+	local poseFn = function() end
+	local bodyParts, decals, hides = {}, {}, {}
+	local charSrc
+	if o.Character == true then charSrc = LP elseif typeof(o.Character) == "Instance" then charSrc = o.Character end
 
 	local floor = Instance.new("Part")
 	floor.Name = "Floor"
 	floor.Shape = Enum.PartType.Cylinder
-	floor.Size = Vector3.new(0.1, 7, 7)
-	floor.CFrame = CFrame.new(0, -3.05, 0) * CFrame.Angles(0, 0, math.pi / 2)
 	floor.Color = Color3.fromRGB(26, 26, 31)
 	floor.Material = Enum.Material.SmoothPlastic
 	floor.Anchored, floor.CanCollide, floor.CanQuery, floor.CanTouch, floor.CastShadow = true, false, false, false, false
-	floor.Parent = rig
+	floor.Parent = vp
 
 	-- Highlight (si le moteur l'affiche dans un ViewportFrame ; sinon repli : teinte du corps)
 	local hl
 	pcall(function()
 		hl = Instance.new("Highlight")
 		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-		hl.Adornee = rig
 		hl.Enabled = false
 		hl.Parent = vp
 	end)
 
-	local J = {
-		head = Vector3.new(0, 1.5, 0), neck = Vector3.new(0, 1, 0), pelvis = Vector3.new(0, -1, 0),
-		shL = Vector3.new(-1, 0.5, 0), shR = Vector3.new(1, 0.5, 0),
-		hipL = Vector3.new(-0.5, -1, 0), hipR = Vector3.new(0.5, -1, 0),
-	}
-	local function limb(part, pivot, off, ang, tip)
-		local cf = CFrame.new(pivot) * CFrame.Angles(ang, 0, 0)
-		part.CFrame = cf * CFrame.new(off)
-		return cf * tip
-	end
-	local function pose(a)
-		J.handL = limb(armL, J.shL, Vector3.new(-0.5, -0.5, 0), a, Vector3.new(-0.5, -1.5, 0))
-		J.handR = limb(armR, J.shR, Vector3.new(0.5, -0.5, 0), -a, Vector3.new(0.5, -1.5, 0))
-		J.footL = limb(legL, J.hipL, Vector3.new(0, -1, 0), -a, Vector3.new(0, -2, 0))
-		J.footR = limb(legR, J.hipR, Vector3.new(0, -1, 0), a, Vector3.new(0, -2, 0))
-	end
-	pose(0)
-
-	local function applyAppearance()
-		for _, p in ipairs(parts) do
-			if opt.Chams then
-				p.Color = opt.ChamsColor
-				p.Material = Enum.Material.Neon
-				p.Transparency = opt.ChamsTransparency
-			else
-				local c = baseColor[p]
-				if not hl and opt.Highlight then c = c:Lerp(opt.HighlightFill, 1 - opt.HighlightFillTransparency) end
-				p.Color = c
-				p.Material = Enum.Material.SmoothPlastic
-				p.Transparency = 0
+	local function cornersFor(size, center)
+		local out = {}
+		for _, x in ipairs({ -0.5, 0.5 }) do
+			for _, y in ipairs({ -0.5, 0.5 }) do
+				for _, z in ipairs({ -0.5, 0.5 }) do
+					out[#out + 1] = center + Vector3.new(x * size.X, y * size.Y, z * size.Z)
+				end
 			end
 		end
-		if face then face.Transparency = opt.Chams and 1 or 0 end
+		return out
+	end
+
+	local function finishModel()
+		-- état d'origine de chaque pièce (pour les chams) + sol + Highlight
+		bodyParts, decals, hides = {}, {}, {}
+		for _, d in ipairs(rig:GetDescendants()) do
+			if d:IsA("BasePart") then
+				local tex = d:IsA("MeshPart") and d.TextureID ~= "" and d.TextureID or nil
+				bodyParts[#bodyParts + 1] = { p = d, color = d.Color, mat = d.Material, tr = d.Transparency, tex = tex }
+			elseif d:IsA("Decal") or d:IsA("Texture") then
+				decals[#decals + 1] = { d = d, tr = d.Transparency }
+			elseif d:IsA("Shirt") or d:IsA("Pants") or d:IsA("ShirtGraphic") or d:IsA("SurfaceAppearance") then
+				hides[#hides + 1] = { i = d, parent = d.Parent }
+			end
+		end
+		local dia = math.max(fit.size.X, fit.size.Z) * 1.8
+		floor.Size = Vector3.new(0.1, dia, dia)
+		floor.CFrame = CFrame.new(fit.focus.X, fit.focus.Y - fit.size.Y / 2 - 0.05, fit.focus.Z) * CFrame.Angles(0, 0, math.pi / 2)
+		if hl then hl.Adornee = rig end
+		dirty = true
+	end
+
+	local function clearRig()
+		if rig then
+			for _, e in ipairs(hides) do   -- évite de laisser des textures « sorties » du modèle
+				if e.i.Parent == nil then e.i.Parent = e.parent end
+			end
+			rig:Destroy()
+			rig = nil
+		end
+	end
+
+	local function buildMock()
+		clearRig()
+		rig = new("Model", { Name = "R6Rig" }, vp)
+		local function mk(name, size, color)
+			local p = Instance.new("Part")
+			p.Name = name
+			p.Size = size
+			p.Color = color
+			p.Material = Enum.Material.SmoothPlastic
+			p.Anchored = true
+			p.CanCollide, p.CanTouch, p.CanQuery, p.CastShadow = false, false, false, false
+			p.TopSurface, p.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
+			p.Parent = rig
+			return p
+		end
+		local skin = Color3.fromRGB(245, 205, 48)
+		local head = mk("Head", Vector3.new(2, 1, 1), skin)
+		local hm = Instance.new("SpecialMesh")
+		hm.MeshType = Enum.MeshType.Head
+		hm.Scale = Vector3.new(1.25, 1.25, 1.25)
+		hm.Parent = head
+		pcall(function()
+			local face = Instance.new("Decal")
+			face.Face = Enum.NormalId.Front
+			face.Texture = "rbxasset://textures/face.png"
+			face.Parent = head
+		end)
+		local torso = mk("Torso", Vector3.new(2, 2, 1), Color3.fromRGB(13, 105, 172))
+		local armL = mk("Left Arm", Vector3.new(1, 2, 1), skin)
+		local armR = mk("Right Arm", Vector3.new(1, 2, 1), skin)
+		local legL = mk("Left Leg", Vector3.new(1, 2, 1), Color3.fromRGB(40, 127, 71))
+		local legR = mk("Right Leg", Vector3.new(1, 2, 1), Color3.fromRGB(40, 127, 71))
+		head.CFrame = CFrame.new(0, 1.5, 0)
+		torso.CFrame = CFrame.new(0, 0, 0)
+
+		J = {
+			head = Vector3.new(0, 1.5, 0), neck = Vector3.new(0, 1, 0), pelvis = Vector3.new(0, -1, 0),
+			shL = Vector3.new(-1, 0.5, 0), shR = Vector3.new(1, 0.5, 0),
+			hipL = Vector3.new(-0.5, -1, 0), hipR = Vector3.new(0.5, -1, 0),
+		}
+		local jj = J
+		local function limb(part, pivot, off, ang, tip)
+			local cf = CFrame.new(pivot) * CFrame.Angles(ang, 0, 0)
+			part.CFrame = cf * CFrame.new(off)
+			return cf * tip
+		end
+		poseFn = function(a)
+			jj.handL = limb(armL, jj.shL, Vector3.new(-0.5, -0.5, 0), a, Vector3.new(-0.5, -1.5, 0))
+			jj.handR = limb(armR, jj.shR, Vector3.new(0.5, -0.5, 0), -a, Vector3.new(0.5, -1.5, 0))
+			jj.footL = limb(legL, jj.hipL, Vector3.new(0, -1, 0), -a, Vector3.new(0, -2, 0))
+			jj.footR = limb(legR, jj.hipR, Vector3.new(0, -1, 0), a, Vector3.new(0, -2, 0))
+		end
+		poseFn(0)
+		fit = { focus = PV_FOCUS, size = Vector3.new(4, 5, 1), corners = PV_CORNERS, dist = 9.6, animated = true }
+		finishModel()
+	end
+
+	local function buildCharacter(src)
+		local ok, clone = pcall(function()
+			local was = src.Archivable
+			src.Archivable = true
+			local c = src:Clone()
+			src.Archivable = was
+			return c
+		end)
+		if not ok or not clone then return false end
+		for _, d in ipairs(clone:GetDescendants()) do
+			if d:IsA("LuaSourceContainer") or d:IsA("Humanoid") or d:IsA("Animator") or d:IsA("Sound")
+				or d:IsA("BillboardGui") or d:IsA("ForceField") then
+				d:Destroy()
+			elseif d:IsA("BasePart") then
+				d.Anchored = true
+				d.CanCollide, d.CanQuery, d.CanTouch, d.CastShadow = false, false, false, false
+			end
+		end
+		local hasPart = false
+		for _, d in ipairs(clone:GetDescendants()) do
+			if d:IsA("BasePart") then hasPart = true break end
+		end
+		if not hasPart then
+			clone:Destroy()
+			return false
+		end
+		clearRig()
+		rig = clone
+		rig.Name = "Character"
+		rig.Parent = vp
+		rig:PivotTo(CFrame.new(0, 0, 0))
+		local bcf, bsize = rig:GetBoundingBox()
+		rig:PivotTo(rig:GetPivot() - bcf.Position)
+
+		local function part(n)
+			local p = rig:FindFirstChild(n)
+			return (p and p:IsA("BasePart")) and p or nil
+		end
+		local function top(p) return p and p.CFrame:PointToWorldSpace(Vector3.new(0, p.Size.Y / 2, 0)) end
+		local function bot(p) return p and p.CFrame:PointToWorldSpace(Vector3.new(0, -p.Size.Y / 2, 0)) end
+		local function ctr(p) return p and p.Position end
+		local jj = {}
+		jj.head = ctr(part("Head"))
+		if part("UpperTorso") then   -- R15
+			local ut, lt = part("UpperTorso"), part("LowerTorso")
+			jj.neck, jj.pelvis = top(ut), ctr(lt) or bot(ut)
+			jj.shL, jj.handL = top(part("LeftUpperArm")), bot(part("LeftHand"))
+			jj.shR, jj.handR = top(part("RightUpperArm")), bot(part("RightHand"))
+			jj.hipL, jj.footL = top(part("LeftUpperLeg")), bot(part("LeftFoot"))
+			jj.hipR, jj.footR = top(part("RightUpperLeg")), bot(part("RightFoot"))
+		elseif part("Torso") then   -- R6
+			local tr = part("Torso")
+			jj.neck, jj.pelvis = top(tr), bot(tr)
+			jj.shL, jj.handL = top(part("Left Arm")), bot(part("Left Arm"))
+			jj.shR, jj.handR = top(part("Right Arm")), bot(part("Right Arm"))
+			jj.hipL, jj.footL = top(part("Left Leg")), bot(part("Left Leg"))
+			jj.hipR, jj.footR = top(part("Right Leg")), bot(part("Right Leg"))
+		end
+		J = jj
+		poseFn = function() end
+		local center = Vector3.new(0, 0, 0)
+		fit = { focus = center, size = bsize, corners = cornersFor(bsize, center),
+			dist = 1.92 * math.max(bsize.Y, bsize.X * 0.9), animated = false }
+		finishModel()
+		return true
+	end
+
+	local function resolveSource()
+		if typeof(charSrc) ~= "Instance" then return nil end
+		if charSrc:IsA("Player") then return charSrc.Character end
+		return charSrc
+	end
+	local function refresh()
+		local src = resolveSource()
+		if src and src:IsA("Model") and buildCharacter(src) then return true end
+		buildMock()
+		return false
+	end
+
+	local function applyAppearance()
+		for _, e in ipairs(bodyParts) do
+			local p = e.p
+			if p.Parent then
+				if opt.Chams and e.tr < 0.99 then
+					p.Color = opt.ChamsColor
+					p.Material = Enum.Material.Neon
+					p.Transparency = math.max(e.tr, opt.ChamsTransparency)
+					if e.tex then p.TextureID = "" end
+				else
+					local c = e.color
+					if not hl and opt.Highlight and e.tr < 0.99 then
+						c = c:Lerp(opt.HighlightFill, 1 - opt.HighlightFillTransparency)
+					end
+					p.Color = c
+					p.Material = e.mat
+					p.Transparency = e.tr
+					if e.tex then p.TextureID = e.tex end
+				end
+			end
+		end
+		for _, e in ipairs(decals) do e.d.Transparency = opt.Chams and 1 or e.tr end
+		for _, e in ipairs(hides) do e.i.Parent = opt.Chams and nil or e.parent end
 		floor.Transparency = opt.Floor and 0.15 or 1
 		if hl then
 			hl.Enabled = opt.Highlight
@@ -8400,6 +8542,15 @@ function Block:CreatePreview3D(o)
 			hl.FillTransparency = opt.HighlightFillTransparency
 			hl.OutlineTransparency = opt.HighlightOutlineTransparency
 		end
+	end
+
+	refresh()
+	if charSrc == LP then
+		track(LP.CharacterAdded:Connect(function()
+			task.delay(2.5, function()
+				if vp.Parent then refresh() end
+			end)
+		end))
 	end
 
 	-- ---------------------------------------------------------------- caméra
@@ -8499,9 +8650,9 @@ function Block:CreatePreview3D(o)
 		local W, H = vp.AbsoluteSize.X / sc, h
 		t += dt
 		if opt.AutoRotate and not dragging then yaw += math.rad(opt.RotateSpeed) * dt end
-		local dist = 9.6 / math.clamp(opt.Zoom, 0.4, 3)
-		cam.CFrame = CFrame.new(PV_FOCUS) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0) * CFrame.new(0, 0, dist)
-		pose(opt.Animate and math.sin(t * 3) * 0.55 or 0)
+		local dist = fit.dist / math.clamp(opt.Zoom, 0.4, 3)
+		cam.CFrame = CFrame.new(fit.focus) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0) * CFrame.new(0, 0, dist)
+		if fit.animated then poseFn(opt.Animate and math.sin(t * 3) * 0.55 or 0) end
 
 		local tanH = math.tan(math.rad(cam.FieldOfView) / 2)
 		local asp = W / H
@@ -8515,7 +8666,7 @@ function Block:CreatePreview3D(o)
 
 		nLines = 0
 		local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
-		for _, c in ipairs(PV_CORNERS) do
+		for _, c in ipairs(fit.corners) do
 			local p = proj(c)
 			if p then
 				minX, minY = math.min(minX, p.X), math.min(minY, p.Y)
@@ -8556,13 +8707,15 @@ function Block:CreatePreview3D(o)
 		-- squelette
 		if opt.Skeleton then
 			for _, seg in ipairs(PV_SEGS) do
-				local a, b = proj(J[seg[1]]), proj(J[seg[2]])
+				local ja, jb = J[seg[1]], J[seg[2]]
+				local a, b = ja and proj(ja), jb and proj(jb)
 				if a and b then drawLine(a, b, opt.SkeletonColor, opt.SkeletonThickness) end
 			end
 		end
 
 		-- point sur la tête
-		local hp, hd = proj(J.head)
+		local hp, hd = nil, nil
+		if J.head then hp, hd = proj(J.head) end
 		dot.Visible = opt.HeadDot and hp ~= nil
 		if dot.Visible then
 			local r = 0.55 * H / (2 * tanH * hd)
@@ -8706,10 +8859,17 @@ function Block:CreatePreview3D(o)
 		local s = tostring((unself(item, ...)))
 		if titleLbl then titleLbl.Text = s end
 	end
+	item.Refresh = function() return refresh() end
+	item.SetTarget = function(...)
+		local v = unself(item, ...)
+		if v == true then v = LP end
+		charSrc = typeof(v) == "Instance" and v or nil
+		return refresh()
+	end
 	item.Instance = f
 	item.Viewport = vp
 	item.Camera = cam
-	item.Model = rig
+	item.GetModel = function() return rig end
 	return item
 end
 Block.CreateESPPreview = Block.CreatePreview3D
@@ -8884,11 +9044,18 @@ function Library:SetGradient(d)
 end
 
 -- ============================================================================
--- V5 : ONGLET « Change-Log » (À propos + historique des versions)
+-- V5 : HISTORIQUE DES VERSIONS (affiché dans l'onglet Home depuis la V5.3)
 -- ============================================================================
-Library.Version = "5.2.0"
+Library.Version = "5.3.0"
 Library.AppName = "Ui-Lib"
 Library.Changelog = {
+	{ Version = "5.3.0", Date = "2026-10-27", Title = "Accueil et aperçu 3D", Notes = {
+		"Nouvel onglet Home, toujours en premier : aperçu 3D de ton personnage, bloc-notes, amis, FPS / ping, joueurs, mémoire, session et infos serveur.",
+		"Home : graphiques de FPS et de ping, jauge de session (limite réglable + alerte), temps de jeu total, heure et météo réelles (ville auto ou choisie), amis dans le serveur / en ligne à inviter.",
+		"Le Change-Log n'est plus un onglet : les nouveautés s'affichent dans Home et se mettent à jour toutes seules (Library:AddChangelog).",
+		"Nouveau bloc Block:CreatePreview3D : rig R6 ou ton vrai personnage dans un ViewportFrame, piloté en direct par tes options (Highlight, Chams, Box, Squelette, Nom, Vie, Traceur...).",
+		"Nouveau bloc Block:CreateStats : grille de tuiles chiffrées mises à jour par ton script.",
+	} },
 	{ Version = "5.2.0", Date = "2026-10-27", Title = "Curseur, touches et couleurs", Notes = {
 		"Nouveaux réglages : « Libérer le curseur » et « Bloquer les touches du jeu » (Paramètres > Fenêtre).",
 		"Le curseur libre est un mécanisme unique, partagé par la fenêtre, la Palette, le Spotlight et la pipette.",
@@ -8916,37 +9083,574 @@ Library.Changelog = {
 	} },
 }
 
+-- ============================================================================
+-- V5.3 : ONGLET « Home » (toujours en premier) + NOUVEAUTÉS AUTOMATIQUES
+--   • Home est créé tout seul par CreateWindow : aperçu 3D de ton personnage, bloc-notes, amis, FPS / ping (chiffres + graphiques),
+--     session (jauge + temps total), heure et météo réelles, infos serveur, et les nouveautés de l'UI. Plus d'onglet « Change-Log ».
+--   • Les nouveautés viennent de Library.Changelog : Library:AddChangelog(version, { notes }, date, titre) met Home à jour tout seul
+--     (et la version de l'UI affichée est toujours celle de la dernière entrée).
+--   • CreateWindow({ Home = false }) masque Home · { ChangeLog = false } masque seulement les nouveautés · HomeName / HomeIcon.
+--   • Réglages de Home sauvegardés automatiquement (flags « ui.home.* ») : notes, limite de session, météo, ville, temps de jeu total.
+--   • Block:CreateStats({ Columns = 2, CellHeight = 48, Items = { { Id = "fps", Name = "FPS", Value = "--", Size = 16 }, ... } })
+--       -> stats:Set("fps", "60", Color3 | nil) : grille de tuiles chiffrées, mise à jour par ton script.
+--   • Block:CreateGraph({ Name, Height = 64, Samples = 90, Unit = " ms", MinMax = 100, Max = nil, ColorFn = function(v) return Color3 end })
+--       -> g:Push(valeur) (enregistre) · g:Flush() (redessine si besoin) · g:Clear()
+-- ============================================================================
+Library.Version = Library.Changelog[1] and Library.Changelog[1].Version or Library.Version
+
 function Library:AddChangelog(version, notes, date, title)
 	table.insert(Library.Changelog, 1, { Version = tostring(version), Date = date, Title = title or "Nouveautés",
 		Notes = type(notes) == "table" and notes or { tostring(notes) } })
 	Library.Version = tostring(version)
 	local win = Library.Window
-	if win and win._changelogTab then pcall(Library._buildChangelog, Library, win._changelogTab) end
+	if win and win._homeTab then pcall(Library._buildChangelog, Library, win._homeTab) end
 end
 
+-- (re)construit les blocs « Nouveautés » de Home à partir de Library.Changelog
 function Library:_buildChangelog(tab)
-	tab:ClearBlocks()
-	local about = tab:CreateBlock({ Name = "À propos", Side = "Left" })
-	about:CreateParagraph({ Title = tostring(Library.AppName) .. "  ·  v" .. tostring(Library.Version),
-		Content = "Interface « trou noir » : blocs, thèmes, keybinds, mini-fenêtres.\nChaque version et ses nouveautés sont listées à droite." })
-	about:CreateButton({ Name = "Copier la version", Favorite = false, Callback = function()
-		if setclipboard then
-			setclipboard(tostring(Library.AppName) .. " v" .. tostring(Library.Version))
-			Library:Notify({ Title = "À propos", Content = "Version copiée.", Type = "Success", Duration = 2 })
+	tab = tab or (Library.Window and Library.Window._homeTab)
+	if not tab then return end
+	for _, b in ipairs(tab._logBlocks or {}) do
+		if b.Frame then b.Frame:Destroy() end
+		for i, x in ipairs(tab.Blocks) do
+			if x == b then table.remove(tab.Blocks, i) break end
 		end
-	end })
+	end
+	tab._logBlocks = {}
+	if Library.ShowChangelog == false then return end
 	for i, e in ipairs(Library.Changelog) do
-		local b = tab:CreateBlock({ Name = "v" .. tostring(e.Version) .. (e.Date and ("  ·  " .. e.Date) or ""),
-			Side = (i % 2 == 1) and "Right" or "Left", Collapsed = i > 2 })
+		local b = tab:CreateBlock({ Name = "Nouveautés v" .. tostring(e.Version) .. (e.Date and ("  ·  " .. e.Date) or ""),
+			Side = (i % 2 == 1) and "Left" or "Right", Collapsed = i > 1 })
 		b:CreateParagraph({ Title = e.Title or "Nouveautés", Content = "• " .. table.concat(e.Notes or {}, "\n• ") })
+		tab._logBlocks[#tab._logBlocks + 1] = b
 	end
 end
 
-function Window:CreateChangelogTab(name, icon)
-	local tab = self:CreateTab(name or "Change-Log", nil, icon)
-	tab.Button.LayoutOrder = 900000   -- toujours en bas de la liste, après les onglets du script
-	self._changelogTab = tab
+-- ---------------------------------------------------------------------------
+-- Block:CreateStats : grille de tuiles « NOM / valeur »
+-- ---------------------------------------------------------------------------
+function Block:CreateStats(o)
+	o = o or {}
+	local list = o.Items or {}
+	local cols = math.clamp(math.floor(tonumber(o.Columns) or 2), 1, 4)
+	local cellH = math.clamp(tonumber(o.CellHeight) or 48, 32, 90)
+	local rows = math.max(1, math.ceil(#list / cols))
+	local holder = new("Frame", { Size = UDim2.new(1, 0, 0, rows * cellH + (rows - 1) * 6), BackgroundTransparency = 1 }, self.Body)
+	new("UIGridLayout", { CellSize = UDim2.new(1 / cols, -6 * (cols - 1) / cols, 0, cellH), CellPadding = UDim2.fromOffset(6, 6),
+		SortOrder = BYORDER, FillDirection = Enum.FillDirection.Horizontal }, holder)
+	local cells, names = {}, {}
+	for i, it in ipairs(list) do
+		local c = new("Frame", { BackgroundColor3 = T.Element, BackgroundTransparency = 0.4, BorderSizePixel = 0, LayoutOrder = i }, holder)
+		corner(c, 8)
+		trackStyled(c, stroke(c, 0.93), "row")
+		local nm = label(c, string.upper(tostring(it.Name or it.Id or "")), 10, { Position = UDim2.new(0, 10, 0, 6),
+			Size = UDim2.new(1, -20, 0, 14), Font = F_BOLD, TextColor3 = T.ElementAccent })
+		local val = label(c, tostring(it.Value or "—"), it.Size or o.ValueSize or 16, { Position = UDim2.new(0, 10, 0, 22),
+			Size = UDim2.new(1, -20, 0, cellH - 26), Font = F_BOLD })
+		cells[it.Id or i] = { val = val, name = nm }
+		names[#names + 1] = tostring(it.Name or it.Id or "")
+	end
+	self:_reg(holder, table.concat(names, " "))
+	local item = {}
+	item.Set = function(...)
+		local id, v, col = unself(item, ...)
+		local c = cells[id]
+		if not c then return end
+		if v ~= nil then c.val.Text = tostring(v) end
+		c.val.TextColor3 = col or T.Text
+	end
+	item.SetName = function(...)
+		local id, n = unself(item, ...)
+		local c = cells[id]
+		if c then c.name.Text = string.upper(tostring(n)) end
+	end
+	item.Instance = holder
+	return item
+end
+
+-- ---------------------------------------------------------------------------
+-- Block:CreateGraph : histogramme glissant (valeurs ajoutées avec :Push, redessiné avec :Flush)
+-- ---------------------------------------------------------------------------
+function Block:CreateGraph(o)
+	o = o or {}
+	local samples = math.clamp(math.floor(tonumber(o.Samples) or 90), 20, 240)
+	local h = math.clamp(tonumber(o.Height) or 64, 36, 200)
+	local unit = o.Unit and tostring(o.Unit) or ""
+	local f = makeRow(self, h + 34, o.Name)
+	label(f, o.Name or "Graphique", 12, { Position = UDim2.new(0, 12, 0, 4), Size = UDim2.new(0, 64, 0, 18), Font = F_BOLD })
+	local infoL = label(f, "—", 11, { Position = UDim2.new(0, 78, 0, 4), Size = UDim2.new(1, -90, 0, 18),
+		TextXAlignment = RIGHT, TextColor3 = T.ElementAccent, Font = F_REG })
+	local plot = new("Frame", { Position = UDim2.new(0, 10, 0, 26), Size = UDim2.new(1, -20, 0, h), BackgroundColor3 = T.Main,
+		BackgroundTransparency = 0.55, BorderSizePixel = 0, ClipsDescendants = true }, f)
+	corner(plot, 6)
+	for _, y in ipairs({ 0.25, 0.5, 0.75 }) do
+		new("Frame", { Position = UDim2.new(0, 0, y, 0), Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = T.Accent,
+			BackgroundTransparency = 0.93, BorderSizePixel = 0 }, plot)
+	end
+	local bars = {}
+	for i = 1, samples do
+		bars[i] = new("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new((i - 1) / samples, 0, 1, 0),
+			Size = UDim2.new(1 / samples, -1, 0, 0), BorderSizePixel = 0, BackgroundColor3 = T.Accent, Visible = false }, plot)
+	end
+	local data, dirty = {}, true
+	local item = {}
+	item.Push = function(...)
+		local v = tonumber((unself(item, ...)))
+		if not v then return end
+		data[#data + 1] = v
+		if #data > samples then table.remove(data, 1) end
+		dirty = true
+	end
+	item.Clear = function() data = {} dirty = true end
+	item.Flush = function()
+		if not dirty then return end
+		dirty = false
+		local n = #data
+		local mx, mn, sum = -math.huge, math.huge, 0
+		for _, v in ipairs(data) do
+			mx, mn, sum = math.max(mx, v), math.min(mn, v), sum + v
+		end
+		local top = tonumber(o.Max) or math.max(mx * 1.15, tonumber(o.MinMax) or 1)
+		for i = 1, samples do
+			local v = data[n - samples + i]
+			local b = bars[i]
+			if v then
+				b.Visible = true
+				b.Size = UDim2.new(1 / samples, -1, math.clamp(v / top, 0.03, 1), 0)
+				if o.ColorFn then
+					local ok, c = pcall(o.ColorFn, v)
+					b.BackgroundColor3 = ok and c or T.Accent
+				end
+			else
+				b.Visible = false
+			end
+		end
+		if n > 0 then
+			local function r(x) return math.floor(x + 0.5) end
+			infoL.Text = string.format("%d%s  ·  min %d  ·  moy %d  ·  max %d", r(data[n]), unit, r(mn), r(sum / n), r(mx))
+		end
+	end
+	item.Instance = f
+	return item
+end
+
+-- ---------------------------------------------------------------------------
+-- Outils de Home
+-- ---------------------------------------------------------------------------
+local function fmtDur(s)
+	s = math.max(0, math.floor(s))
+	local h, m, sec = math.floor(s / 3600), math.floor((s % 3600) / 60), s % 60
+	if h > 0 then return string.format("%d:%02d:%02d", h, m, sec) end
+	return string.format("%d:%02d", m, sec)
+end
+local HOME_GOOD, HOME_MID, HOME_BAD = Color3.fromRGB(90, 220, 120), Color3.fromRGB(240, 200, 70), Color3.fromRGB(240, 80, 80)
+local function fpsColor(v) return v >= 50 and HOME_GOOD or (v >= 30 and HOME_MID or HOME_BAD) end
+local function pingColor(v) return v < 80 and HOME_GOOD or (v < 150 and HOME_MID or HOME_BAD) end
+
+local WMO = {
+	[0] = "Ciel dégagé", [1] = "Plutôt dégagé", [2] = "Partiellement nuageux", [3] = "Couvert",
+	[45] = "Brouillard", [48] = "Brouillard givrant", [51] = "Bruine légère", [53] = "Bruine", [55] = "Bruine forte",
+	[56] = "Bruine verglaçante", [57] = "Bruine verglaçante", [61] = "Pluie faible", [63] = "Pluie", [65] = "Forte pluie",
+	[66] = "Pluie verglaçante", [67] = "Pluie verglaçante", [71] = "Neige faible", [73] = "Neige", [75] = "Forte neige",
+	[77] = "Grains de neige", [80] = "Averses faibles", [81] = "Averses", [82] = "Fortes averses", [85] = "Averses de neige",
+	[86] = "Fortes averses de neige", [95] = "Orage", [96] = "Orage et grêle", [99] = "Orage et forte grêle",
+}
+local DAYS = { "dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "sam." }
+local MONTHS = { "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc." }
+
+-- requête HTTP : fonction de l'exécuteur si présente, sinon game:HttpGet
+local function homeHttpGet(url)
+	local req = (syn and syn.request) or http_request or request or (fluxus and fluxus.request)
+	if req then
+		local ok, res = pcall(req, { Url = url, Method = "GET" })
+		if ok and type(res) == "table" then
+			local body = res.Body or res.body
+			if body and body ~= "" then return body end
+		end
+	end
+	local ok, body = pcall(function() return game:HttpGet(url) end)
+	if ok and body and body ~= "" then return body end
+	return nil
+end
+local function homeJson(url)
+	local body = homeHttpGet(url)
+	if not body then return nil end
+	local ok, d = pcall(function() return HttpService:JSONDecode(body) end)
+	return (ok and type(d) == "table") and d or nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Onglet Home
+-- ---------------------------------------------------------------------------
+function Window:CreateHomeTab(name, icon, cfg)
+	cfg = cfg or {}
+	local win = self
+	local tab = self:CreateTab(name or "Home", nil, icon)
+	tab.Button.LayoutOrder = 0   -- toujours en premier
+	self._homeTab = tab
+	Library.ShowChangelog = cfg.ChangeLog ~= false
+	local lp = LP
+	local started = os.clock()
+	local function shown() return win.Open and tab.Page.Visible end
+
+	-- ===================== COLONNE GAUCHE =====================
+	-- ----- mon personnage : aperçu 3D + identité
+	local prof = tab:CreateBlock({ Name = "Mon personnage", Side = "Left" })
+	local pv = prof:CreatePreview3D({ Name = false, Height = 260, Character = true,
+		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = true, AutoRotate = true, RotateSpeed = 24 } })
+	prof:CreateButton({ Name = "Actualiser l'aperçu", Favorite = false, Callback = function() pv:Refresh() end })
+	prof:CreateStats({ Columns = 2, CellHeight = 46, Items = {
+		{ Id = "name", Name = "Pseudo", Value = (lp.DisplayName ~= lp.Name) and (lp.DisplayName .. " (@" .. lp.Name .. ")") or lp.Name, Size = 13 },
+		{ Id = "id", Name = "User ID", Value = tostring(lp.UserId), Size = 14 },
+		{ Id = "age", Name = "Âge du compte", Value = tostring(lp.AccountAge) .. " jours", Size = 14 },
+		{ Id = "team", Name = "Équipe", Value = lp.Team and lp.Team.Name or "—", Size = 14 },
+	} })
+
+	-- ----- bloc-notes (sauvegardé automatiquement avec les réglages)
+	local notes = tab:CreateBlock({ Name = "Bloc-notes", Side = "Left" })
+	notes:CreateTextArea({ Name = "Notes (sauvegardées automatiquement)", Flag = "ui.home.notes", Height = 130, MaxLength = 4000,
+		Placeholder = "Pseudos, coordonnées, idées, rappels..." })
+
+	-- ----- amis : dans le serveur + en ligne (à inviter)
+	local fr = tab:CreateBlock({ Name = "Amis", Side = "Left" })
+	local frInfo = fr:CreateLabel({ Text = "Chargement de tes amis…" })
+	local frRow = makeRow(fr, 236, "Amis")
+	local sf = new("ScrollingFrame", { Position = UDim2.new(0, 4, 0, 4), Size = UDim2.new(1, -8, 1, -8), BackgroundTransparency = 1,
+		BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.Accent, ScrollBarImageTransparency = 0.5,
+		CanvasSize = UDim2.new(), AutomaticCanvasSize = AY }, frRow)
+	new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = BYORDER }, sf)
+
+	local friendList, friendLoaded, friendAt, friendBusy, friendsDirty = {}, false, 0, false, false
+	local ordN = 0
+	local function nextOrd() ordN += 1 return ordN end
+	local function clearRows()
+		for _, c in ipairs(sf:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		ordN = 0
+	end
+	local function addHeader(text)
+		label(sf, string.upper(text), 10, { Size = UDim2.new(1, -6, 0, 18), Font = F_BOLD, TextColor3 = T.ElementAccent, LayoutOrder = nextOrd() })
+	end
+	local function inviteFriend(id, nm)
+		local ok, err = pcall(function()
+			local SocialService = game:GetService("SocialService")
+			local can = true
+			pcall(function() can = SocialService:CanSendGameInviteAsync(lp, id) end)
+			if not can then error("invitation impossible pour le moment") end
+			local opts = Instance.new("GameInvitePromptOptions")
+			opts.InviteUser = id
+			SocialService:PromptGameInvite(lp, opts)
+		end)
+		if not ok then
+			Library:Notify({ Title = "Invitation", Content = "Impossible d'inviter " .. tostring(nm) .. " : " .. tostring(err),
+				Type = "Warning", Duration = 4 })
+		end
+	end
+	local function addRow(f, status, scol, canInvite)
+		local uname, dname = f.Username or "", f.DisplayName or ""
+		local r = new("Frame", { Size = UDim2.new(1, -6, 0, 40), BackgroundColor3 = T.Element, BackgroundTransparency = 0.5,
+			BorderSizePixel = 0, LayoutOrder = nextOrd() }, sf)
+		corner(r, 8)
+		local img = new("ImageLabel", { Position = UDim2.new(0, 6, 0.5, -15), Size = UDim2.fromOffset(30, 30), BackgroundColor3 = T.Off,
+			BorderSizePixel = 0, Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(f.Id) .. "&w=150&h=150" }, r)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, img)
+		local rightPad = canInvite and 76 or 10
+		local title = (dname ~= "" and dname ~= uname) and (dname .. "  (@" .. uname .. ")") or uname
+		label(r, title, 12, { Position = UDim2.new(0, 44, 0, 4), Size = UDim2.new(1, -44 - rightPad, 0, 16) })
+		label(r, status, 11, { Position = UDim2.new(0, 44, 0, 21), Size = UDim2.new(1, -44 - rightPad, 0, 14), Font = F_REG, TextColor3 = scol })
+		if canInvite then
+			local b = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.fromOffset(60, 24),
+				BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, Text = "Inviter", TextColor3 = T.Text, TextSize = 12,
+				Font = F_MED, AutoButtonColor = false, BorderSizePixel = 0 }, r)
+			corner(b, 6)
+			b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0.8 }, 0.15) end)
+			b.MouseLeave:Connect(function() tween(b, { BackgroundTransparency = 0.9 }, 0.2) end)
+			b.MouseButton1Click:Connect(function() inviteFriend(f.Id, title) end)
+		end
+	end
+	local function byName(a, b) return string.lower(a.DisplayName ~= "" and a.DisplayName or a.Username) < string.lower(b.DisplayName ~= "" and b.DisplayName or b.Username) end
+	local function rebuildFriends()
+		friendsDirty = false
+		clearRows()
+		local inSrv, online = {}, {}
+		for _, f in ipairs(friendList) do
+			local present = Players:GetPlayerByUserId(f.Id) ~= nil or (f.GameId ~= nil and game.JobId ~= "" and f.GameId == game.JobId)
+			if present then inSrv[#inSrv + 1] = f else online[#online + 1] = f end
+		end
+		table.sort(inSrv, byName)
+		table.sort(online, byName)
+		frInfo.SetText(string.format("%d dans ce serveur  ·  %d en ligne ailleurs", #inSrv, #online))
+		if #inSrv > 0 then
+			addHeader("Dans ce serveur (" .. #inSrv .. ")")
+			for _, f in ipairs(inSrv) do addRow(f, "Dans ce serveur", HOME_GOOD, false) end
+		end
+		if #online > 0 then
+			addHeader("En ligne · à inviter (" .. #online .. ")")
+			for i, f in ipairs(online) do
+				if i > 80 then break end
+				local st = "En ligne"
+				if f.PlaceId ~= nil and f.PlaceId == game.PlaceId then
+					st = "Dans ce jeu · autre serveur"
+				elseif f.Where and f.Where ~= "" then
+					st = tostring(f.Where)
+				end
+				addRow(f, st, Color3.fromRGB(165, 165, 172), true)
+			end
+		end
+		if #inSrv == 0 and #online == 0 then
+			addHeader("Aucun ami en ligne pour le moment")
+		end
+	end
+	local function fetchOnlineFriends()
+		local out = {}
+		local okA, res = pcall(function() return lp:GetFriendsOnline(200) end)
+		if okA and type(res) == "table" then
+			for _, e in ipairs(res) do
+				if e.IsOnline ~= false and e.VisitorId then
+					out[#out + 1] = { Id = e.VisitorId, Username = e.UserName or "", DisplayName = e.DisplayName or "",
+						Where = e.LastLocation, PlaceId = e.PlaceId, GameId = e.GameId }
+				end
+			end
+			return out, true
+		end
+		local okB = pcall(function()   -- repli : GetFriendsAsync (champ IsOnline)
+			local pages = Players:GetFriendsAsync(lp.UserId)
+			while true do
+				for _, f in ipairs(pages:GetCurrentPage()) do
+					if f.IsOnline then out[#out + 1] = { Id = f.Id, Username = f.Username or "", DisplayName = f.DisplayName or "" } end
+				end
+				if pages.IsFinished then break end
+				pages:AdvanceToNextPageAsync()
+			end
+		end)
+		return out, okB
+	end
+	local function refreshFriends()
+		if friendBusy then return end
+		friendBusy = true
+		task.spawn(function()
+			local list, ok = fetchOnlineFriends()
+			friendBusy = false
+			friendAt = os.clock()
+			if ok then
+				friendList, friendLoaded, friendsDirty = list, true, true
+			elseif not friendLoaded then
+				frInfo.SetText("Impossible de charger tes amis pour le moment.")
+			end
+		end)
+	end
+	fr:CreateButton({ Name = "Actualiser les amis", Favorite = false, Callback = refreshFriends })
+	track(Players.PlayerAdded:Connect(function() friendsDirty = true end))
+	track(Players.PlayerRemoving:Connect(function() task.defer(function() friendsDirty = true end) end))
+	task.delay(2.5, refreshFriends)
+
+	-- ===================== COLONNE DROITE =====================
+	-- ----- en direct
+	local live = tab:CreateBlock({ Name = "En direct", Side = "Right" })
+	local st = live:CreateStats({ Columns = 2, CellHeight = 48, Items = {
+		{ Id = "fps", Name = "FPS" }, { Id = "ping", Name = "Ping" },
+		{ Id = "players", Name = "Joueurs" }, { Id = "mem", Name = "Mémoire" },
+		{ Id = "session", Name = "Session" }, { Id = "uptime", Name = "Serveur actif" },
+	} })
+
+	-- ----- graphiques FPS / ping (historique ~45 s)
+	local gb = tab:CreateBlock({ Name = "Graphiques", Side = "Right" })
+	local gFps = gb:CreateGraph({ Name = "FPS", MinMax = 60, Height = 62, Samples = 90, ColorFn = fpsColor })
+	local gPing = gb:CreateGraph({ Name = "Ping", Unit = " ms", MinMax = 100, Height = 62, Samples = 90, ColorFn = pingColor })
+
+	-- ----- session : jauge + temps de jeu total + alerte
+	local ses = tab:CreateBlock({ Name = "Session", Side = "Right" })
+	local gauge = ses:CreateProgress({ Name = "Durée de la session", Min = 0, Max = 7200, Default = 0,
+		Format = function(v, _, max) return fmtDur(v) .. " / " .. fmtDur(max) end })
+	local sst = ses:CreateStats({ Columns = 2, CellHeight = 46, Items = {
+		{ Id = "total", Name = "Temps de jeu total" }, { Id = "left", Name = "Avant la limite" },
+	} })
+	ses:CreateSlider({ Name = "Limite de session", Flag = "ui.home.limit", Min = 15, Max = 480, Step = 15, Default = 120, Suffix = " min" })
+	ses:CreateToggle({ Name = "Me prévenir à la limite", Flag = "ui.home.limitalert", Default = true, Keybind = false })
+	local baseTotal = 0   -- secondes jouées lors des sessions précédentes (restauré depuis les réglages)
+	local function totalNow() return baseTotal + (os.clock() - started) end
+	Library.Items["ui.home.playtime"] = {
+		Get = function() return math.floor(totalNow()) end,
+		Set = function(_, v)
+			baseTotal = math.max(0, tonumber(v) or 0)
+			Library.Flags["ui.home.playtime"] = math.floor(totalNow())
+		end,
+	}
+	local function limitSec() return math.clamp(tonumber(Library.Flags["ui.home.limit"]) or 120, 15, 480) * 60 end
+	local lastLimit, nextAlert = nil, nil
+
+	-- ----- heure & météo (réelles, chez toi)
+	local wb = tab:CreateBlock({ Name = "Heure & météo", Side = "Right" })
+	local wst = wb:CreateStats({ Columns = 2, CellHeight = 46, Items = {
+		{ Id = "time", Name = "Heure", Value = "--:--:--" }, { Id = "date", Name = "Date", Size = 13 },
+		{ Id = "temp", Name = "Température", Value = "…" }, { Id = "sky", Name = "Ciel", Size = 13 },
+	} })
+	local wplace = wb:CreateLabel({ Text = "Lieu : …" })
+	local geo, wState, wBusy, wDirty = nil, nil, false, true
+	local function weatherOn() return Library.Flags["ui.home.weather"] ~= false end
+	local function cityFlag() return string.gsub(string.gsub(tostring(Library.Flags["ui.home.city"] or ""), "^%s+", ""), "%s+$", "") end
+	local function resolveGeo(city)
+		if city ~= "" then
+			local d = homeJson("https://geocoding-api.open-meteo.com/v1/search?name=" .. HttpService:UrlEncode(city) .. "&count=1&language=fr&format=json")
+			local r = d and d.results and d.results[1]
+			if r and r.latitude and r.longitude then
+				return { key = city, lat = r.latitude, lon = r.longitude, place = tostring(r.name) .. (r.country and (", " .. r.country) or "") }
+			end
+			return nil
+		end
+		local d = homeJson("https://ipwho.is/")
+		if d and d.success ~= false and d.latitude and d.longitude then
+			return { key = city, lat = d.latitude, lon = d.longitude, place = tostring(d.city or "?") .. (d.country and (", " .. d.country) or "") }
+		end
+		d = homeJson("https://ipapi.co/json/")
+		if d and d.latitude and d.longitude then
+			return { key = city, lat = d.latitude, lon = d.longitude, place = tostring(d.city or "?") .. (d.country_name and (", " .. d.country_name) or "") }
+		end
+		return nil
+	end
+	local function updateWeather()
+		if wBusy then return end
+		if not weatherOn() then wDirty = true return end
+		wBusy = true
+		task.spawn(function()
+			local ok = pcall(function()
+				local city = cityFlag()
+				if not geo or geo.key ~= city then geo = resolveGeo(city) end
+				if not geo then
+					wState = { err = city ~= "" and "Ville introuvable" or "Position inconnue" }
+					return
+				end
+				local d = homeJson(string.format("https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=temperature_2m,weather_code,wind_speed_10m,is_day&timezone=auto", geo.lat, geo.lon))
+				local c = d and d.current
+				if c then
+					wState = { temp = c.temperature_2m, code = c.weather_code, wind = c.wind_speed_10m, day = c.is_day == 1 }
+				else
+					wState = { err = "Météo indisponible" }
+				end
+			end)
+			if not ok then wState = { err = "Météo indisponible" } end
+			wBusy = false
+			wDirty = true
+		end)
+	end
+	local function applyWeather()
+		wDirty = false
+		local function r(x) return math.floor((tonumber(x) or 0) + 0.5) end
+		if not weatherOn() then
+			wst:Set("temp", "—")
+			wst:Set("sky", "Désactivée")
+			wplace.SetText("Lieu : — (aucune requête en ligne)")
+		elseif not wState then
+			wst:Set("temp", "…")
+			wst:Set("sky", "Chargement…")
+		elseif wState.err then
+			wst:Set("temp", "—")
+			wst:Set("sky", wState.err)
+			wplace.SetText("Lieu : " .. (geo and geo.place or "—"))
+		else
+			wst:Set("temp", r(wState.temp) .. " °C")
+			wst:Set("sky", WMO[wState.code] or "—")
+			wplace.SetText("Lieu : " .. (geo and geo.place or "—") .. "  ·  vent " .. r(wState.wind) .. " km/h  ·  " .. (wState.day and "jour" or "nuit"))
+		end
+	end
+	wb:CreateToggle({ Name = "Météo en ligne", Flag = "ui.home.weather", Default = true, Keybind = false,
+		Tooltip = "Demande ta position approximative (via ton IP) à ipwho.is, puis la météo à Open-Meteo. Désactive pour ne rien envoyer.",
+		Callback = function() wDirty = true updateWeather() end })
+	wb:CreateInput({ Name = "Ville (vide = auto)", Flag = "ui.home.city", Placeholder = "ex. Avignon",
+		Callback = function() geo = nil wDirty = true updateWeather() end })
+	wb:CreateButton({ Name = "Actualiser la météo", Favorite = false, Callback = function() geo = nil updateWeather() end })
+	task.delay(3, updateWeather)
+
+	-- ----- serveur
+	local srv = tab:CreateBlock({ Name = "Serveur", Side = "Right" })
+	local exName = "Inconnu"
+	pcall(function()
+		local n, v = identifyexecutor()
+		exName = tostring(n) .. (v and (" " .. tostring(v)) or "")
+	end)
+	local jid = tostring(game.JobId)
+	local sv = srv:CreateStats({ Columns = 1, CellHeight = 44, Items = {
+		{ Id = "place", Name = "Jeu", Value = "…" },
+		{ Id = "placeid", Name = "Place ID", Value = tostring(game.PlaceId) },
+		{ Id = "job", Name = "Job ID", Value = (jid ~= "" and (string.sub(jid, 1, 8) .. "…") or "Studio / local") },
+		{ Id = "exec", Name = "Exécuteur", Value = exName },
+		{ Id = "ui", Name = "Version de l'UI", Value = "v" .. tostring(Library.Changelog[1] and Library.Changelog[1].Version or Library.Version) },
+	} })
+	task.spawn(function()
+		local ok, info = pcall(function() return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId) end)
+		if ok and type(info) == "table" and info.Name then sv:Set("place", info.Name) end
+	end)
+
+	-- ----- nouveautés (automatiques)
 	Library:_buildChangelog(tab)
+
+	-- ===================== BOUCLE DE MISE À JOUR (2 fois par seconde) =====================
+	local fpsFrames, fpsT, lastFlag, lastWeather = 0, os.clock(), os.clock(), os.clock()
+	local pingItem
+	pcall(function() pingItem = Stats.Network.ServerStatsItem["Data Ping"] end)
+	track(RunService.Heartbeat:Connect(function()
+		fpsFrames += 1
+		local now = os.clock()
+		if now - fpsT < 0.5 then return end
+		local fps = math.floor(fpsFrames / (now - fpsT) + 0.5)
+		fpsFrames, fpsT = 0, now
+		local ping = 0
+		if pingItem then
+			local ok, v = pcall(function() return pingItem:GetValue() end)
+			if ok and v then ping = math.floor(v + 0.5) end
+		end
+		-- l'historique et la session avancent même quand Home est caché
+		gFps:Push(fps)
+		gPing:Push(ping)
+		local elapsed = now - started
+		local limit = limitSec()
+		if limit ~= lastLimit then
+			lastLimit = limit
+			nextAlert = (math.floor(elapsed / limit) + 1) * limit
+			gauge:SetMax(limit)
+		end
+		if elapsed >= nextAlert then
+			nextAlert = (math.floor(elapsed / limit) + 1) * limit
+			if Library.Flags["ui.home.limitalert"] ~= false then
+				Library:Notify({ Title = "Session longue", Content = "Tu joues depuis " .. fmtDur(elapsed) .. ". Pense à faire une pause !",
+					Type = "Warning", Duration = 7 })
+			end
+		end
+		if now - lastFlag >= 60 then   -- temps de jeu total : écrit dans les réglages toutes les minutes
+			lastFlag = now
+			Library.Flags["ui.home.playtime"] = math.floor(totalNow())
+		end
+		if now - lastWeather >= 900 then
+			lastWeather = now
+			updateWeather()
+		end
+		if not shown() then return end
+
+		st:Set("fps", fps, fpsColor(fps))
+		st:Set("ping", ping .. " ms", pingColor(ping))
+		st:Set("players", #Players:GetPlayers() .. " / " .. tostring(Players.MaxPlayers))
+		local okm, mem = pcall(function() return Stats:GetTotalMemoryUsageMb() end)
+		st:Set("mem", okm and mem and (math.floor(mem + 0.5) .. " MB") or "—")
+		st:Set("session", fmtDur(elapsed))
+		st:Set("uptime", fmtDur(workspace.DistributedGameTime))
+		gFps:Flush()
+		gPing:Flush()
+
+		local ratio = elapsed / limit
+		gauge:Set(math.min(elapsed, limit))
+		gauge:SetColor(ratio >= 1 and HOME_BAD or (ratio >= 0.75 and HOME_MID or T.Accent))
+		sst:Set("total", fmtDur(totalNow()))
+		sst:Set("left", elapsed >= limit and "Limite dépassée" or fmtDur(limit - elapsed), elapsed >= limit and HOME_BAD or nil)
+
+		local t = os.date("*t")
+		wst:Set("time", string.format("%02d:%02d:%02d", t.hour, t.min, t.sec))
+		wst:Set("date", string.format("%s %d %s %d", DAYS[t.wday] or "", t.day, MONTHS[t.month] or "", t.year))
+		if wDirty then applyWeather() end
+
+		if friendsDirty and friendLoaded then rebuildFriends() end
+		if friendLoaded and not friendBusy and now - friendAt > 90 then refreshFriends() end
+	end))
 	return tab
 end
 
@@ -14533,11 +15237,11 @@ function Library:CreateWindow(cfg)
 		Set = function(_, d) if type(d) == "table" then Library:SetGradient(d) end end,
 	}
 	Library:SetGradient()
-	win._noSelect = true
-	if cfg.ChangeLog ~= false then
-		local okc, errc = pcall(function() win:CreateChangelogTab(cfg.ChangeLogName or "Change-Log", cfg.ChangeLogIcon) end)
-		if not okc then warn("[Ui-Lib] Onglet Change-Log : " .. tostring(errc)) end
+	if cfg.Home ~= false then
+		local okh, errh = pcall(function() win:CreateHomeTab(cfg.HomeName or "Home", cfg.HomeIcon, cfg) end)
+		if not okh then warn("[Ui-Lib] Onglet Home : " .. tostring(errh)) end
 	end
+	win._noSelect = true
 	if cfg.ThemeEditor ~= false then
 		local okt, errt = pcall(function() win:CreateThemeEditorTab(cfg.ThemeEditorName or "Éditeur de thème", cfg.ThemeEditorIcon) end)
 		if not okt then warn("[Ui-Lib] Éditeur de thème : " .. tostring(errt)) end
