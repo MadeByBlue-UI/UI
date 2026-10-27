@@ -7,6 +7,15 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V5.8 — COLOR PICKER REFAIT, FONDU DU TEXTE, APERÇU DU PERSONNAGE
+		• Color picker refait : carré saturation / valeur pleine largeur, barre de teinte horizontale, poignées qui prennent la couleur choisie.
+		  Le pointeur est maintenant lu dans le repère réel de l'UI (correction automatique du décalage vertical de la barre du haut) ;
+		  si un écart persiste : Paramètres > Fenêtre > « Décalage vertical du curseur » (Library.PointerOffset = Vector2.new(0, px)).
+		• Champs de texte (Input, TextArea, hexadécimal du color picker) : chaque lettre tapée apparaît en fondu, chaque lettre supprimée
+		  s'efface en fondu. Library.TextFade = false pour désactiver.
+		• Home > Mon personnage : l'aperçu ignore les outils / objets accrochés loin du corps (boîte englobante énorme -> personnage minuscule,
+		  décentré, sol géant) et reste cadré sur le personnage.
+
 	V5.7 — CHAMP DE TEXTE EXTENSIBLE & SOUS-ONGLETS REFAITS
 		• CreateInput : plus de « ... » en fin de texte ; le champ s'agrandit avec une transition (vers la gauche, jusqu'à la largeur de la ligne,
 		  le nom s'efface en fondu) et se rétracte quand le texte raccourcit. Au-delà de la ligne, le texte défile pendant la saisie.
@@ -747,7 +756,8 @@ Library._pointerPos = function(p)
 	if okT and last == Enum.UserInputType.Touch then
 		return Vector2.new(p.X, p.Y + guiInset().Y)
 	end
-	return UIS:GetMouseLocation()
+	local c = Library._ptrCorrect and Library._ptrCorrect() or Vector2.new(0, 0)
+	return UIS:GetMouseLocation() - c
 end
 
 local function viewport()
@@ -755,6 +765,29 @@ local function viewport()
 	local v = cam and cam.ViewportSize or Vector2.new(1280, 720)
 	if v.X < 100 or v.Y < 100 then v = Vector2.new(1280, 720) end
 	return v
+end
+
+-- Correction du décalage entre GetMouseLocation et le repère réel des ScreenGui de l'UI.
+-- Auto : on compare la hauteur d'un ScreenGui (IgnoreGuiInset = true) à celle de l'écran ; s'il est plus court, la barre du haut
+-- décale quand même le repère de cette différence. Manuel : Library.PointerOffset (Paramètres > Fenêtre), ajouté à l'auto.
+Library.PointerOffset = Library.PointerOffset or Vector2.new(0, 0)
+local ptrProbe
+Library._ptrCorrect = function()
+	local auto = 0
+	pcall(function()
+		if not (ptrProbe and ptrProbe.Parent) then
+			ptrProbe = Instance.new("ScreenGui")
+			ptrProbe.Name = "SolarisPointerProbe"
+			ptrProbe.ResetOnSpawn = false
+			ptrProbe.IgnoreGuiInset = true
+			ptrProbe.DisplayOrder = -1000
+			mount(ptrProbe)
+		end
+		local d = viewport().Y - ptrProbe.AbsoluteSize.Y
+		if d >= 8 and d <= 120 then auto = d end
+	end)
+	local man = Library.PointerOffset
+	return Vector2.new(man and man.X or 0, auto + (man and man.Y or 0))
 end
 
 -- Échelle réelle de la fenêtre (UIScale + animation), pour convertir pixels écran <-> pixels UI
@@ -6345,6 +6378,172 @@ function Block:CreateDropdown(o)
 	return item
 end
 
+-- ============================================================================
+-- FONDU DU TEXTE (champs de saisie) : chaque lettre tapée apparaît en fondu, chaque lettre supprimée s'efface en fondu.
+-- Un calque RichText (transparence par lettre) est posé sur la TextBox ; la vraie TextBox devient transparente (le curseur de saisie
+-- reste). Si le texte dépasse le champ (défilement), on revient au texte normal. Library.TextFade = false pour désactiver.
+-- ============================================================================
+Library.TextFade = true
+function Library._attachTextFade(tb)
+	if not tb or Library.TextFade == false then return end
+	local IN_T, OUT_T = 0.18, 0.14
+	local ESC = { ["&"] = "&amp;", ["<"] = "&lt;", [">"] = "&gt;", ['"'] = "&quot;", ["'"] = "&apos;" }
+
+	local ov = Instance.new("TextLabel")
+	ov.Name = "FadeText"
+	ov.BackgroundTransparency = 1
+	ov.BorderSizePixel = 0
+	ov.Active = false
+	ov.RichText = true
+	ov.TextWrapped = tb.TextWrapped
+	ov.TextTruncate = Enum.TextTruncate.None
+	ov.Size = UDim2.fromScale(1, 1)
+	ov.ZIndex = tb.ZIndex + 1
+	ov.Visible = false
+	ov.Text = ""
+	ov.Parent = tb
+
+	local function sync()
+		ov.Font = tb.Font
+		ov.TextSize = tb.TextSize
+		ov.TextColor3 = tb.TextColor3
+		ov.TextXAlignment = tb.TextXAlignment
+		ov.TextYAlignment = tb.TextYAlignment
+		ov.LineHeight = tb.LineHeight
+	end
+	sync()
+	for _, p in ipairs({ "Font", "TextSize", "TextColor3", "TextXAlignment", "TextYAlignment" }) do
+		tb:GetPropertyChangedSignal(p):Connect(sync)
+	end
+
+	local function split(s)
+		local t = {}
+		local ok = pcall(function()
+			for _, cp in utf8.codes(s) do t[#t + 1] = utf8.char(cp) end
+		end)
+		if not ok then
+			t = {}
+			for i = 1, #s do t[i] = string.sub(s, i, i) end
+		end
+		return t
+	end
+
+	local real = split(tb.Text)   -- lettres réelles du champ
+	local chars = {}              -- lettres affichées : { c, a (opacité), from, to, t0, dur, ghost }
+	for i, c in ipairs(real) do chars[i] = { c = c, a = 1, from = 1, to = 1, t0 = 0, dur = 1 } end
+
+	local function render()
+		local out, run, runT = {}, {}, nil
+		local function flush()
+			if #run == 0 then return end
+			local s = table.concat(run)
+			if runT and runT > 0 then
+				s = string.format('<font transparency="%.2f">%s</font>', runT, s)
+			end
+			out[#out + 1] = s
+			run = {}
+		end
+		for _, ch in ipairs(chars) do
+			local tr = math.floor((1 - ch.a) * 20 + 0.5) / 20
+			if runT ~= tr then flush() runT = tr end
+			run[#run + 1] = (string.gsub(ch.c, "[&<>\"']", ESC))
+		end
+		flush()
+		ov.Text = table.concat(out)
+	end
+
+	local function layoutCheck()
+		local sc = pxScale()
+		local aw, ah = ov.AbsoluteSize.X / sc, ov.AbsoluteSize.Y / sc
+		local tbx, tby = tb.TextBounds.X, tb.TextBounds.Y
+		local over = (aw > 0 and tbx > aw + 1) or (tb.MultiLine and ah > 0 and tby > ah + 1)
+		local active = (not over) and (tb.Text ~= "" or #chars > 0)
+		ov.Visible = active
+		tb.TextTransparency = (active and tb.Text ~= "") and 1 or 0
+	end
+
+	local conn
+	local function step()
+		if not ov.Parent then
+			if conn then conn:Disconnect() conn = nil end
+			return
+		end
+		local now = os.clock()
+		local busy, i = false, 1
+		while i <= #chars do
+			local ch = chars[i]
+			if ch.a ~= ch.to then
+				local k = math.clamp((now - ch.t0) / ch.dur, 0, 1)
+				local e = 1 - (1 - k) * (1 - k)
+				ch.a = (k >= 1) and ch.to or (ch.from + (ch.to - ch.from) * e)
+			end
+			if ch.ghost and ch.a <= 0.001 then
+				table.remove(chars, i)
+			else
+				if ch.a ~= ch.to then busy = true end
+				i += 1
+			end
+		end
+		render()
+		layoutCheck()
+		if not busy and conn then conn:Disconnect() conn = nil end
+	end
+	local function kick()
+		if not conn then conn = RunService.RenderStepped:Connect(step) end
+	end
+
+	local function onText()
+		local new = split(tb.Text)
+		local old = real
+		if table.concat(new) == table.concat(old) then return end
+		local animate = tb:IsFocused()
+		local now = os.clock()
+		-- préfixe / suffixe communs
+		local p = 0
+		local minLen = math.min(#old, #new)
+		while p < minLen and old[p + 1] == new[p + 1] do p += 1 end
+		local s = 0
+		while s < minLen - p and old[#old - s] == new[#new - s] do s += 1 end
+
+		local list = {}
+		for i = 1, p do list[#list + 1] = chars[i] end
+		local inserted = #new - p - s
+		for i = 1, inserted do
+			local a = (animate and inserted <= 120) and 0 or 1
+			list[#list + 1] = { c = new[p + i], a = a, from = a, to = 1, t0 = now, dur = IN_T }
+		end
+		for i = #old - s + 1, #old do list[#list + 1] = chars[i] end
+		-- lettres supprimées à la fin du texte : elles s'effacent en fondu
+		if animate and s == 0 then
+			for i = p + 1, #old do
+				local ch = chars[i]
+				if ch then
+					ch.ghost, ch.from, ch.to, ch.t0, ch.dur = true, ch.a, 0, now, OUT_T
+					list[#list + 1] = ch
+				end
+			end
+		end
+		-- anciennes lettres encore en train de disparaître
+		for i = #old + 1, #chars do
+			local ch = chars[i]
+			if ch and ch.ghost and animate then list[#list + 1] = ch end
+		end
+		chars, real = list, new
+		for _, ch in ipairs(chars) do
+			if not animate and not ch.ghost then ch.a, ch.from, ch.to = 1, 1, 1 end
+		end
+		render()
+		layoutCheck()
+		task.defer(layoutCheck)
+		kick()
+	end
+
+	tb:GetPropertyChangedSignal("Text"):Connect(onText)
+	ov:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutCheck)
+	render()
+	task.defer(layoutCheck)
+end
+
 function Block:CreateInput(o)
 	o = o or {}
 	local f, st = makeRow(self, 34, o.Name)
@@ -6361,6 +6560,7 @@ function Block:CreateInput(o)
 	local tst = stroke(tb, 0.9)
 	trackStyled(tb, tst, "input")
 	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, tb)
+	Library._attachTextFade(tb)
 	hover(f, st)
 
 	-- ------------------------------------------------------------------------
@@ -6747,8 +6947,8 @@ function Block:CreateColorPicker(o)
 	stroke(swatch, 0.55)
 	swatch:SetAttribute("NoAccent", true)
 
-	-- hauteur du tiroir : carré + teinte (112) · opacité (22) · hexadécimal (30) · boutons (30) · récents (30)
-	local PH = 112 + (useAlpha and 22 or 0) + 90
+	-- hauteur du tiroir : carré (104) · teinte (12) · opacité (12) · hexadécimal · boutons · récents
+	local PH = 142 + (useAlpha and 22 or 0) + 30 + 30 + 22 + 8
 	local dr = drawer(holder, 2)
 	dr:Resize(PH)
 	local panel = new("Frame", {
@@ -6758,27 +6958,40 @@ function Block:CreateColorPicker(o)
 	trackStyled(panel, stroke(panel, 0.9), "panel")
 	panel:SetAttribute("NoAccent", true)
 
-	-- Carré saturation / valeur
-	local sv = new("Frame", { Position = UDim2.new(0, 8, 0, 8), Size = UDim2.new(1, -40, 0, 100),
+	-- Position du pointeur dans un cadre, de 0 à 1 (repère corrigé : voir Library._pointerPos)
+	local function norm(gui, p)
+		local m = Library._pointerPos(p)
+		local ap, as = gui.AbsolutePosition, gui.AbsoluteSize
+		return math.clamp((m.X - ap.X) / math.max(as.X, 1), 0, 1), math.clamp((m.Y - ap.Y) / math.max(as.Y, 1), 0, 1)
+	end
+
+	-- Carré saturation / valeur (pleine largeur)
+	local sv = new("Frame", { Position = UDim2.new(0, 8, 0, 8), Size = UDim2.new(1, -16, 0, 104),
 		BackgroundColor3 = Color3.fromHSV(h, 1, 1), BorderSizePixel = 0 }, panel)
-	new("UICorner", { CornerRadius = UDim.new(0, 5) }, sv)
+	new("UICorner", { CornerRadius = UDim.new(0, 6) }, sv)
 	local white = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, sv)
-	new("UICorner", { CornerRadius = UDim.new(0, 5) }, white)
+	new("UICorner", { CornerRadius = UDim.new(0, 6) }, white)
 	new("UIGradient", { Transparency = NumberSequence.new(0, 1) }, white)
 	local black = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0 }, sv)
-	new("UICorner", { CornerRadius = UDim.new(0, 5) }, black)
+	new("UICorner", { CornerRadius = UDim.new(0, 6) }, black)
 	new("UIGradient", { Transparency = NumberSequence.new(1, 0), Rotation = 90 }, black)
-	local cursor = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(0, 12, 0, 12),
-		BackgroundTransparency = 1, BorderSizePixel = 0 }, sv)
+	-- poignée : anneau blanc rempli de la couleur choisie
+	local cursor = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(0, 14, 0, 14),
+		BackgroundColor3 = col, BackgroundTransparency = 0, BorderSizePixel = 0 }, sv)
+	cursor:SetAttribute("NoAccent", true)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, cursor)
 	new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 2 }, cursor)
-	local svHit = new("TextButton", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "" }, sv)
+	local cursorShadow = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = UDim2.new(1, 6, 1, 6), BackgroundTransparency = 1, BorderSizePixel = 0 }, cursor)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, cursorShadow)
+	new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1, Transparency = 0.55 }, cursorShadow)
+	local svHit = new("TextButton", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, sv)
 
-	-- Barre de teinte
-	local hue = new("Frame", { Position = UDim2.new(1, -26, 0, 8), Size = UDim2.new(0, 18, 0, 100),
+	-- Barre de teinte (horizontale)
+	local hue = new("Frame", { Position = UDim2.new(0, 8, 0, 120), Size = UDim2.new(1, -16, 0, 12),
 		BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, panel)
-	new("UICorner", { CornerRadius = UDim.new(0, 5) }, hue)
-	new("UIGradient", { Rotation = 90, Color = ColorSequence.new({
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, hue)
+	new("UIGradient", { Rotation = 0, Color = ColorSequence.new({
 		ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 1, 1)),
 		ColorSequenceKeypoint.new(1 / 6, Color3.fromHSV(1 / 6, 1, 1)),
 		ColorSequenceKeypoint.new(2 / 6, Color3.fromHSV(2 / 6, 1, 1)),
@@ -6787,33 +7000,36 @@ function Block:CreateColorPicker(o)
 		ColorSequenceKeypoint.new(5 / 6, Color3.fromHSV(5 / 6, 1, 1)),
 		ColorSequenceKeypoint.new(1, Color3.fromHSV(0, 1, 1)),
 	}) }, hue)
-	local hueMark = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(1, 4, 0, 4),
-		Position = UDim2.new(0.5, 0, 0, 0), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, hue)
-	new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1 }, hueMark)
-	local hueHit = new("TextButton", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "" }, hue)
+	local hueMark = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(0, 6, 1, 6),
+		Position = UDim2.new(h, 0, 0.5, 0), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, hue)
+	hueMark:SetAttribute("NoAccent", true)
+	new("UICorner", { CornerRadius = UDim.new(0, 3) }, hueMark)
+	new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1, Transparency = 0.3 }, hueMark)
+	local hueHit = new("TextButton", { Position = UDim2.new(0, 0, 0, -6), Size = UDim2.new(1, 0, 1, 12),
+		BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, hue)
 
 	-- Barre d'opacité (fond gris + dégradé de la couleur, de transparent à opaque)
 	local commit
 	local aFill, aMark
-	local y = 112
+	local y = 142
 	if useAlpha then
-		local abar = new("Frame", { Position = UDim2.new(0, 8, 0, y + 1), Size = UDim2.new(1, -16, 0, 12),
+		local abar = new("Frame", { Position = UDim2.new(0, 8, 0, y), Size = UDim2.new(1, -16, 0, 12),
 			BackgroundColor3 = Color3.fromRGB(105, 105, 112), BorderSizePixel = 0 }, panel)
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, abar)
 		aFill = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = col, BorderSizePixel = 0 }, abar)
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, aFill)
 		new("UIGradient", { Transparency = NumberSequence.new(1, 0) }, aFill)
 		aMark = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(alpha, 0, 0.5, 0),
-			Size = UDim2.fromOffset(6, 16), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, abar)
+			Size = UDim2.new(0, 6, 1, 6), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, abar)
+		aMark:SetAttribute("NoAccent", true)
 		new("UICorner", { CornerRadius = UDim.new(0, 3) }, aMark)
-		new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1 }, aMark)
+		new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1, Transparency = 0.3 }, aMark)
 		local aHit = new("TextButton", { Position = UDim2.new(0, 0, 0, -6), Size = UDim2.new(1, 0, 1, 12),
-			BackgroundTransparency = 1, Text = "" }, abar)
+			BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, abar)
 		aHit.InputBegan:Connect(function(i)
 			if isPress(i) then
 				startDrag(function(p)
-					local m = Library._pointerPos(p)
-					alpha = math.clamp((m.X - abar.AbsolutePosition.X) / math.max(abar.AbsoluteSize.X, 1), 0, 1)
+					alpha = (norm(abar, p))
 					commit()
 				end, self.Scroll, i.Position, function() Library:PushRecentColor(Color3.fromHSV(h, s, v)) end)
 			end
@@ -6829,6 +7045,7 @@ function Block:CreateColorPicker(o)
 	}, panel)
 	corner(hex, 6)
 	trackStyled(hex, nil, "input")
+	Library._attachTextFade(hex)
 	y = y + 30
 
 	local row = new("Frame", { Position = UDim2.new(0, 8, 0, y), Size = UDim2.new(1, -16, 0, 24), BackgroundTransparency = 1 }, panel)
@@ -6863,7 +7080,8 @@ function Block:CreateColorPicker(o)
 	local function visuals()
 		sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
 		cursor.Position = UDim2.new(s, 0, 1 - v, 0)
-		hueMark.Position = UDim2.new(0.5, 0, h, 0)
+		cursor.BackgroundColor3 = Color3.fromHSV(h, s, v)
+		hueMark.Position = UDim2.new(h, 0, 0.5, 0)
 		swatch.BackgroundColor3 = col
 		swatch.BackgroundTransparency = (1 - alpha) * 0.8
 		if aFill then
@@ -6902,9 +7120,8 @@ function Block:CreateColorPicker(o)
 	svHit.InputBegan:Connect(function(i)
 		if isPress(i) then
 			startDrag(function(p)
-				local m = Library._pointerPos(p)
-				s = math.clamp((m.X - sv.AbsolutePosition.X) / math.max(sv.AbsoluteSize.X, 1), 0, 1)
-				v = 1 - math.clamp((m.Y - sv.AbsolutePosition.Y) / math.max(sv.AbsoluteSize.Y, 1), 0, 1)
+				local nx, ny = norm(sv, p)
+				s, v = nx, 1 - ny
 				commit()
 			end, self.Scroll, i.Position, function() Library:PushRecentColor(col) end)
 		end
@@ -6912,8 +7129,8 @@ function Block:CreateColorPicker(o)
 	hueHit.InputBegan:Connect(function(i)
 		if isPress(i) then
 			startDrag(function(p)
-				local m = Library._pointerPos(p)
-				h = math.min(math.clamp((m.Y - hue.AbsolutePosition.Y) / math.max(hue.AbsoluteSize.Y, 1), 0, 1), 0.999)
+				local nx = norm(hue, p)
+				h = math.min(nx, 0.999)
 				commit()
 			end, self.Scroll, i.Position, function() Library:PushRecentColor(col) end)
 		end
@@ -8321,6 +8538,7 @@ function Block:CreateTextArea(o)
 	trackStyled(tb, tst, "input")
 	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 6),
 		PaddingBottom = UDim.new(0, 6) }, tb)
+	Library._attachTextFade(tb)
 	hover(f, st)
 	tb.Focused:Connect(function() uiSnd("focus") tween(tst, { Transparency = 0.35 }, 0.2) end)
 	tb.FocusLost:Connect(function()
@@ -8814,6 +9032,19 @@ function Block:CreatePreview3D(o)
 				d.CanCollide, d.CanQuery, d.CanTouch, d.CastShadow = false, false, false, false
 			end
 		end
+		-- (FIX) on ne garde que le corps : outils et modèles accrochés au personnage retirés, ainsi que toute pièce trop éloignée du torse
+		-- (jouets, objets ancrés...). Sinon la boîte englobante devient énorme : personnage minuscule, décentré, sol géant.
+		for _, d in ipairs(clone:GetChildren()) do
+			if d:IsA("Tool") or d:IsA("Model") or d:IsA("Folder") or d:IsA("Backpack") then d:Destroy() end
+		end
+		local anchorPart = clone:FindFirstChild("HumanoidRootPart") or clone:FindFirstChild("UpperTorso")
+			or clone:FindFirstChild("Torso") or clone:FindFirstChild("Head")
+		if anchorPart and anchorPart:IsA("BasePart") then
+			local origin = anchorPart.Position
+			for _, d in ipairs(clone:GetDescendants()) do
+				if d:IsA("BasePart") and d ~= anchorPart and (d.Position - origin).Magnitude > 14 then d:Destroy() end
+			end
+		end
 		local hasPart = false
 		for _, d in ipairs(clone:GetDescendants()) do
 			if d:IsA("BasePart") then hasPart = true break end
@@ -8829,6 +9060,8 @@ function Block:CreatePreview3D(o)
 		rig:PivotTo(CFrame.new(0, 0, 0))
 		local bcf, bsize = rig:GetBoundingBox()
 		rig:PivotTo(rig:GetPivot() - bcf.Position)
+		-- garde-fou : un personnage normal fait environ 4 x 5 x 2 ; au-delà (grosses pièces / accessoires démesurés) on borne le cadrage
+		bsize = Vector3.new(math.clamp(bsize.X, 1, 9), math.clamp(bsize.Y, 1, 9), math.clamp(bsize.Z, 1, 6))
 
 		local function part(n)
 			local p = rig:FindFirstChild(n)
@@ -12764,6 +12997,9 @@ function Window:CreateSettingsTab(name, icon, docked)
 	D:CreateToggle({ Name = "Bloquer les touches du jeu", Flag = "ui.blockkeys", Default = Library.BlockGameKeys == true,
 		Tooltip = "Tant que l'interface est ouverte, W A S D et Espace n'agissent plus sur ton personnage (Library.BlockedKeys pour changer la liste). Rien n'est bloqué pendant la saisie de texte ou l'assignation d'une touche.",
 		Callback = function(v) Library:SetBlockGameKeys(v) end })
+	D:CreateSlider({ Name = "Décalage vertical du curseur", Flag = "ui.ptroffy", Min = -80, Max = 80, Default = 0, Step = 1, Suffix = " px",
+		Tooltip = "À régler seulement si, en glissant dans le color picker, la poignée n'est pas pile sous ton curseur : positif = la poignée monte, négatif = elle descend.",
+		Callback = function(v) Library.PointerOffset = Vector2.new(0, tonumber(v) or 0) end })
 	D:CreateToggle({ Name = "Verrouiller la position", Flag = "ui.lockpos", Default = Library.LockPosition == true,
 		Tooltip = "La fenêtre ne peut plus être déplacée ni redimensionnée à la souris (le double-clic pour réduire et Ctrl+R restent possibles).",
 		Callback = function(v) Library:SetLockPosition(v) end })
