@@ -9473,38 +9473,193 @@ function Block:CreatePreview3D(o)
 		if charSrc:IsA("Player") then return charSrc.Character end
 		return charSrc
 	end
-	-- Avatar Roblox du joueur (celui de son compte, pas un « noob ») : récupéré par UserId puis mis en cache.
-	-- Pendant le chargement on montre son personnage en jeu ; le faux rig R6 ne sert qu'en tout dernier recours.
+	-- Avatar Roblox du joueur : celui de son COMPTE (pas un « noob »), récupéré par UserId (avec reprises) puis mis en cache.
+	-- Même méthode que l'aperçu du Catalog Panel : modèle dans un WorldModel, articulations (Motor6D) animées à la main
+	-- (les animations Roblox ne tournent pas dans un ViewportFrame). Pendant le chargement on affiche « Chargement de ton avatar… » ;
+	-- le faux rig R6 n'est plus qu'un dernier recours si Roblox ne répond pas.
 	local avatarTpl, avatarBusy
+	local world
+	local avJoints, avBase, avY = {}, nil, 0
+
+	local loadLum = typeof(o.Background) == "Color3" and (o.Background.R * 0.3 + o.Background.G * 0.59 + o.Background.B * 0.11) or 0
+	local loadLbl = new("TextLabel", { BackgroundTransparency = 1, Font = F_MED, TextSize = 12, Text = "Chargement de ton avatar…",
+		TextColor3 = loadLum > 0.5 and Color3.fromRGB(35, 55, 75) or Color3.fromRGB(220, 220, 226),
+		Size = UDim2.new(1, 0, 1, 0), Visible = false, ZIndex = 5 }, ov)
+
 	local function fetchAvatar()
-		if avatarTpl and avatarTpl.Parent == nil then return avatarTpl end
-		local ok, m = pcall(function() return Players:CreateHumanoidModelFromUserId(LP.UserId) end)
-		if not (ok and typeof(m) == "Instance") then
-			ok, m = pcall(function()
-				local desc = Players:GetHumanoidDescriptionFromUserId(LP.UserId)
-				return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
-			end)
+		if avatarTpl then return avatarTpl end
+		local rigType = Enum.HumanoidRigType.R15
+		local function viaDescription()
+			local desc = Players:GetHumanoidDescriptionFromUserId(LP.UserId)
+			return Players:CreateHumanoidModelFromDescription(desc, rigType)
 		end
-		if ok and typeof(m) == "Instance" and m:IsA("Model") then
-			avatarTpl = m
-			return m
+		local function viaUserId()
+			return Players:CreateHumanoidModelFromUserId(LP.UserId)
 		end
-		return nil
+		local m
+		for attempt = 1, 3 do   -- les endpoints Roblox échouent souvent au 1er essai
+			for _, fn in ipairs({ viaDescription, viaUserId }) do
+				local ok, res = pcall(fn)
+				if ok and typeof(res) == "Instance" and res:IsA("Model") then
+					m = res
+					break
+				end
+			end
+			if m then break end
+			task.wait(0.4 * attempt)
+		end
+		if not m then return nil end
+		for _, d in ipairs(m:GetDescendants()) do
+			if d:IsA("LuaSourceContainer") then d:Destroy() end
+		end
+		m.Name = "PreviewAvatar"
+		avatarTpl = m
+		return m
 	end
-	local function refresh()
+
+	-- Construit l'aperçu à partir du modèle de l'avatar (copie) : corps seul pour le cadrage, accessoires inclus à l'affichage.
+	local function buildAvatar(tpl)
+		local okc, clone = pcall(function() return tpl:Clone() end)
+		if not okc or typeof(clone) ~= "Instance" then return false end
+		local root = clone:FindFirstChild("HumanoidRootPart")
+		if not root or not root:IsA("BasePart") then
+			clone:Destroy()
+			return false
+		end
+		for _, d in ipairs(clone:GetDescendants()) do
+			if d:IsA("LuaSourceContainer") or d:IsA("Sound") or d:IsA("BillboardGui") or d:IsA("ForceField") then
+				d:Destroy()
+			elseif d:IsA("BasePart") then
+				d.CanCollide, d.CanQuery, d.CanTouch = false, false, false
+			end
+		end
+		local hum = clone:FindFirstChildOfClass("Humanoid")
+		if hum then
+			pcall(function() hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None end)
+			pcall(function() hum.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff end)
+			pcall(function() hum.EvaluateStateMachine = false end)
+		end
+		root.Anchored = true   -- seule la racine est ancrée : les membres suivent les articulations (Motor6D)
+		if not clone.PrimaryPart then clone.PrimaryPart = root end
+
+		clearRig()
+		if not world or world.Parent ~= vp then
+			world = Instance.new("WorldModel")   -- nécessaire pour que les articulations s'actualisent dans un ViewportFrame
+			world.Name = "PreviewWorld"
+			world.Parent = vp
+		end
+		rig = clone
+		rig.Name = "Character"
+		rig.Parent = world
+		rig:PivotTo(CFrame.new(0, 0, 0))   -- orientation neutre : le personnage regarde vers -Z (de face pour la caméra)
+
+		-- cadrage : on centre sur le CORPS seul (un accessoire démesuré ne doit pas dézoomer tout l'aperçu)
+		local mn, mx
+		for _, p in ipairs(rig:GetChildren()) do
+			if p:IsA("BasePart") and p ~= root and p.Transparency < 0.99 then
+				local cf, sz = p.CFrame, p.Size
+				for _, x in ipairs({ -0.5, 0.5 }) do
+					for _, y in ipairs({ -0.5, 0.5 }) do
+						for _, z in ipairs({ -0.5, 0.5 }) do
+							local c = cf:PointToWorldSpace(Vector3.new(x * sz.X, y * sz.Y, z * sz.Z))
+							mn = mn and mn:Min(c) or c
+							mx = mx and mx:Max(c) or c
+						end
+					end
+				end
+			end
+		end
+		if not mn then
+			local bcf, bsz = rig:GetBoundingBox()
+			mn, mx = bcf.Position - bsz / 2, bcf.Position + bsz / 2
+		end
+		local center = (mn + mx) / 2
+		rig:PivotTo(rig:GetPivot() - center)
+		avBase, avY = rig:GetPivot(), 0
+		local size = mx - mn
+		local bsize = Vector3.new(math.clamp(size.X, 1, 9), math.clamp(size.Y, 2, 9), math.clamp(size.Z, 1, 6))
+
+		avJoints = {}
+		for _, d in ipairs(rig:GetDescendants()) do
+			if d:IsA("Motor6D") then avJoints[d.Name] = d end
+		end
+		local function pos(n)
+			local p = rig:FindFirstChild(n)
+			return (p and p:IsA("BasePart")) and p.Position or nil
+		end
+		J = { head = pos("Head"), neck = pos("UpperTorso"), pelvis = pos("LowerTorso"),
+			shL = pos("LeftUpperArm"), shR = pos("RightUpperArm"), handL = pos("LeftHand"), handR = pos("RightHand"),
+			hipL = pos("LeftUpperLeg"), hipR = pos("RightUpperLeg"), footL = pos("LeftFoot"), footR = pos("RightFoot") }
+		poseFn = function() end
+		local zero = Vector3.new(0, 0, 0)
+		fit = { focus = zero, size = bsize, corners = cornersFor(bsize, zero),
+			dist = (opt.Wave and 2.35 or 1.95) * math.max(bsize.Y, bsize.X * 0.9), animated = false, avatar = true }
+		finishModel()
+		return true
+	end
+
+	-- Poses faites à la main (R15) : coucou si Wave, sinon petit balancement si Animate
+	local function avatarPose(t)
+		local A = CFrame.Angles
+		for _, j in pairs(avJoints) do j.Transform = CFrame.identity end
+		local function set(n, cf)
+			local j = avJoints[n]
+			if j then j.Transform = cf end
+		end
+		set("Waist", A(math.sin(t * 2) * 0.015, 0, 0))
+		if opt.Wave then
+			set("RightShoulder", A(0, 0, 2.7))
+			set("RightElbow", A(0.3, 0, math.sin(t * 8) * 0.55))
+			set("LeftShoulder", A(0, 0, -0.1 - math.sin(t * 2) * 0.02))
+			set("Neck", A(math.sin(t * 2) * 0.04, 0, math.sin(t * 3.5) * 0.04))
+		elseif opt.Animate then
+			local a = math.sin(t * 3) * 0.55
+			set("RightShoulder", A(-a, 0, 0.1))
+			set("LeftShoulder", A(a, 0, -0.1))
+			set("RightHip", A(a, 0, 0))
+			set("LeftHip", A(-a, 0, 0))
+			set("RightKnee", A(math.max(0, -a) * 0.5, 0, 0))
+			set("LeftKnee", A(math.max(0, a) * 0.5, 0, 0))
+		else
+			set("RightShoulder", A(0, 0, 0.12))
+			set("LeftShoulder", A(0, 0, -0.12))
+		end
+	end
+
+	local function refresh(force)
 		local wantAvatar = (charSrc == LP) and o.Avatar ~= false
-		if wantAvatar and avatarTpl and buildCharacter(avatarTpl) then return true end
+		if wantAvatar then
+			if force and avatarTpl then
+				avatarTpl:Destroy()
+				avatarTpl = nil
+			end
+			if avatarTpl and buildAvatar(avatarTpl) then
+				loadLbl.Visible = false
+				return true
+			end
+			if not avatarBusy then
+				avatarBusy = true
+				loadLbl.Visible = rig == nil
+				task.spawn(function()
+					local m = fetchAvatar()
+					avatarBusy = false
+					if not vp.Parent then return end
+					if m and buildAvatar(m) then
+						loadLbl.Visible = false
+						return
+					end
+					-- Roblox ne répond pas : repli sur ton personnage en jeu, puis (dernier recours) le rig factice
+					local src = resolveSource()
+					local built = src and src:IsA("Model") and buildCharacter(src)
+					if not built and not rig then buildMock() end
+					loadLbl.Visible = false
+				end)
+			end
+			return false
+		end
 		local src = resolveSource()
 		local built = src and src:IsA("Model") and buildCharacter(src)
 		if not built then buildMock() end
-		if wantAvatar and not avatarTpl and not avatarBusy then
-			avatarBusy = true
-			task.spawn(function()
-				local m = fetchAvatar()
-				avatarBusy = false
-				if m and vp.Parent then buildCharacter(m) end
-			end)
-		end
 		return built and true or false
 	end
 
@@ -9531,7 +9686,7 @@ function Block:CreatePreview3D(o)
 		end
 		for _, e in ipairs(decals) do e.d.Transparency = opt.Chams and 1 or e.tr end
 		for _, e in ipairs(hides) do e.i.Parent = opt.Chams and nil or e.parent end
-		floor.Transparency = opt.Floor and 0.15 or 1
+		floor.Transparency = (opt.Floor and fit) and 0.15 or 1
 		if hl then
 			hl.Enabled = opt.Highlight
 			hl.FillColor = opt.HighlightFill
@@ -9656,6 +9811,7 @@ function Block:CreatePreview3D(o)
 	end
 
 	local function render(dt)
+		if not fit then return end   -- avatar pas encore chargé
 		local sc = vp.AbsoluteSize.Y / h
 		if sc <= 0.01 then return end
 		local W, H = vp.AbsoluteSize.X / sc, h
@@ -9672,6 +9828,15 @@ function Block:CreatePreview3D(o)
 			poseFn(opt.Animate and math.sin(t * 3) * 0.55 or 0, t)
 			jumpApplied = 0   -- le rig factice est reposé en absolu à chaque image
 		end
+		if fit.avatar then
+			avatarPose(t)   -- avatar réel : poses des articulations + saut en bougeant tout le modèle
+			local y, finished = jumpOffset()
+			if finished then jumpT0, y = nil, 0 end
+			if rig and avBase and y ~= avY then
+				avY = y
+				rig:PivotTo(avBase * CFrame.new(0, y, 0))
+			end
+		else
 		do   -- saut : on décale toutes les pièces de la différence avec l'image précédente
 			local y, finished = jumpOffset()
 			if finished then jumpT0, y = nil, 0 end
@@ -9682,6 +9847,7 @@ function Block:CreatePreview3D(o)
 					if e.p.Parent then e.p.CFrame = e.p.CFrame + Vector3.new(0, dy, 0) end
 				end
 			end
+		end
 		end
 
 		local tanH = math.tan(math.rad(cam.FieldOfView) / 2)
@@ -9900,7 +10066,7 @@ function Block:CreatePreview3D(o)
 		local s = tostring((unself(item, ...)))
 		if titleLbl then titleLbl.Text = s end
 	end
-	item.Refresh = function() return refresh() end
+	item.Refresh = function() return refresh(true) end
 	item.Jump = function() jumpPending = true end   -- saut à la Mario (attend que la lib soit chargée et l'aperçu visible)
 	item.SetTarget = function(...)
 		local v = unself(item, ...)
@@ -10215,6 +10381,45 @@ function Library:_buildChangelog(tab)
 end
 
 -- ---------------------------------------------------------------------------
+-- Nombre animé : s = Library._smoothNum(function(v) ... end, vitesse) ; s.Set(cible) ; s.Get()
+-- La valeur affichée GLISSE vers la cible au lieu de sauter. La boucle ne tourne que pendant le glissement.
+-- ---------------------------------------------------------------------------
+function Library._smoothNum(apply, rate)
+	rate = rate or 9
+	local cur, target, conn
+	local s = {}
+	local function stop()
+		if conn then
+			conn:Disconnect()
+			conn = nil
+		end
+	end
+	local function step(dt)
+		cur += (target - cur) * (1 - math.exp(-dt * rate))
+		if math.abs(target - cur) < 0.004 then
+			cur = target
+			stop()
+		end
+		apply(cur)
+	end
+	function s.Set(v, instant)
+		v = tonumber(v)
+		if not v then return end
+		target = v
+		if cur == nil or instant or Library.Animations == false then
+			cur = v
+			stop()
+			apply(cur)
+			return
+		end
+		if not conn then conn = RunService.Heartbeat:Connect(step) end
+	end
+	function s.Get() return cur end
+	function s.Destroy() stop() end
+	return s
+end
+
+-- ---------------------------------------------------------------------------
 -- Block:CreateStats : grille de tuiles « NOM / valeur »
 -- ---------------------------------------------------------------------------
 function Block:CreateStats(o)
@@ -10252,6 +10457,26 @@ function Block:CreateStats(o)
 		local c = cells[id]
 		if c then c.name.Text = string.upper(tostring(n)) end
 	end
+	-- SetNumber(id, nombre, format, couleur) : la valeur affichée glisse vers le nombre (transition fluide, couleur comprise)
+	item.SetNumber = function(...)
+		local id, v, fmt, col = unself(item, ...)
+		local c = cells[id]
+		v = tonumber(v)
+		if not c or not v then return end
+		c.fmt = fmt
+		if not c.sm then
+			c.sm = Library._smoothNum(function(x)
+				local txt = c.fmt and c.fmt(x) or tostring(math.floor(x + 0.5))
+				if txt ~= c.val.Text then c.val.Text = txt end
+			end, 9)
+		end
+		c.sm.Set(v)
+		local target = col or T.Text
+		if c.col ~= target then
+			c.col = target
+			tween(c.val, { TextColor3 = target }, 0.4)
+		end
+	end
 	item.Instance = holder
 	return item
 end
@@ -10264,6 +10489,7 @@ function Block:CreateGraph(o)
 	local samples = math.clamp(math.floor(tonumber(o.Samples) or 90), 20, 240)
 	local h = math.clamp(tonumber(o.Height) or 64, 36, 200)
 	local unit = o.Unit and tostring(o.Unit) or ""
+	local COLS = 96   -- colonnes fines : l'ensemble se lit comme une courbe pleine
 	local f = makeRow(self, h + 34, o.Name)
 	label(f, o.Name or "Graphique", 12, { Position = UDim2.new(0, 12, 0, 4), Size = UDim2.new(0, 64, 0, 18), Font = F_BOLD })
 	local infoL = label(f, "—", 11, { Position = UDim2.new(0, 78, 0, 4), Size = UDim2.new(1, -90, 0, 18),
@@ -10275,74 +10501,146 @@ function Block:CreateGraph(o)
 		new("Frame", { Position = UDim2.new(0, 0, y, 0), Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = T.Accent,
 			BackgroundTransparency = 0.93, BorderSizePixel = 0 }, plot)
 	end
-	local bars = {}
-	for i = 1, samples do
-		bars[i] = new("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new((i - 1) / samples, 0, 1, 0),
-			Size = UDim2.new(1 / samples, -1, 0, 0), BorderSizePixel = 0, BackgroundColor3 = T.Accent, Visible = false }, plot)
+	local cols, caps, lastCol = {}, {}, {}
+	for i = 1, COLS do
+		local c = new("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new((i - 1) / COLS, 0, 1, 0),
+			Size = UDim2.new(1 / COLS, 1, 0, 0), BorderSizePixel = 0, BackgroundColor3 = T.Accent,
+			BackgroundTransparency = 0.6, Visible = false }, plot)
+		cols[i] = c
+		-- liseré clair sur le dessus : dessine la ligne de la courbe
+		caps[i] = new("Frame", { Size = UDim2.new(1, 0, 0, 2), BorderSizePixel = 0, BackgroundColor3 = T.Accent,
+			BackgroundTransparency = 0.05 }, c)
 	end
-	local data, dirty = {}, true
+
+	-- ------------------------------------------------------------ données
+	local data = {}
+	local lastPush, interval = nil, 0.5   -- intervalle moyen entre deux échantillons (mesuré)
+	local topCur                          -- échelle verticale affichée (glisse vers sa cible)
+	local tgt = { cur = 0, mn = 0, av = 0, mx = 0 }
+	local vis = nil                       -- valeurs de la ligne d'info, animées vers tgt
+	local colorCache, nCache = {}, 0
 	local item = {}
-	-- glissement : à chaque nouvel échantillon, la bande de barres est décalée d'une barre vers la droite puis revient à 0
-	local slideT0, slideDur = nil, 0.45
-	local slideConn
-	local function stopSlide()
-		if slideConn then slideConn:Disconnect() slideConn = nil end
-		for i = 1, samples do bars[i].Position = UDim2.new((i - 1) / samples, 0, 1, 0) end
-	end
-	local function startSlide()
-		if not Library.Animations then return end
-		slideT0 = os.clock()
-		if slideConn then return end
-		slideConn = RunService.Heartbeat:Connect(function()
-			if not plot.Parent then stopSlide() return end
-			local d = slideDur / math.max(Library.AnimSpeed or 1, 0.05)
-			local a = math.clamp((os.clock() - slideT0) / d, 0, 1)
-			local off = (1 - (1 - (1 - a) ^ 3)) / samples   -- ease-out : 1 barre -> 0
-			for i = 1, samples do
-				bars[i].Position = UDim2.new((i - 1) / samples + off, 0, 1, 0)
-			end
-			if a >= 1 then stopSlide() end
-		end)
-	end
+
 	item.Push = function(...)
 		local v = tonumber((unself(item, ...)))
 		if not v then return end
-		data[#data + 1] = v
-		local full = #data > samples
-		if full then table.remove(data, 1) end
-		dirty = true
-		item._slidePending = full
-	end
-	item.Clear = function() data = {} dirty = true end
-	item.Flush = function()
-		if not dirty then return end
-		dirty = false
-		if item._slidePending then item._slidePending = false startSlide() end
-		local n = #data
-		local mx, mn, sum = -math.huge, math.huge, 0
-		for _, v in ipairs(data) do
-			mx, mn, sum = math.max(mx, v), math.min(mn, v), sum + v
+		local now = os.clock()
+		if lastPush then
+			local d = now - lastPush
+			if d > 0.05 and d < 5 then interval += (d - interval) * 0.3 end
 		end
-		local top = tonumber(o.Max) or math.max(mx * 1.15, tonumber(o.MinMax) or 1)
-		for i = 1, samples do
-			local v = data[n - samples + i]
-			local b = bars[i]
-			if v then
-				b.Visible = true
-				b.Size = UDim2.new(1 / samples, -1, math.clamp(v / top, 0.03, 1), 0)
-				if o.ColorFn then
-					local ok, c = pcall(o.ColorFn, v)
-					b.BackgroundColor3 = ok and c or T.Accent
-				end
+		lastPush = now
+		data[#data + 1] = v
+		if #data > samples + 2 then table.remove(data, 1) end
+		local n = #data
+		local mx, mn, sum, cnt = -math.huge, math.huge, 0, 0
+		for i = math.max(1, n - samples + 1), n do
+			local x = data[i]
+			mx, mn, sum, cnt = math.max(mx, x), math.min(mn, x), sum + x, cnt + 1
+		end
+		tgt.cur, tgt.mn, tgt.av, tgt.mx = v, mn, sum / cnt, mx
+		if not vis then vis = { cur = v, mn = mn, av = sum / cnt, mx = mx } end
+	end
+	item.Clear = function()
+		data, lastPush, vis, topCur = {}, nil, nil, nil
+		infoL.Text = "—"
+		for i = 1, COLS do cols[i].Visible = false end
+	end
+	item.Flush = function() end   -- conservé pour compatibilité : le rendu est maintenant continu et automatique
+
+	-- courbe lissée (Catmull-Rom) entre les échantillons ; idx flottant dans [1, n]
+	local function sampleAt(idx)
+		local n = #data
+		local i1 = math.floor(idx)
+		if i1 >= n then return data[n] end
+		local t = idx - i1
+		local p1, p2 = data[i1], data[i1 + 1]
+		local p0 = data[math.max(i1 - 1, 1)]
+		local p3 = data[math.min(i1 + 2, n)]
+		local t2, t3 = t * t, t * t * t
+		return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
+	end
+
+	local function colorFor(v)
+		if not o.ColorFn then return T.Accent end
+		local key = math.floor(v + 0.5)
+		local c = colorCache[key]
+		if c == nil then
+			local ok, col = pcall(o.ColorFn, key)
+			c = (ok and typeof(col) == "Color3") and col or T.Accent
+			if nCache > 400 then colorCache, nCache = {}, 0 end
+			colorCache[key] = c
+			nCache += 1
+		end
+		return c
+	end
+
+	-- ------------------------------------------------------------ rendu continu
+	local function render(dt)
+		local n = #data
+		local anim = Library.Animations ~= false
+		if vis then   -- les chiffres glissent vers leur valeur au lieu de sauter
+			local k = anim and (1 - math.exp(-dt * 8)) or 1
+			vis.cur += (tgt.cur - vis.cur) * k
+			vis.mn += (tgt.mn - vis.mn) * k
+			vis.av += (tgt.av - vis.av) * k
+			vis.mx += (tgt.mx - vis.mx) * k
+			local function r(x) return math.floor(x + 0.5) end
+			local txt = string.format("%d%s  ·  min %d  ·  moy %d  ·  max %d", r(vis.cur), unit, r(vis.mn), r(vis.av), r(vis.mx))
+			if txt ~= infoL.Text then infoL.Text = txt end
+		end
+		if n < 2 then return end
+		local topT = tonumber(o.Max) or math.max(tgt.mx * 1.15, tonumber(o.MinMax) or 1)
+		if not topCur then topCur = topT end
+		topCur += (topT - topCur) * (anim and (1 - math.exp(-dt * 5)) or 1)
+		-- défilement continu : la tête de courbe avance d'un échantillon pendant l'intervalle entre deux mesures
+		local offset = anim and math.clamp(1 - (os.clock() - lastPush) / interval, 0, 1) or 0
+		local head = n - offset
+		local span = samples - 1
+		for i = 1, COLS do
+			local idx = head - (1 - (i - 0.5) / COLS) * span
+			local c = cols[i]
+			if idx < 1 then
+				if c.Visible then c.Visible = false end
 			else
-				b.Visible = false
+				local v = sampleAt(idx)
+				if not c.Visible then c.Visible = true end
+				c.Size = UDim2.new(1 / COLS, 1, math.clamp(v / topCur, 0.02, 1), 0)
+				local col = colorFor(v)
+				if lastCol[i] ~= col then
+					lastCol[i] = col
+					c.BackgroundColor3 = col
+					caps[i].BackgroundColor3 = col:Lerp(Color3.new(1, 1, 1), 0.35)
+				end
 			end
 		end
-		if n > 0 then
-			local function r(x) return math.floor(x + 0.5) end
-			infoL.Text = string.format("%d%s  ·  min %d  ·  moy %d  ·  max %d", r(data[n]), unit, r(mn), r(sum / n), r(mx))
-		end
 	end
+
+	local function isShown()
+		local p = plot
+		while p and p:IsA("GuiObject") do
+			if not p.Visible then return false end
+			p = p.Parent
+		end
+		if p and p:IsA("ScreenGui") and not p.Enabled then return false end
+		return p ~= nil
+	end
+	local acc, shownT, shown = 0, -1, true
+	local conn = RunService.Heartbeat:Connect(function(dt)
+		local now = os.clock()
+		if now - shownT > 0.25 then
+			shownT = now
+			shown = isShown()
+		end
+		if not shown then return end
+		acc += dt
+		if acc < 1 / 45 then return end
+		dt, acc = math.min(acc, 0.25), 0
+		render(dt)
+	end)
+	track(conn)
+	plot.Destroying:Connect(function() pcall(function() conn:Disconnect() end) end)
+
 	item.Instance = f
 	return item
 end
@@ -10745,7 +11043,7 @@ function Window:CreateHomeTab(name, icon, cfg)
 	-- ===================== COLONNE GAUCHE =====================
 	-- ----- mon personnage : aperçu 3D + identité
 	local prof = subInfo:CreateBlock({ Name = "Mon personnage", Side = "Left" })
-	local pv = prof:CreatePreview3D({ Name = false, Height = 260,
+	local pv = prof:CreatePreview3D({ Name = false, Character = true, Height = 260,
 		Background = Color3.fromRGB(135, 206, 235), FloorColor = Color3.fromRGB(240, 248, 255), Yaw = 180, Pitch = -0.04,
 		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = true, AutoRotate = false, Wave = true, Animate = true } })
 	-- le bonhomme fait un petit saut à chaque arrivée sur Home > Info (une fois la lib entièrement chargée)
@@ -11142,11 +11440,11 @@ function Window:CreateHomeTab(name, icon, cfg)
 		end
 		if not shown() then return end
 
-		st:Set("fps", fps, fpsColor(fps))
-		st:Set("ping", ping .. " ms", pingColor(ping))
+		st:SetNumber("fps", fps, nil, fpsColor(fps))
+		st:SetNumber("ping", ping, function(x) return math.floor(x + 0.5) .. " ms" end, pingColor(ping))
 		st:Set("players", #Players:GetPlayers() .. " / " .. tostring(Players.MaxPlayers))
 		local okm, mem = pcall(function() return Stats:GetTotalMemoryUsageMb() end)
-		st:Set("mem", okm and mem and (math.floor(mem + 0.5) .. " MB") or "—")
+		if okm and mem then st:SetNumber("mem", mem, function(x) return math.floor(x + 0.5) .. " MB" end) else st:Set("mem", "—") end
 		st:Set("session", fmtDur(elapsed))
 		st:Set("uptime", fmtDur(workspace.DistributedGameTime))
 		gFps:Flush()
@@ -17196,6 +17494,7 @@ function Library:CreateWindow(cfg)
 
 	local bgAcc = 0
 	local fpsFrames, fpsT = 0, os.clock()
+	local fpsGoal, pingGoal, fpsShown, pingShown = nil, 0, 0, 0   -- FPS / ping : la valeur affichée glisse vers la mesure
 	local pingItem
 	pcall(function() pingItem = Stats.Network.ServerStatsItem["Data Ping"] end)
 	track(RunService.Heartbeat:Connect(function(dt)
@@ -17209,9 +17508,18 @@ function Library:CreateWindow(cfg)
 					local ok, v = pcall(function() return pingItem:GetValue() end)
 					if ok and v then ping = math.floor(v + 0.5) end
 				end
-				fpsLabel.Text = fps .. " fps | " .. ping .. " ms"
+				if fpsGoal == nil then fpsShown, pingShown = fps, ping end
+				fpsGoal, pingGoal = fps, ping
 			end
 			fpsFrames, fpsT = 0, now
+		end
+
+		if statsOn and fpsGoal then
+			local k = (Library.Animations == false) and 1 or (1 - math.exp(-dt * 9))
+			fpsShown += (fpsGoal - fpsShown) * k
+			pingShown += (pingGoal - pingShown) * k
+			local txt = math.floor(fpsShown + 0.5) .. " fps | " .. math.floor(pingShown + 0.5) .. " ms"
+			if txt ~= fpsLabel.Text then fpsLabel.Text = txt end
 		end
 
 		if not main.Visible or bgMode == "off" then return end
