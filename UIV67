@@ -9214,7 +9214,7 @@ Library.Version = "5.5.0"
 Library.AppName = "Ui-Lib"
 Library.Changelog = {
 	{ Version = "5.5.0", Date = "2026-10-27", Title = "Mises à jour automatiques", Notes = {
-		"Mises à jour depuis GitHub : l'UI relit ton fichier RAW toute seule et ajoute les nouvelles versions dans Home > Nouveautés (CreateWindow({ UpdateURL = ... })).",
+		"Mises à jour depuis GitHub : l'UI lit toute seule les commits de son fichier et les affiche dans Home > Nouveautés (rien à écrire dans le script).",
 		"Nouveau bloc « Mises à jour » dans Home : version chargée, dernière version GitHub, bouton « Vérifier maintenant ».",
 		"Le trou noir est au centre par défaut. Nouvelle icône agrandie pour l'onglet Réglages.",
 		"L'onglet « Éditeur de thème » est fusionné dans Paramètres > Thèmes (dégradé personnalisé ajouté).",
@@ -9295,10 +9295,30 @@ function Library:_buildChangelog(tab)
 	end
 	tab._logBlocks = {}
 	if Library.ShowChangelog == false then return end
-	for i, e in ipairs(Library.Changelog) do
-		local b = tab:CreateBlock({ Name = "Nouveautés v" .. tostring(e.Version) .. (e.Date and ("  ·  " .. e.Date) or "") .. (e.Pending and "  ·  NOUVEAU (à recharger)" or ""),
-			Side = (i % 2 == 1) and "Left" or "Right", Collapsed = (i > 1 and not e.Pending) })
-		b:CreateParagraph({ Title = e.Title or "Nouveautés", Content = "• " .. table.concat(e.Notes or {}, "\n• ") })
+	local list = Library.Changelog
+	if Library.UpdateURL and Library.UpdateURL ~= "" and Library:_commitsURL() then
+		if Library.Commits and #Library.Commits > 0 then
+			list = Library.Commits
+		elseif not Library.UpdateStatus.Error then   -- 1re vérification pas encore faite
+			local b = tab:CreateBlock({ Name = "Nouveautés", Side = "Left" })
+			b:CreateParagraph({ Title = "Chargement…", Content = "Récupération des mises à jour depuis GitHub." })
+			tab._logBlocks[#tab._logBlocks + 1] = b
+			return
+		end
+	end
+	for i, e in ipairs(list) do
+		local nm
+		if e.Sha then
+			nm = "Mise à jour  ·  " .. (e.Date or "") .. (e.Date and "  ·  " or "") .. "#" .. e.Sha .. (e.Pending and "  ·  NOUVEAU (à recharger)" or "")
+		else
+			nm = "Nouveautés v" .. tostring(e.Version) .. (e.Date and ("  ·  " .. e.Date) or "") .. (e.Pending and "  ·  NOUVEAU (à recharger)" or "")
+		end
+		local b = tab:CreateBlock({ Name = nm, Side = (i % 2 == 1) and "Left" or "Right", Collapsed = (i > 1 and not e.Pending) })
+		if e.Sha then
+			b:CreateParagraph({ Title = e.Title, Content = e.Body })
+		else
+			b:CreateParagraph({ Title = e.Title or "Nouveautés", Content = "• " .. table.concat(e.Notes or {}, "\n• ") })
+		end
 		tab._logBlocks[#tab._logBlocks + 1] = b
 	end
 end
@@ -9439,7 +9459,7 @@ local MONTHS = { "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "ao�
 local function homeHttpGet(url)
 	local req = (syn and syn.request) or http_request or request or (fluxus and fluxus.request)
 	if req then
-		local ok, res = pcall(req, { Url = url, Method = "GET" })
+		local ok, res = pcall(req, { Url = url, Method = "GET", Headers = { ["User-Agent"] = "Ui-Lib", ["Accept"] = "application/vnd.github+json" } })
 		if ok and type(res) == "table" then
 			local body = res.Body or res.body
 			if body and body ~= "" then return body end
@@ -9457,17 +9477,23 @@ local function homeJson(url)
 end
 
 -- ---------------------------------------------------------------------------
--- MISES À JOUR AUTOMATIQUES (depuis ton GitHub RAW)
---   CreateWindow({ UpdateURL = "https://raw.githubusercontent.com/.../Ui-Lib-Simple.lua", UpdateInterval = 120 })
---   • Toutes les UpdateInterval secondes, l'UI relit le fichier RAW et lit SEULEMENT sa table Library.Changelog (jamais exécutée en entier).
---   • Chaque version qu'elle ne connaît pas encore est ajoutée toute seule dans Home > Nouveautés (marquée « à recharger ») + notification.
---   • Pour publier une mise à jour : ajoute une entrée en haut de Library.Changelog (version PLUS HAUTE que l'ancienne) et pousse sur GitHub.
---   • Library.OnUpdate = function(version, entrees, source) ... end  (optionnel)  ·  Library.OnReload = function(source) ... end
---     (optionnel : appelé par le bouton « Recharger maintenant » de Home, par ex. pour détruire l'UI et relancer ton script).
+-- MISES À JOUR AUTOMATIQUES (depuis l'historique des commits GitHub du fichier)
+--   • Rien à écrire à la main : Library.UpdateURL (lien RAW du fichier, déjà renseigné plus bas) suffit. Le dépôt, la branche et le
+--     nom du fichier en sont déduits tout seuls.
+--   • Toutes les UpdateInterval secondes, l'UI lit les derniers commits de CE fichier (API publique de GitHub) et les affiche dans
+--     Home > Nouveautés : titre du commit = titre de la mise à jour, lignes suivantes du message = détails, + date et auteur.
+--   • Un commit plus récent que le code actuellement chargé est marqué « NOUVEAU (à recharger) » + notification.
+--   • Pour publier une mise à jour : fais juste un commit sur GitHub avec un message clair (1re ligne = titre, lignes suivantes = détails).
+--     Étiquettes au début d'une ligne de détail : « + » Ajout · « ~ » Amélioration · « ! » Correction · « -- » Supprimé (ou les mots Ajout / Fix / Suppression...).
+--   • Library.OnUpdate = function(idCommit, nouveauxCommits) ... end  (optionnel)  ·  Library.OnReload = function(source) ... end
+--     (optionnel : appelé par le bouton « Recharger maintenant » de Home avec le code RAW à jour).
 --   • Library:CheckUpdate() vérifie tout de suite · Library.AutoUpdateCheck = false coupe la vérification automatique.
+--   • Limite GitHub sans compte : 60 requêtes / heure / IP -> intervalle par défaut 300 s (minimum 60 s).
 -- ---------------------------------------------------------------------------
-Library.UpdateURL = Library.UpdateURL or nil
-Library.UpdateInterval = 120
+Library.UpdateURL = Library.UpdateURL or "https://raw.githubusercontent.com/MadeByBlue-UI/UI/refs/heads/main/UIV67"
+Library.UpdateInterval = 300
+Library.UpdateCommits = 15   -- nombre de commits affichés dans Home
+Library.Commits = {}
 Library.AutoUpdateCheck = true
 Library.UpdateStatus = { Last = nil, Remote = nil, Available = false, Error = nil, Source = nil }
 
@@ -9485,60 +9511,151 @@ local function verCmp(a, b)   -- > 0 si a est plus récente que b
 	return 0
 end
 
--- lit uniquement la table « Library.Changelog = { ... } » du fichier distant (constantes seulement, sans rien lancer d'autre)
-local function parseRemoteChangelog(src)
-	local s0 = src:find("Library.Changelog = {", 1, true)
-	if not s0 then return nil end
-	local from = src:find("{", s0, true)
-	local to = src:find("\n}\n", from, true)
-	if not to then return nil end
-	local fn = loadstring("return " .. src:sub(from, to + 1))
-	if not fn then return nil end
-	pcall(function() if setfenv then setfenv(fn, {}) end end)
-	local ok, t = pcall(fn)
-	return (ok and type(t) == "table") and t or nil
-end
+do
+	-- déduit propriétaire / dépôt / branche / chemin d'un lien RAW (ou github.com/.../blob|commits/...)
+	local function ghParse(url)
+		url = tostring(url or "")
+		local o, r, br, pa = url:match("raw%.githubusercontent%.com/([^/]+)/([^/]+)/refs/heads/([^/]+)/([^?#]+)")
+		if not o then o, r, br, pa = url:match("raw%.githubusercontent%.com/([^/]+)/([^/]+)/([^/]+)/([^?#]+)") end
+		if not o then o, r, br, pa = url:match("github%.com/([^/]+)/([^/]+)/blob/([^/]+)/([^?#]+)") end
+		if not o then o, r, br, pa = url:match("github%.com/([^/]+)/([^/]+)/commits/([^/]+)/([^?#]+)") end
+		return o, r, br, pa
+	end
 
-function Library:CheckUpdate(silent)
-	local url = Library.UpdateURL
-	local st = Library.UpdateStatus
-	if not url or url == "" then st.Error = "Aucun lien UpdateURL" return false end
-	local body = homeHttpGet(url .. (url:find("?", 1, true) and "&" or "?") .. "t=" .. os.time())
-	st.Last = os.time()
-	if not body then st.Error = "Lien injoignable" if Library._updRefresh then Library._updRefresh() end return false end
-	local list = parseRemoteChangelog(body)
-	if not list or #list == 0 then
-		st.Error = "Change-log introuvable dans le fichier distant"
+	function Library:_commitsURL()
+		local o, r, br, pa = ghParse(Library.UpdateURL)
+		if not o then return nil end
+		return string.format("https://api.github.com/repos/%s/%s/commits?sha=%s&path=%s&per_page=%d",
+			o, r, HttpService:UrlEncode(br), HttpService:UrlEncode(pa), math.clamp(math.floor(tonumber(Library.UpdateCommits) or 15), 1, 50))
+	end
+
+	local function ghDate(iso)
+		local y, m, d = tostring(iso or ""):match("(%d+)%-(%d+)%-(%d+)")
+		if not y then return nil end
+		return string.format("%d %s %s", tonumber(d), MONTHS[tonumber(m)] or m, y)
+	end
+
+	-- étiquette une ligne du message de commit : [Ajout] / [Amélioration] / [Correction] / [Supprimé]
+	--   symboles : « + texte » ajout · « ~ texte » amélioration · « ! texte » correction · « -- texte » suppression
+	--   ou mots au début : Ajout / Ajouté / Add · Amélioration / Update / Change · Fix / Correction · Suppression / Retiré / Remove
+	local GH_WORDS = {
+		{ "Ajout", { "ajout", "add", "new", "nouveau" } },
+		{ "Amélioration", { "amélior", "amelior", "improve", "update", "change", "modif" } },
+		{ "Correction", { "correct", "fix", "bug" } },
+		{ "Supprimé", { "suppr", "retir", "remove", "delete", "enlev" } },
+	}
+	local function ghTag(l)
+		local kind, rest
+		if l:sub(1, 2) == "--" then kind, rest = "Supprimé", l:sub(3)
+		elseif l:sub(1, 1) == "+" then kind, rest = "Ajout", l:sub(2)
+		elseif l:sub(1, 1) == "~" then kind, rest = "Amélioration", l:sub(2)
+		elseif l:sub(1, 1) == "!" then kind, rest = "Correction", l:sub(2)
+		else
+			local low = l:lower()
+			for _, g in ipairs(GH_WORDS) do
+				for _, w in ipairs(g[2]) do
+					if low:sub(1, #w) == w then
+						kind = g[1]
+						rest = l:gsub("^[^%s:]+%s*[:%-]?%s*", "")
+						break
+					end
+				end
+				if kind then break end
+			end
+		end
+		if kind then
+			rest = rest:match("^%s*(.-)%s*$")
+			if rest ~= "" then return "[" .. kind .. "] " .. rest end
+		end
+		return (l:gsub("^[%-%*]%s*", ""):gsub("^•%s*", ""))
+	end
+
+	-- un commit -> une entrée « Nouveautés »
+	local function ghEntry(c)
+		local cm = type(c.commit) == "table" and c.commit or {}
+		local msg = tostring(cm.message or ""):gsub("\r", "")
+		local title, details = nil, {}
+		for line in (msg .. "\n"):gmatch("(.-)\n") do
+			local l = line:match("^%s*(.-)%s*$")
+			if l ~= "" then
+				if not title then
+					title = l
+				else
+					details[#details + 1] = ghTag(l)
+				end
+			end
+		end
+		local author = type(cm.author) == "table" and cm.author.name or nil
+		local when = type(cm.author) == "table" and cm.author.date or (type(cm.committer) == "table" and cm.committer.date) or nil
+		local sha = tostring(c.sha):sub(1, 7)
+		local body
+		if #details > 0 then
+			body = "• " .. table.concat(details, "\n• ")
+		else
+			body = "Commit #" .. sha .. (author and (" par " .. tostring(author)) or "")
+		end
+		return { Sha = sha, Title = title or ("Commit #" .. sha), Body = body, Date = ghDate(when), Author = author }
+	end
+
+	function Library:CheckUpdate(silent)
+		local st = Library.UpdateStatus
+		local function fail(msg)
+			st.Error = msg
+			if Library._updRefresh then Library._updRefresh() end
+			return false
+		end
+		local api = Library:_commitsURL()
+		st.Last = os.time()
+		if not api then return fail("UpdateURL invalide (lien RAW GitHub attendu)") end
+		local list = homeJson(api)
+		if not list then return fail("GitHub injoignable (ou limite de requêtes atteinte)") end
+		if type(list[1]) ~= "table" then
+			return fail(tostring(list.message or "Aucun commit trouvé pour ce fichier"):sub(1, 60))
+		end
+		local entries = {}
+		for _, c in ipairs(list) do
+			if type(c) == "table" and c.sha then entries[#entries + 1] = ghEntry(c) end
+		end
+		if #entries == 0 then return fail("Aucun commit trouvé pour ce fichier") end
+		st.Error = nil
+
+		-- le code chargé = le dernier commit vu à la 1re vérification ; tout ce qui est plus récent est « à recharger »
+		if not Library.LoadedSha then Library.LoadedSha = entries[1].Sha end
+		local idx = #entries + 1
+		for i, e in ipairs(entries) do
+			if e.Sha == Library.LoadedSha then idx = i break end
+		end
+		for i, e in ipairs(entries) do e.Pending = i < idx end
+		local top = entries[1]
+		local prevTop = Library._ghTop
+		Library._ghTop = top.Sha
+		st.Loaded, st.Remote, st.Available = Library.LoadedSha, top.Sha, idx > 1
+
+		local sigParts = {}
+		for _, e in ipairs(entries) do sigParts[#sigParts + 1] = e.Sha .. (e.Pending and "!" or "") end
+		local sig = table.concat(sigParts, ",")
+		Library.Commits = entries
+		if sig ~= Library._ghSig then
+			Library._ghSig = sig
+			local win = Library.Window
+			if win and win._homeTab then pcall(Library._buildChangelog, Library, win._homeTab) end
+		end
+
+		if prevTop and prevTop ~= top.Sha then
+			local fresh = {}
+			for _, e in ipairs(entries) do
+				if e.Sha == prevTop then break end
+				fresh[#fresh + 1] = e
+			end
+			if not silent then
+				Library:Notify({ Title = "Mise à jour disponible", Type = "Info", Duration = 6,
+					Content = top.Title .. " : les détails sont dans Home. Recharge le script pour l'appliquer." })
+			end
+			if Library.OnUpdate then pcall(Library.OnUpdate, top.Sha, fresh) end
+		end
 		if Library._updRefresh then Library._updRefresh() end
-		return false
+		return true
 	end
-	st.Error = nil
-	local known, fresh = {}, {}
-	for _, e in ipairs(Library.Changelog) do known[tostring(e.Version)] = true end
-	for _, e in ipairs(list) do
-		if type(e) == "table" and e.Version and not known[tostring(e.Version)] then
-			e.Version = tostring(e.Version)
-			e.Pending = verCmp(e.Version, Library.Version) > 0   -- plus récente que le code actuellement chargé
-			fresh[#fresh + 1] = e
-		end
-	end
-	local top = list[1] and tostring(list[1].Version) or nil
-	st.Remote = top
-	st.Available = top ~= nil and verCmp(top, Library.Version) > 0
-	if #fresh > 0 then
-		for _, e in ipairs(fresh) do table.insert(Library.Changelog, e) end
-		table.sort(Library.Changelog, function(a, b) return verCmp(a.Version, b.Version) > 0 end)
-		if st.Available then st.Source = body end
-		local win = Library.Window
-		if win and win._homeTab then pcall(Library._buildChangelog, Library, win._homeTab) end
-		if st.Available and not silent then
-			Library:Notify({ Title = "Mise à jour v" .. top, Type = "Info", Duration = 6,
-				Content = (fresh[1].Title or "Nouveautés") .. " : les nouveautés sont dans Home. Recharge le script pour les appliquer." })
-		end
-		if Library.OnUpdate then pcall(Library.OnUpdate, top, fresh, body) end
-	end
-	if Library._updRefresh then Library._updRefresh() end
-	return true
 end
 
 function Library:StartUpdateWatcher()
@@ -9546,10 +9663,10 @@ function Library:StartUpdateWatcher()
 	local token = Library._updToken
 	if not Library.UpdateURL or Library.UpdateURL == "" then return end
 	task.spawn(function()
-		task.wait(5)
+		task.wait(2)
 		while Library._updToken == token do
 			if Library.AutoUpdateCheck ~= false then pcall(Library.CheckUpdate, Library) end
-			task.wait(math.max(30, tonumber(Library.UpdateInterval) or 120))
+			task.wait(math.max(60, tonumber(Library.UpdateInterval) or 300))
 		end
 	end)
 end
@@ -9862,16 +9979,16 @@ function Window:CreateHomeTab(name, icon, cfg)
 		local up = tab:CreateBlock({ Name = "Mises à jour", Side = "Right" })
 		local us = up:CreateStats({ Columns = 1, CellHeight = 44, Items = {
 			{ Id = "cur", Name = "Version chargée", Value = "v" .. tostring(Library.Version) },
-			{ Id = "rem", Name = "Dernière version GitHub", Value = "…" },
+			{ Id = "rem", Name = "Dernier commit GitHub", Value = "…" },
 			{ Id = "last", Name = "Dernière vérification", Value = "—" },
 		} })
 		Library._updRefresh = function()
 			local st = Library.UpdateStatus
 			pcall(function()
-				us:Set("cur", "v" .. tostring(Library.Version))
+				us:Set("cur", "v" .. tostring(Library.Version) .. (st.Loaded and ("  ·  #" .. st.Loaded) or ""))
 				if st.Error then us:Set("rem", st.Error, Color3.fromRGB(255, 120, 120))
 				elseif st.Remote then
-					us:Set("rem", "v" .. st.Remote .. (st.Available and "  (nouvelle !)" or "  (à jour)"),
+					us:Set("rem", "#" .. st.Remote .. (st.Available and "  (nouvelle !)" or "  (à jour)"),
 						st.Available and Color3.fromRGB(120, 255, 160) or nil)
 				end
 				if st.Last then us:Set("last", os.date("%H:%M:%S", st.Last)) end
@@ -9888,9 +10005,12 @@ function Window:CreateHomeTab(name, icon, cfg)
 			end)
 		end })
 		up:CreateButton({ Name = "Recharger maintenant", Favorite = false, Callback = function()
-			local st = Library.UpdateStatus
-			if Library.OnReload and st.Source then
-				pcall(Library.OnReload, st.Source)
+			if Library.OnReload then
+				task.spawn(function()
+					local u = Library.UpdateURL
+					local src = homeHttpGet(u .. (u:find("?", 1, true) and "&" or "?") .. "t=" .. os.time())
+					pcall(Library.OnReload, src or u)
+				end)
 			else
 				Library:Notify({ Title = "Mises à jour", Type = "Info", Duration = 4,
 					Content = "Relance simplement ton script : il rechargera la dernière version depuis GitHub." })
@@ -15795,7 +15915,7 @@ function Library:CreateWindow(cfg)
 	}
 	Library:SetGradient()
 	if cfg.UpdateURL then Library.UpdateURL = tostring(cfg.UpdateURL) end
-	if cfg.UpdateInterval then Library.UpdateInterval = tonumber(cfg.UpdateInterval) or 120 end
+	if cfg.UpdateInterval then Library.UpdateInterval = tonumber(cfg.UpdateInterval) or 300 end
 	if cfg.Home ~= false then
 		local okh, errh = pcall(function() win:CreateHomeTab(cfg.HomeName or "Home", cfg.HomeIcon, cfg) end)
 		if not okh then warn("[Ui-Lib] Onglet Home : " .. tostring(errh)) end
