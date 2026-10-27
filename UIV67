@@ -7,6 +7,11 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V5.3 — APERÇU 3D (rig R6 dans un ViewportFrame)
+		• Block:CreatePreview3D({ Name, Height, Options }) : aperçu 3D piloté en direct par tes options (voir le bloc « V5.3 : APERÇU 3D »).
+		  Highlight, Chams, Box (Full / Corner), Squelette, Nom, Vie, Distance, Traceur, Point sur la tête. Glisser pour tourner.
+		  pv:Bind("Box", "flag" ou élément) / pv:BindAll({...}) / pv:Set("Box", true).
+
 	V5.2 — CURSEUR LIBRE, TOUCHES DU JEU, COLOR PICKER
 		• Paramètres > Fenêtre : « Libérer le curseur » et « Bloquer les touches du jeu » (Library:SetFreeCursor / SetBlockGameKeys,
 		  CreateWindow({ FreeCursor = true, BlockGameKeys = false }), Library.BlockedKeys = touches bloquées : W A S D Espace par défaut).
@@ -8187,6 +8192,528 @@ function Block:CreateImage(o)
 	item.Instance = im
 	return item
 end
+
+-- ============================================================================
+-- V5.3 : APERÇU 3D  (rig R6 dans un ViewportFrame, piloté en direct par tes toggles / options)
+--   local pv = block:CreatePreview3D({ Name = "Aperçu", Height = 240,
+--       Options = { Box = true, Skeleton = true },            -- valeurs de départ (facultatif)
+--   })
+--   -- Lier une option de l'aperçu à un Flag OU à un élément (toggle, slider, color picker, dropdown) :
+--   pv:Bind("Box", "esp.box")                       pv:Bind("BoxColor", boxColorItem)
+--   pv:BindAll({ Box = "esp.box", BoxColor = "esp.boxcolor", Skeleton = "esp.skel", HealthValue = "esp.hp" })
+--   -- ou à la main : pv:Set("Chams", true)  pv:Set({ Box = false, ChamsColor = Color3.new(1, 0, 0) })  pv:Get("Box")
+--   Options (insensibles à la casse) :
+--     Highlight · HighlightFill · HighlightOutline · HighlightFillTransparency · HighlightOutlineTransparency
+--     Chams · ChamsColor · ChamsTransparency
+--     Box · BoxColor · BoxThickness · BoxStyle ("Full" | "Corner") · BoxFill · BoxFillTransparency
+--     Skeleton · SkeletonColor · SkeletonThickness
+--     Name · NameText · NameColor · Health · HealthValue (0..1) · Distance · DistanceText · DistanceColor
+--     Tracer · TracerColor · TracerOrigin ("Bottom" | "Center" | "Top") · HeadDot · HeadDotColor
+--     AutoRotate · RotateSpeed (°/s) · Animate (balancement des membres) · Floor · Zoom (1 = normal)
+--   Glisser avec la souris / le doigt pour tourner l'aperçu. pv:ResetView() · pv:SetRotation(deg) · pv:SetHeight(px)
+-- ============================================================================
+local PV_WHITE = Color3.fromRGB(255, 255, 255)
+local PV_DEFAULTS = {
+	Highlight = false, HighlightFill = PV_WHITE, HighlightOutline = PV_WHITE,
+	HighlightFillTransparency = 0.6, HighlightOutlineTransparency = 0,
+	Chams = false, ChamsColor = Color3.fromRGB(255, 70, 70), ChamsTransparency = 0.35,
+	Box = true, BoxColor = PV_WHITE, BoxThickness = 1, BoxStyle = "Full", BoxFill = false, BoxFillTransparency = 0.85,
+	Skeleton = false, SkeletonColor = PV_WHITE, SkeletonThickness = 1,
+	Name = true, NameText = "Joueur", NameColor = PV_WHITE,
+	Health = true, HealthValue = 0.75,
+	Distance = true, DistanceText = "42 m", DistanceColor = Color3.fromRGB(190, 190, 198),
+	Tracer = false, TracerColor = PV_WHITE, TracerOrigin = "Bottom",
+	HeadDot = false, HeadDotColor = PV_WHITE,
+	AutoRotate = true, RotateSpeed = 30, Animate = true, Floor = true, Zoom = 1,
+}
+local PV_KEYS = {}
+for k in pairs(PV_DEFAULTS) do PV_KEYS[string.lower(k)] = k end
+
+local PV_FOCUS = Vector3.new(0, -0.5, 0)
+local PV_SEGS = {
+	{ "head", "neck" }, { "neck", "pelvis" }, { "shL", "shR" }, { "shL", "handL" },
+	{ "shR", "handR" }, { "hipL", "hipR" }, { "hipL", "footL" }, { "hipR", "footR" },
+}
+local PV_CORNERS = {}
+for _, x in ipairs({ -2, 2 }) do
+	for _, y in ipairs({ -3, 2 }) do
+		for _, z in ipairs({ -0.5, 0.5 }) do PV_CORNERS[#PV_CORNERS + 1] = Vector3.new(x, y, z) end
+	end
+end
+
+local function pvColor(v, fb)
+	local t = typeof(v)
+	if t == "Color3" then return v end
+	if t == "table" and v.R and v.G and v.B then return Color3.new(v.R, v.G, v.B) end
+	if t == "string" and Library._parseHex then
+		local c = Library._parseHex(v)
+		if c then return c end
+	end
+	return fb
+end
+
+function Block:CreatePreview3D(o)
+	if type(o) ~= "table" then o = { Name = o } end
+	local title = o.Name
+	if title == nil then title = "Aperçu 3D" end
+	local cap = title ~= false and title ~= ""
+	local h = math.clamp(tonumber(o.Height) or 240, 120, 520)
+	local top = cap and 28 or 6
+	local f = makeRow(self, h + top + 6, cap and title or "Aperçu 3D")
+	local titleLbl
+	if cap then
+		titleLbl = label(f, title, 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -24, 0, 28) })
+	end
+
+	local vp = new("ViewportFrame", {
+		Position = UDim2.new(0, 8, 0, top), Size = UDim2.new(1, -16, 0, h),
+		BackgroundColor3 = Color3.fromRGB(10, 10, 13), BackgroundTransparency = 0, BorderSizePixel = 0,
+		Ambient = Color3.fromRGB(170, 170, 176), LightColor = Color3.fromRGB(255, 255, 255),
+		LightDirection = Vector3.new(-0.6, -1, -0.5), ClipsDescendants = true, Active = true,
+	}, f)
+	corner(vp, 6)
+	-- calque 2D (box, squelette, texte...) posé au-dessus du rendu 3D
+	local ov = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, ClipsDescendants = true, ZIndex = 2 }, vp)
+
+	-- ---------------------------------------------------------------- options
+	local opt = {}
+	for k, v in pairs(PV_DEFAULTS) do opt[k] = v end
+	local dirty = true
+	local function setOpt(k, v)
+		k = PV_KEYS[string.lower(tostring(k))]
+		if not k then return false end
+		local def = PV_DEFAULTS[k]
+		if typeof(def) == "Color3" then
+			v = pvColor(v, opt[k])
+		elseif type(def) == "boolean" then
+			v = v and true or false
+		elseif type(def) == "number" then
+			v = tonumber(v) or opt[k]
+		else
+			if type(v) == "table" then return false end   -- ex. dropdown multi : ignoré
+			v = tostring(v)
+		end
+		if opt[k] ~= v then
+			opt[k] = v
+			dirty = true
+		end
+		return true
+	end
+	for k, v in pairs(o.Options or o.Defaults or {}) do setOpt(k, v) end
+
+	-- ---------------------------------------------------------------- rig R6
+	local rig = new("Model", { Name = "R6Rig" }, vp)
+	local parts, baseColor = {}, {}
+	local function mk(name, size, color)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Size = size
+		p.Color = color
+		p.Material = Enum.Material.SmoothPlastic
+		p.Anchored = true
+		p.CanCollide, p.CanTouch, p.CanQuery, p.CastShadow = false, false, false, false
+		p.TopSurface, p.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
+		p.Parent = rig
+		parts[#parts + 1] = p
+		baseColor[p] = color
+		return p
+	end
+	local skin = Color3.fromRGB(245, 205, 48)
+	local head = mk("Head", Vector3.new(2, 1, 1), skin)
+	local hm = Instance.new("SpecialMesh")
+	hm.MeshType = Enum.MeshType.Head
+	hm.Scale = Vector3.new(1.25, 1.25, 1.25)
+	hm.Parent = head
+	local face
+	pcall(function()
+		face = Instance.new("Decal")
+		face.Face = Enum.NormalId.Front
+		face.Texture = "rbxasset://textures/face.png"
+		face.Parent = head
+	end)
+	local torso = mk("Torso", Vector3.new(2, 2, 1), Color3.fromRGB(13, 105, 172))
+	local armL = mk("Left Arm", Vector3.new(1, 2, 1), skin)
+	local armR = mk("Right Arm", Vector3.new(1, 2, 1), skin)
+	local legL = mk("Left Leg", Vector3.new(1, 2, 1), Color3.fromRGB(40, 127, 71))
+	local legR = mk("Right Leg", Vector3.new(1, 2, 1), Color3.fromRGB(40, 127, 71))
+	head.CFrame = CFrame.new(0, 1.5, 0)
+	torso.CFrame = CFrame.new(0, 0, 0)
+
+	local floor = Instance.new("Part")
+	floor.Name = "Floor"
+	floor.Shape = Enum.PartType.Cylinder
+	floor.Size = Vector3.new(0.1, 7, 7)
+	floor.CFrame = CFrame.new(0, -3.05, 0) * CFrame.Angles(0, 0, math.pi / 2)
+	floor.Color = Color3.fromRGB(26, 26, 31)
+	floor.Material = Enum.Material.SmoothPlastic
+	floor.Anchored, floor.CanCollide, floor.CanQuery, floor.CanTouch, floor.CastShadow = true, false, false, false, false
+	floor.Parent = rig
+
+	-- Highlight (si le moteur l'affiche dans un ViewportFrame ; sinon repli : teinte du corps)
+	local hl
+	pcall(function()
+		hl = Instance.new("Highlight")
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.Adornee = rig
+		hl.Enabled = false
+		hl.Parent = vp
+	end)
+
+	local J = {
+		head = Vector3.new(0, 1.5, 0), neck = Vector3.new(0, 1, 0), pelvis = Vector3.new(0, -1, 0),
+		shL = Vector3.new(-1, 0.5, 0), shR = Vector3.new(1, 0.5, 0),
+		hipL = Vector3.new(-0.5, -1, 0), hipR = Vector3.new(0.5, -1, 0),
+	}
+	local function limb(part, pivot, off, ang, tip)
+		local cf = CFrame.new(pivot) * CFrame.Angles(ang, 0, 0)
+		part.CFrame = cf * CFrame.new(off)
+		return cf * tip
+	end
+	local function pose(a)
+		J.handL = limb(armL, J.shL, Vector3.new(-0.5, -0.5, 0), a, Vector3.new(-0.5, -1.5, 0))
+		J.handR = limb(armR, J.shR, Vector3.new(0.5, -0.5, 0), -a, Vector3.new(0.5, -1.5, 0))
+		J.footL = limb(legL, J.hipL, Vector3.new(0, -1, 0), -a, Vector3.new(0, -2, 0))
+		J.footR = limb(legR, J.hipR, Vector3.new(0, -1, 0), a, Vector3.new(0, -2, 0))
+	end
+	pose(0)
+
+	local function applyAppearance()
+		for _, p in ipairs(parts) do
+			if opt.Chams then
+				p.Color = opt.ChamsColor
+				p.Material = Enum.Material.Neon
+				p.Transparency = opt.ChamsTransparency
+			else
+				local c = baseColor[p]
+				if not hl and opt.Highlight then c = c:Lerp(opt.HighlightFill, 1 - opt.HighlightFillTransparency) end
+				p.Color = c
+				p.Material = Enum.Material.SmoothPlastic
+				p.Transparency = 0
+			end
+		end
+		if face then face.Transparency = opt.Chams and 1 or 0 end
+		floor.Transparency = opt.Floor and 0.15 or 1
+		if hl then
+			hl.Enabled = opt.Highlight
+			hl.FillColor = opt.HighlightFill
+			hl.OutlineColor = opt.HighlightOutline
+			hl.FillTransparency = opt.HighlightFillTransparency
+			hl.OutlineTransparency = opt.HighlightOutlineTransparency
+		end
+	end
+
+	-- ---------------------------------------------------------------- caméra
+	local cam = Instance.new("Camera")
+	cam.FieldOfView = 40
+	cam.Parent = vp
+	vp.CurrentCamera = cam
+	local YAW0, PITCH0 = math.pi + 0.5, -0.12
+	local yaw, pitch = YAW0, PITCH0
+	local dragging = false
+
+	-- ---------------------------------------------------------------- calque 2D
+	local lines, nLines = {}, 0
+	local function drawLine(a, b, color, th, tr)
+		nLines += 1
+		local l = lines[nLines]
+		if not l then
+			l = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, Visible = false, ZIndex = 3 }, ov)
+			lines[nLines] = l
+		end
+		local d = b - a
+		l.Position = UDim2.fromOffset((a.X + b.X) / 2, (a.Y + b.Y) / 2)
+		l.Size = UDim2.fromOffset(d.Magnitude + 0.5, th)
+		l.Rotation = math.deg(math.atan2(d.Y, d.X))
+		l.BackgroundColor3 = color
+		l.BackgroundTransparency = tr or 0
+		l.Visible = true
+	end
+
+	local bx = new("Frame", { BorderSizePixel = 0, BackgroundTransparency = 1, Visible = false, ZIndex = 3 }, ov)
+	local bxStroke = new("UIStroke", { Thickness = 1, ApplyStrokeMode = BORDER }, bx)
+	local hbBg = new("Frame", { BorderSizePixel = 0, BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+		BackgroundTransparency = 0.3, Visible = false, ZIndex = 3 }, ov)
+	local hbFill = new("Frame", { BorderSizePixel = 0, AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 1, 1, 0), Size = UDim2.new(1, -2, 1, 0), ZIndex = 4 }, hbBg)
+	local nameL = new("TextLabel", { BackgroundTransparency = 1, Font = F_BOLD, TextSize = 12, Text = "",
+		AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(160, 14), TextStrokeTransparency = 0.4,
+		Visible = false, ZIndex = 4 }, ov)
+	local distL = new("TextLabel", { BackgroundTransparency = 1, Font = F_MED, TextSize = 11, Text = "",
+		AnchorPoint = Vector2.new(0.5, 0), Size = UDim2.fromOffset(160, 13), TextStrokeTransparency = 0.5,
+		Visible = false, ZIndex = 4 }, ov)
+	local dot = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, BorderSizePixel = 0,
+		Visible = false, ZIndex = 3 }, ov)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+	local dotStroke = new("UIStroke", { Thickness = 1.5, ApplyStrokeMode = BORDER }, dot)
+	local hint = new("TextLabel", { BackgroundTransparency = 1, Font = F_REG, TextSize = 10, Text = "glisser pour tourner",
+		TextColor3 = T.ElementAccent, TextTransparency = 0.55, TextXAlignment = LEFT, AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 8, 1, -4), Size = UDim2.new(1, -16, 0, 12), ZIndex = 4 }, ov)
+
+	-- ---------------------------------------------------------------- liens (Flag / élément -> option)
+	local binds = {}
+	local function readSrc(src)
+		if type(src) == "string" then
+			local v = Library.Flags[src]
+			if v == nil then
+				local it = Library.Items[src]
+				if it and it.Get then
+					local ok, r = pcall(it.Get, it)
+					if ok then v = r end
+				end
+			end
+			return v
+		elseif type(src) == "table" and src.Get then
+			local ok, r = pcall(src.Get, src)
+			if ok then return r end
+		end
+		return nil
+	end
+	local function pollBinds()
+		for _, b in ipairs(binds) do
+			local v = readSrc(b.src)
+			if v ~= nil then
+				if b.fn then
+					local ok, r = pcall(b.fn, v)
+					v = ok and r or nil
+				end
+				if v ~= nil then setOpt(b.opt, v) end
+			end
+		end
+	end
+
+	-- ---------------------------------------------------------------- boucle de rendu
+	local t, pollT, shownT, shown = 0, 0, -1, true
+	local function isShown()
+		local p = vp
+		while p and p:IsA("GuiObject") do
+			if not p.Visible then return false end
+			p = p.Parent
+		end
+		if p and p:IsA("ScreenGui") and not p.Enabled then return false end
+		return true
+	end
+
+	local function render(dt)
+		local sc = vp.AbsoluteSize.Y / h
+		if sc <= 0.01 then return end
+		local W, H = vp.AbsoluteSize.X / sc, h
+		t += dt
+		if opt.AutoRotate and not dragging then yaw += math.rad(opt.RotateSpeed) * dt end
+		local dist = 9.6 / math.clamp(opt.Zoom, 0.4, 3)
+		cam.CFrame = CFrame.new(PV_FOCUS) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0) * CFrame.new(0, 0, dist)
+		pose(opt.Animate and math.sin(t * 3) * 0.55 or 0)
+
+		local tanH = math.tan(math.rad(cam.FieldOfView) / 2)
+		local asp = W / H
+		local cf = cam.CFrame
+		local function proj(p)
+			local v = cf:PointToObjectSpace(p)
+			local d = -v.Z
+			if d < 0.2 then return nil end
+			return Vector2.new((v.X / d / (tanH * asp) * 0.5 + 0.5) * W, (0.5 - v.Y / d / tanH * 0.5) * H), d
+		end
+
+		nLines = 0
+		local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+		for _, c in ipairs(PV_CORNERS) do
+			local p = proj(c)
+			if p then
+				minX, minY = math.min(minX, p.X), math.min(minY, p.Y)
+				maxX, maxY = math.max(maxX, p.X), math.max(maxY, p.Y)
+			end
+		end
+		local okBox = minX < maxX and minY < maxY
+		local bw, bh, cx = maxX - minX, maxY - minY, (minX + maxX) / 2
+
+		-- box
+		local st = string.lower(opt.BoxStyle)
+		local isCorner = st == "corner" or st == "coins" or st == "angles"
+		local showBox = opt.Box and okBox
+		bx.Visible = showBox and ((not isCorner) or opt.BoxFill)
+		if bx.Visible then
+			bx.Position = UDim2.fromOffset(minX, minY)
+			bx.Size = UDim2.fromOffset(bw, bh)
+			bx.BackgroundColor3 = opt.BoxColor
+			bx.BackgroundTransparency = opt.BoxFill and opt.BoxFillTransparency or 1
+			bxStroke.Enabled = not isCorner
+			bxStroke.Color = opt.BoxColor
+			bxStroke.Thickness = opt.BoxThickness
+		end
+		if showBox and isCorner then
+			local lx, ly = bw * 0.28, bh * 0.2
+			local c, th = opt.BoxColor, opt.BoxThickness
+			local function V(x, y) return Vector2.new(x, y) end
+			drawLine(V(minX, minY), V(minX + lx, minY), c, th)
+			drawLine(V(minX, minY), V(minX, minY + ly), c, th)
+			drawLine(V(maxX, minY), V(maxX - lx, minY), c, th)
+			drawLine(V(maxX, minY), V(maxX, minY + ly), c, th)
+			drawLine(V(minX, maxY), V(minX + lx, maxY), c, th)
+			drawLine(V(minX, maxY), V(minX, maxY - ly), c, th)
+			drawLine(V(maxX, maxY), V(maxX - lx, maxY), c, th)
+			drawLine(V(maxX, maxY), V(maxX, maxY - ly), c, th)
+		end
+
+		-- squelette
+		if opt.Skeleton then
+			for _, seg in ipairs(PV_SEGS) do
+				local a, b = proj(J[seg[1]]), proj(J[seg[2]])
+				if a and b then drawLine(a, b, opt.SkeletonColor, opt.SkeletonThickness) end
+			end
+		end
+
+		-- point sur la tête
+		local hp, hd = proj(J.head)
+		dot.Visible = opt.HeadDot and hp ~= nil
+		if dot.Visible then
+			local r = 0.55 * H / (2 * tanH * hd)
+			dot.Position = UDim2.fromOffset(hp.X, hp.Y)
+			dot.Size = UDim2.fromOffset(r * 2, r * 2)
+			dotStroke.Color = opt.HeadDotColor
+		end
+
+		-- traceur
+		if opt.Tracer and okBox then
+			local o2 = string.lower(opt.TracerOrigin)
+			local from = Vector2.new(W / 2, (o2 == "top" and 0) or ((o2 == "center" or o2 == "centre") and H / 2) or H)
+			drawLine(from, Vector2.new(cx, maxY), opt.TracerColor, 1, 0.1)
+		end
+
+		-- barre de vie
+		hbBg.Visible = opt.Health and okBox
+		if hbBg.Visible then
+			local hv = math.clamp(opt.HealthValue, 0, 1)
+			hbBg.Position = UDim2.fromOffset(minX - 7, minY)
+			hbBg.Size = UDim2.fromOffset(4, bh)
+			hbFill.Size = UDim2.new(1, -2, hv, 0)
+			hbFill.BackgroundColor3 = Color3.fromRGB(235, 65, 65):Lerp(Color3.fromRGB(75, 220, 105), hv)
+		end
+
+		-- nom / distance
+		nameL.Visible = opt.Name and okBox
+		if nameL.Visible then
+			nameL.Position = UDim2.fromOffset(cx, minY - 3)
+			nameL.Text = opt.NameText
+			nameL.TextColor3 = opt.NameColor
+		end
+		distL.Visible = opt.Distance and okBox
+		if distL.Visible then
+			distL.Position = UDim2.fromOffset(cx, maxY + 2)
+			distL.Text = opt.DistanceText
+			distL.TextColor3 = opt.DistanceColor
+		end
+
+		for i = nLines + 1, #lines do lines[i].Visible = false end
+	end
+
+	local hbConn
+	hbConn = RunService.Heartbeat:Connect(function(dt)
+		local now = os.clock()
+		if now - shownT > 0.25 then
+			shownT = now
+			shown = isShown()
+		end
+		if not shown then return end
+		pollT += dt
+		if pollT >= 0.05 then
+			pollT = 0
+			if #binds > 0 then pollBinds() end
+		end
+		if dirty then
+			dirty = false
+			applyAppearance()
+		end
+		render(dt)
+	end)
+	track(hbConn)
+	f.Destroying:Connect(function() pcall(function() hbConn:Disconnect() end) end)
+
+	-- ---------------------------------------------------------------- rotation à la souris / au doigt
+	vp.InputBegan:Connect(function(i)
+		if isPress(i) then
+			dragging = true
+			tween(hint, { TextTransparency = 1 }, 0.2)
+		end
+	end)
+	track(UIS.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			yaw -= i.Delta.X * 0.012
+			pitch = math.clamp(pitch - i.Delta.Y * 0.006, -1, 0.6)
+		end
+	end))
+	track(UIS.InputEnded:Connect(function(i)
+		if dragging and isPress(i) then dragging = false end
+	end))
+
+	-- ---------------------------------------------------------------- API
+	local item = {}
+	item.Set = function(...)
+		local a, b = unself(item, ...)
+		if type(a) == "table" then
+			for k, v in pairs(a) do setOpt(k, v) end
+		elseif a ~= nil then
+			setOpt(a, b)
+		end
+	end
+	item.SetOptions = item.Set
+	item.Get = function(...)
+		local a = unself(item, ...)
+		if a == nil then return table.clone(opt) end
+		local k = PV_KEYS[string.lower(tostring(a))]
+		return k and opt[k] or nil
+	end
+	item.Bind = function(...)
+		local k, src, fn = unself(item, ...)
+		local key = PV_KEYS[string.lower(tostring(k))]
+		if not key then
+			warn("[Ui-Lib] Preview3D : option inconnue « " .. tostring(k) .. " »")
+			return item
+		end
+		for _, b in ipairs(binds) do
+			if b.opt == key then
+				b.src, b.fn = src, fn
+				return item
+			end
+		end
+		binds[#binds + 1] = { opt = key, src = src, fn = fn }
+		return item
+	end
+	item.BindAll = function(...)
+		local map = unself(item, ...)
+		if type(map) == "table" then
+			for k, src in pairs(map) do item.Bind(k, src) end
+		end
+		return item
+	end
+	item.Unbind = function(...)
+		local k = unself(item, ...)
+		local key = PV_KEYS[string.lower(tostring(k))]
+		for i = #binds, 1, -1 do
+			if binds[i].opt == key then table.remove(binds, i) end
+		end
+	end
+	item.ResetView = function() yaw, pitch = YAW0, PITCH0 end
+	item.SetRotation = function(...)
+		local d = tonumber((unself(item, ...)))
+		if d then yaw = math.rad(d) end
+	end
+	item.SetHeight = function(...)
+		local nh = math.clamp(tonumber((unself(item, ...))) or h, 120, 520)
+		h = nh
+		f.Size = UDim2.new(1, 0, 0, nh + top + 6)
+		vp.Size = UDim2.new(1, -16, 0, nh)
+	end
+	item.SetName = function(...)
+		local s = tostring((unself(item, ...)))
+		if titleLbl then titleLbl.Text = s end
+	end
+	item.Instance = f
+	item.Viewport = vp
+	item.Camera = cam
+	item.Model = rig
+	return item
+end
+Block.CreateESPPreview = Block.CreatePreview3D
+
 
 -- ============================================================================
 -- V5 : MINI-FENÊTRES FLOTTANTES  (détacher un bloc, 1 à 5 max)
