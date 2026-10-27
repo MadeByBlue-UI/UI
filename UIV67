@@ -49,7 +49,7 @@
 		• Nouveaux éléments : Block:CreateTextArea / CreateRadio / CreateTable / CreateImage.
 		• Change-Log : affiché dans l'onglet Home (plus d'onglet séparé) : Library:AddChangelog(version, { notes }) le met à jour tout seul.
 		• Onglet « Éditeur de thème » : aperçu en direct + dégradés (Library:SetGradient({...})). ChangeLog = false /
-		  ThemeEditor = false dans CreateWindow pour les masquer.
+		  (l'éditeur de thème a été fusionné dans Paramètres > Thèmes).
 
 	API (inchangée) :
 		Library:CreateWindow({...})            -> Window
@@ -9210,9 +9210,15 @@ end
 -- ============================================================================
 -- V5 : HISTORIQUE DES VERSIONS (affiché dans l'onglet Home depuis la V5.3)
 -- ============================================================================
-Library.Version = "5.4.0"
+Library.Version = "5.5.0"
 Library.AppName = "Ui-Lib"
 Library.Changelog = {
+	{ Version = "5.5.0", Date = "2026-10-27", Title = "Mises à jour automatiques", Notes = {
+		"Mises à jour depuis GitHub : l'UI relit ton fichier RAW toute seule et ajoute les nouvelles versions dans Home > Nouveautés (CreateWindow({ UpdateURL = ... })).",
+		"Nouveau bloc « Mises à jour » dans Home : version chargée, dernière version GitHub, bouton « Vérifier maintenant ».",
+		"Le trou noir est au centre par défaut. Nouvelle icône agrandie pour l'onglet Réglages.",
+		"L'onglet « Éditeur de thème » est fusionné dans Paramètres > Thèmes (dégradé personnalisé ajouté).",
+	} },
 	{ Version = "5.4.0", Date = "2026-10-27", Title = "Type d'interface « Carré »", Notes = {
 		"Nouveau type d'interface « Carré » (Paramètres > Apparence > Type d'interface) : style rétro, simple et 100 % carré.",
 		"Onglets en texte dans une barre du haut (l'onglet actif est souligné), titre des blocs posé sur la bordure, tous les coins carrés, police monospace.",
@@ -9290,8 +9296,8 @@ function Library:_buildChangelog(tab)
 	tab._logBlocks = {}
 	if Library.ShowChangelog == false then return end
 	for i, e in ipairs(Library.Changelog) do
-		local b = tab:CreateBlock({ Name = "Nouveautés v" .. tostring(e.Version) .. (e.Date and ("  ·  " .. e.Date) or ""),
-			Side = (i % 2 == 1) and "Left" or "Right", Collapsed = i > 1 })
+		local b = tab:CreateBlock({ Name = "Nouveautés v" .. tostring(e.Version) .. (e.Date and ("  ·  " .. e.Date) or "") .. (e.Pending and "  ·  NOUVEAU (à recharger)" or ""),
+			Side = (i % 2 == 1) and "Left" or "Right", Collapsed = (i > 1 and not e.Pending) })
 		b:CreateParagraph({ Title = e.Title or "Nouveautés", Content = "• " .. table.concat(e.Notes or {}, "\n• ") })
 		tab._logBlocks[#tab._logBlocks + 1] = b
 	end
@@ -9448,6 +9454,104 @@ local function homeJson(url)
 	if not body then return nil end
 	local ok, d = pcall(function() return HttpService:JSONDecode(body) end)
 	return (ok and type(d) == "table") and d or nil
+end
+
+-- ---------------------------------------------------------------------------
+-- MISES À JOUR AUTOMATIQUES (depuis ton GitHub RAW)
+--   CreateWindow({ UpdateURL = "https://raw.githubusercontent.com/.../Ui-Lib-Simple.lua", UpdateInterval = 120 })
+--   • Toutes les UpdateInterval secondes, l'UI relit le fichier RAW et lit SEULEMENT sa table Library.Changelog (jamais exécutée en entier).
+--   • Chaque version qu'elle ne connaît pas encore est ajoutée toute seule dans Home > Nouveautés (marquée « à recharger ») + notification.
+--   • Pour publier une mise à jour : ajoute une entrée en haut de Library.Changelog (version PLUS HAUTE que l'ancienne) et pousse sur GitHub.
+--   • Library.OnUpdate = function(version, entrees, source) ... end  (optionnel)  ·  Library.OnReload = function(source) ... end
+--     (optionnel : appelé par le bouton « Recharger maintenant » de Home, par ex. pour détruire l'UI et relancer ton script).
+--   • Library:CheckUpdate() vérifie tout de suite · Library.AutoUpdateCheck = false coupe la vérification automatique.
+-- ---------------------------------------------------------------------------
+Library.UpdateURL = Library.UpdateURL or nil
+Library.UpdateInterval = 120
+Library.AutoUpdateCheck = true
+Library.UpdateStatus = { Last = nil, Remote = nil, Available = false, Error = nil, Source = nil }
+
+local function verParts(v)
+	local t = {}
+	for n in tostring(v):gmatch("%d+") do t[#t + 1] = tonumber(n) end
+	return t
+end
+local function verCmp(a, b)   -- > 0 si a est plus récente que b
+	local x, y = verParts(a), verParts(b)
+	for i = 1, math.max(#x, #y) do
+		local d = (x[i] or 0) - (y[i] or 0)
+		if d ~= 0 then return d end
+	end
+	return 0
+end
+
+-- lit uniquement la table « Library.Changelog = { ... } » du fichier distant (constantes seulement, sans rien lancer d'autre)
+local function parseRemoteChangelog(src)
+	local s0 = src:find("Library.Changelog = {", 1, true)
+	if not s0 then return nil end
+	local from = src:find("{", s0, true)
+	local to = src:find("\n}\n", from, true)
+	if not to then return nil end
+	local fn = loadstring("return " .. src:sub(from, to + 1))
+	if not fn then return nil end
+	pcall(function() if setfenv then setfenv(fn, {}) end end)
+	local ok, t = pcall(fn)
+	return (ok and type(t) == "table") and t or nil
+end
+
+function Library:CheckUpdate(silent)
+	local url = Library.UpdateURL
+	local st = Library.UpdateStatus
+	if not url or url == "" then st.Error = "Aucun lien UpdateURL" return false end
+	local body = homeHttpGet(url .. (url:find("?", 1, true) and "&" or "?") .. "t=" .. os.time())
+	st.Last = os.time()
+	if not body then st.Error = "Lien injoignable" if Library._updRefresh then Library._updRefresh() end return false end
+	local list = parseRemoteChangelog(body)
+	if not list or #list == 0 then
+		st.Error = "Change-log introuvable dans le fichier distant"
+		if Library._updRefresh then Library._updRefresh() end
+		return false
+	end
+	st.Error = nil
+	local known, fresh = {}, {}
+	for _, e in ipairs(Library.Changelog) do known[tostring(e.Version)] = true end
+	for _, e in ipairs(list) do
+		if type(e) == "table" and e.Version and not known[tostring(e.Version)] then
+			e.Version = tostring(e.Version)
+			e.Pending = verCmp(e.Version, Library.Version) > 0   -- plus récente que le code actuellement chargé
+			fresh[#fresh + 1] = e
+		end
+	end
+	local top = list[1] and tostring(list[1].Version) or nil
+	st.Remote = top
+	st.Available = top ~= nil and verCmp(top, Library.Version) > 0
+	if #fresh > 0 then
+		for _, e in ipairs(fresh) do table.insert(Library.Changelog, e) end
+		table.sort(Library.Changelog, function(a, b) return verCmp(a.Version, b.Version) > 0 end)
+		if st.Available then st.Source = body end
+		local win = Library.Window
+		if win and win._homeTab then pcall(Library._buildChangelog, Library, win._homeTab) end
+		if st.Available and not silent then
+			Library:Notify({ Title = "Mise à jour v" .. top, Type = "Info", Duration = 6,
+				Content = (fresh[1].Title or "Nouveautés") .. " : les nouveautés sont dans Home. Recharge le script pour les appliquer." })
+		end
+		if Library.OnUpdate then pcall(Library.OnUpdate, top, fresh, body) end
+	end
+	if Library._updRefresh then Library._updRefresh() end
+	return true
+end
+
+function Library:StartUpdateWatcher()
+	Library._updToken = (Library._updToken or 0) + 1
+	local token = Library._updToken
+	if not Library.UpdateURL or Library.UpdateURL == "" then return end
+	task.spawn(function()
+		task.wait(5)
+		while Library._updToken == token do
+			if Library.AutoUpdateCheck ~= false then pcall(Library.CheckUpdate, Library) end
+			task.wait(math.max(30, tonumber(Library.UpdateInterval) or 120))
+		end
+	end)
 end
 
 -- ---------------------------------------------------------------------------
@@ -9746,12 +9850,54 @@ function Window:CreateHomeTab(name, icon, cfg)
 		{ Id = "placeid", Name = "Place ID", Value = tostring(game.PlaceId) },
 		{ Id = "job", Name = "Job ID", Value = (jid ~= "" and (string.sub(jid, 1, 8) .. "…") or "Studio / local") },
 		{ Id = "exec", Name = "Exécuteur", Value = exName },
-		{ Id = "ui", Name = "Version de l'UI", Value = "v" .. tostring(Library.Changelog[1] and Library.Changelog[1].Version or Library.Version) },
+		{ Id = "ui", Name = "Version de l'UI", Value = "v" .. tostring(Library.Version) },
 	} })
 	task.spawn(function()
 		local ok, info = pcall(function() return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId) end)
 		if ok and type(info) == "table" and info.Name then sv:Set("place", info.Name) end
 	end)
+
+	-- ----- mises à jour (depuis GitHub)
+	if Library.UpdateURL and Library.UpdateURL ~= "" then
+		local up = tab:CreateBlock({ Name = "Mises à jour", Side = "Right" })
+		local us = up:CreateStats({ Columns = 1, CellHeight = 44, Items = {
+			{ Id = "cur", Name = "Version chargée", Value = "v" .. tostring(Library.Version) },
+			{ Id = "rem", Name = "Dernière version GitHub", Value = "…" },
+			{ Id = "last", Name = "Dernière vérification", Value = "—" },
+		} })
+		Library._updRefresh = function()
+			local st = Library.UpdateStatus
+			pcall(function()
+				us:Set("cur", "v" .. tostring(Library.Version))
+				if st.Error then us:Set("rem", st.Error, Color3.fromRGB(255, 120, 120))
+				elseif st.Remote then
+					us:Set("rem", "v" .. st.Remote .. (st.Available and "  (nouvelle !)" or "  (à jour)"),
+						st.Available and Color3.fromRGB(120, 255, 160) or nil)
+				end
+				if st.Last then us:Set("last", os.date("%H:%M:%S", st.Last)) end
+			end)
+		end
+		up:CreateToggle({ Name = "Vérifier automatiquement", Favorite = false, Keybind = false,
+			Default = Library.AutoUpdateCheck ~= false, Callback = function(v) Library.AutoUpdateCheck = v end })
+		up:CreateButton({ Name = "Vérifier maintenant", Favorite = false, Callback = function()
+			task.spawn(function()
+				local ok = Library:CheckUpdate(true)
+				local st = Library.UpdateStatus
+				Library:Notify({ Title = "Mises à jour", Duration = 3, Type = ok and (st.Available and "Info" or "Success") or "Error",
+					Content = ok and (st.Available and ("Version v" .. tostring(st.Remote) .. " disponible : voir les nouveautés ci-dessous.") or "Tu as déjà la dernière version.") or tostring(st.Error) })
+			end)
+		end })
+		up:CreateButton({ Name = "Recharger maintenant", Favorite = false, Callback = function()
+			local st = Library.UpdateStatus
+			if Library.OnReload and st.Source then
+				pcall(Library.OnReload, st.Source)
+			else
+				Library:Notify({ Title = "Mises à jour", Type = "Info", Duration = 4,
+					Content = "Relance simplement ton script : il rechargera la dernière version depuis GitHub." })
+			end
+		end })
+		Library._updRefresh()
+	end
 
 	-- ----- nouveautés (automatiques)
 	Library:_buildChangelog(tab)
@@ -9822,177 +9968,6 @@ function Window:CreateHomeTab(name, icon, cfg)
 		if friendsDirty and friendLoaded then rebuildFriends() end
 		if friendLoaded and not friendBusy and now - friendAt > 90 then refreshFriends() end
 	end))
-	return tab
-end
-
--- ============================================================================
--- V5 : ÉDITEUR DE THÈME VISUEL (aperçu en direct + dégradés)
--- ============================================================================
-local function buildThemePreview(blk)
-	local box = new("Frame", { Size = UDim2.new(1, 0, 0, 156), BackgroundColor3 = T.Main, BorderSizePixel = 0,
-		ClipsDescendants = true }, blk.Body)
-	corner(box, 10)
-	local bst = stroke(box, 0.5)
-	blk:_reg(box, "Aperçu")
-	local gf = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
-		ZIndex = 1, Visible = false }, box)
-	local gg = new("UIGradient", {}, gf)
-	local title = label(box, "Aperçu", 12, { Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -24, 0, 18),
-		Font = F_BOLD, ZIndex = 3 })
-	local side = new("Frame", { Position = UDim2.new(0, 8, 0, 30), Size = UDim2.new(0, 70, 1, -38), BorderSizePixel = 0,
-		BackgroundColor3 = T.Second, BackgroundTransparency = 0.35, ZIndex = 2 }, box)
-	corner(side, 8)
-	local sideLbl = {}
-	for i, nm in ipairs({ "Accueil", "Combat", "Visuel" }) do
-		sideLbl[i] = label(side, nm, 11, { Position = UDim2.new(0, 8, 0, 6 + (i - 1) * 24), Size = UDim2.new(1, -10, 0, 20),
-			ZIndex = 3 })
-	end
-	local bar = new("Frame", { Position = UDim2.new(0, 0, 0, 10), Size = UDim2.new(0, 3, 0, 12), BorderSizePixel = 0,
-		BackgroundColor3 = T.Accent, ZIndex = 3 }, side)
-	local pane = new("Frame", { Position = UDim2.new(0, 86, 0, 30), Size = UDim2.new(1, -94, 1, -38), BorderSizePixel = 0,
-		BackgroundColor3 = T.Second, BackgroundTransparency = 0.35, ZIndex = 2 }, box)
-	corner(pane, 8)
-	local nm = label(pane, "Nom du bloc", 12, { Position = UDim2.new(0, 10, 0, 6), Size = UDim2.new(1, -20, 0, 18),
-		Font = F_BOLD, ZIndex = 3 })
-	local sub = label(pane, "Texte secondaire", 11, { Position = UDim2.new(0, 10, 0, 24), Size = UDim2.new(1, -20, 0, 16),
-		TextColor3 = T.ElementAccent, Font = F_REG, ZIndex = 3 })
-	local pill = new("Frame", { Position = UDim2.new(0, 10, 0, 48), Size = UDim2.fromOffset(34, 16), BorderSizePixel = 0,
-		BackgroundColor3 = T.Accent, ZIndex = 3 }, pane)
-	new("UICorner", { CornerRadius = UDim.new(1, 0) }, pill)
-	local knob = new("Frame", { Position = UDim2.new(1, -14, 0, 2), Size = UDim2.fromOffset(12, 12), BorderSizePixel = 0,
-		BackgroundColor3 = T.Main, ZIndex = 4 }, pill)
-	new("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
-	local track = new("Frame", { Position = UDim2.new(0, 54, 0, 54), Size = UDim2.new(1, -66, 0, 4), BorderSizePixel = 0,
-		BackgroundColor3 = T.Off, ZIndex = 3 }, pane)
-	new("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
-	local fill = new("Frame", { Size = UDim2.new(0.6, 0, 1, 0), BorderSizePixel = 0, BackgroundColor3 = T.Accent, ZIndex = 4 }, track)
-	new("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
-	local btn = new("Frame", { Position = UDim2.new(0, 10, 1, -30), Size = UDim2.fromOffset(78, 22), BorderSizePixel = 0,
-		BackgroundColor3 = T.Accent, ZIndex = 3 }, pane)
-	corner(btn, 6)
-	local btnL = label(btn, "Bouton", 11, { TextXAlignment = CENTER, TextColor3 = T.Main, ZIndex = 4, Font = F_BOLD })
-
-	local function refresh()
-		box.BackgroundColor3 = T.Main
-		bst.Color = T.Accent
-		title.TextColor3 = T.Text
-		side.BackgroundColor3, pane.BackgroundColor3 = T.Second, T.Second
-		bar.BackgroundColor3 = T.Accent
-		for i, l in ipairs(sideLbl) do l.TextColor3 = (i == 1) and T.Text or T.ElementAccent end
-		nm.TextColor3, sub.TextColor3 = T.Text, T.ElementAccent
-		pill.BackgroundColor3, fill.BackgroundColor3, btn.BackgroundColor3 = T.Accent, T.Accent, T.Accent
-		knob.BackgroundColor3, btnL.TextColor3 = T.Main, T.Main
-		track.BackgroundColor3 = T.Off
-		local g = Library.Gradient
-		gf.Visible = g.Enabled
-		gf.BackgroundTransparency = 1 - g.Strength
-		gg.Rotation = g.Rotation
-		if g.C3 then
-			gg.Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, g.C1), ColorSequenceKeypoint.new(0.5, g.C3),
-				ColorSequenceKeypoint.new(1, g.C2) })
-		else
-			gg.Color = ColorSequence.new(g.C1, g.C2)
-		end
-	end
-	refresh()
-	return refresh
-end
-
-function Window:CreateThemeEditorTab(name, icon)
-	local tab = self:CreateTab(name or "Éditeur de thème", nil, icon)
-	tab.Button.LayoutOrder = 890000
-	self._themeTab = tab
-
-	-- Aperçu en direct
-	local PV = tab:CreateBlock({ Name = "Aperçu en direct", Side = "Left" })
-	local refreshPreview = buildThemePreview(PV)
-	Library._onColors = refreshPreview
-	PV:CreateParagraph({ Title = "Comment ça marche",
-		Content = "Chaque changement s'applique tout de suite à l'interface et à cet aperçu. Tout est sauvegardé automatiquement." })
-
-	-- Couleurs
-	local CO = tab:CreateBlock({ Name = "Couleurs du thème", Side = "Left" })
-	local keys = {
-		{ "Accent", "Accent", "ui.accent" }, { "Fond", "Main", "ui.c.main" }, { "Panneaux", "Second", "ui.c.second" },
-		{ "Texte", "Text", "ui.c.text" }, { "Texte secondaire", "ElementAccent", "ui.c.text2" },
-	}
-	local pickers = {}
-	for _, k in ipairs(keys) do
-		pickers[k[2]] = CO:CreateColorPicker({ Name = k[1], Default = T[k[2]], Favorite = false,
-			Callback = function(c)
-				local it = Library.Items[k[3]]
-				if it and it.Set and typeof(c) == "Color3" and T[k[2]] ~= c then pcall(it.Set, it, c)
-				else Library:SetColor(k[2], c) end
-				refreshPreview()
-			end })
-	end
-	CO:CreateButton({ Name = "Resynchroniser avec le thème", Favorite = false, Callback = function()
-		for _, k in ipairs(keys) do
-			local p = pickers[k[2]]
-			if p and p.Set then pcall(p.Set, p, T[k[2]]) end
-		end
-		refreshPreview()
-	end })
-
-	-- Dégradé personnalisé
-	local GR = tab:CreateBlock({ Name = "Dégradé personnalisé", Side = "Right" })
-	local gp1, gp2, gp3
-	GR:CreateToggle({ Name = "Activer le dégradé", Favorite = false, Keybind = false, Default = Library.Gradient.Enabled,
-		Callback = function(v) Library:SetGradient({ Enabled = v }) end })
-	local presetNames = {}
-	for k in pairs(Library.GradientPresets) do presetNames[#presetNames + 1] = k end
-	table.sort(presetNames)
-	GR:CreateDropdown({ Name = "Préréglage", Items = presetNames, Search = false, Favorite = false,
-		Callback = function(n)
-			local p = Library.GradientPresets[n]
-			if not p then return end
-			Library:SetGradient({ Enabled = true, C1 = p[1], C2 = p[2], C3 = false })
-			if gp1 and gp1.Set then pcall(gp1.Set, gp1, p[1]) end
-			if gp2 and gp2.Set then pcall(gp2.Set, gp2, p[2]) end
-		end })
-	gp1 = GR:CreateColorPicker({ Name = "Couleur 1 (début)", Default = Library.Gradient.C1, Favorite = false,
-		Callback = function(c) Library:SetGradient({ C1 = c }) end })
-	gp2 = GR:CreateColorPicker({ Name = "Couleur 2 (fin)", Default = Library.Gradient.C2, Favorite = false,
-		Callback = function(c) Library:SetGradient({ C2 = c }) end })
-	GR:CreateToggle({ Name = "Couleur centrale", Favorite = false, Keybind = false, Default = Library.Gradient.C3 ~= nil,
-		Callback = function(v)
-			if v then
-				local mid = Library.Gradient.C1:Lerp(Library.Gradient.C2, 0.5)
-				Library:SetGradient({ C3 = mid })
-				if gp3 and gp3.Set then pcall(gp3.Set, gp3, mid) end
-			else
-				Library:SetGradient({ C3 = false })
-			end
-		end })
-	gp3 = GR:CreateColorPicker({ Name = "Couleur 3 (centre)", Default = Library.Gradient.C3 or Library.Gradient.C1:Lerp(Library.Gradient.C2, 0.5),
-		Favorite = false, Callback = function(c)
-			if Library.Gradient.C3 then Library:SetGradient({ C3 = c }) end
-		end })
-	GR:CreateSlider({ Name = "Angle", Min = 0, Max = 360, Step = 5, Suffix = "°", Default = Library.Gradient.Rotation,
-		Favorite = false, Callback = function(v) Library:SetGradient({ Rotation = v }) end })
-	GR:CreateSlider({ Name = "Intensité", Min = 5, Max = 100, Step = 5, Suffix = "%",
-		Default = math.floor(Library.Gradient.Strength * 100 + 0.5), Favorite = false,
-		Callback = function(v) Library:SetGradient({ Strength = v / 100 }) end })
-
-	-- Partage du thème
-	local SH = tab:CreateBlock({ Name = "Partager / restaurer", Side = "Right" })
-	SH:CreateButton({ Name = "Copier le thème (presse-papiers)", Favorite = false, Callback = function()
-		local ok = pcall(function() return Library:ExportTheme() end)
-		Library:Notify({ Title = "Thème", Type = ok and "Success" or "Error", Duration = 2.5,
-			Content = ok and "Thème copié dans le presse-papiers." or "Export impossible ici." })
-	end })
-	SH:CreateInput({ Name = "Coller un thème", Placeholder = "UILIB-THEME:{...}", Favorite = false,
-		Callback = function(txt)
-			if txt and txt ~= "" then
-				local ok = pcall(function() return Library:ImportTheme(txt) end)
-				Library:Notify({ Title = "Thème", Type = ok and "Success" or "Error", Duration = 2.5,
-					Content = ok and "Thème importé." or "Texte de thème invalide." })
-				refreshPreview()
-			end
-		end })
-	SH:CreateButton({ Name = "Désactiver le dégradé", Favorite = false, Callback = function()
-		Library:SetGradient({ Enabled = false })
-	end })
 	return tab
 end
 
@@ -11436,7 +11411,7 @@ end
 -- Onglet « Paramètres » prêt à l'emploi
 function Window:CreateSettingsTab(name, icon, docked)
 	local win = self
-	local tab = self:CreateTab(name or "Paramètres", nil, icon)
+	local tab = self:CreateTab(name or "Paramètres", nil, (not docked) and icon or nil)
 	tab._isSettings = true   -- ses toggles ne sont pas listés dans le HUD des actifs
 
 	-- Rangement : les blocs sont répartis en pages (pastilles en haut) au lieu d'une seule liste interminable
@@ -11578,6 +11553,50 @@ function Window:CreateSettingsTab(name, icon, docked)
 	CO:CreateColorPicker({ Name = "Texte secondaire", Flag = "ui.c.text2", Default = T.ElementAccent, Favorite = false,
 		Callback = function(c) Library:SetColor("ElementAccent", c) end })
 
+	-- Dégradé personnalisé
+	local GR = BK("Thèmes", { Name = "Dégradé personnalisé", Side = "Right" })
+	local gp1, gp2, gp3
+	GR:CreateToggle({ Name = "Activer le dégradé", Favorite = false, Keybind = false, Default = Library.Gradient.Enabled,
+		Callback = function(v) Library:SetGradient({ Enabled = v }) end })
+	local presetNames = {}
+	for k in pairs(Library.GradientPresets) do presetNames[#presetNames + 1] = k end
+	table.sort(presetNames)
+	GR:CreateDropdown({ Name = "Préréglage", Items = presetNames, Search = false, Favorite = false,
+		Callback = function(n)
+			local p = Library.GradientPresets[n]
+			if not p then return end
+			Library:SetGradient({ Enabled = true, C1 = p[1], C2 = p[2], C3 = false })
+			if gp1 and gp1.Set then pcall(gp1.Set, gp1, p[1]) end
+			if gp2 and gp2.Set then pcall(gp2.Set, gp2, p[2]) end
+		end })
+	gp1 = GR:CreateColorPicker({ Name = "Couleur 1 (début)", Default = Library.Gradient.C1, Favorite = false,
+		Callback = function(c) Library:SetGradient({ C1 = c }) end })
+	gp2 = GR:CreateColorPicker({ Name = "Couleur 2 (fin)", Default = Library.Gradient.C2, Favorite = false,
+		Callback = function(c) Library:SetGradient({ C2 = c }) end })
+	GR:CreateToggle({ Name = "Couleur centrale", Favorite = false, Keybind = false, Default = Library.Gradient.C3 ~= nil,
+		Callback = function(v)
+			if v then
+				local mid = Library.Gradient.C1:Lerp(Library.Gradient.C2, 0.5)
+				Library:SetGradient({ C3 = mid })
+				if gp3 and gp3.Set then pcall(gp3.Set, gp3, mid) end
+			else
+				Library:SetGradient({ C3 = false })
+			end
+		end })
+	gp3 = GR:CreateColorPicker({ Name = "Couleur 3 (centre)", Default = Library.Gradient.C3 or Library.Gradient.C1:Lerp(Library.Gradient.C2, 0.5),
+		Favorite = false, Callback = function(c)
+			if Library.Gradient.C3 then Library:SetGradient({ C3 = c }) end
+		end })
+	GR:CreateSlider({ Name = "Angle", Min = 0, Max = 360, Step = 5, Suffix = "°", Default = Library.Gradient.Rotation,
+		Favorite = false, Callback = function(v) Library:SetGradient({ Rotation = v }) end })
+	GR:CreateSlider({ Name = "Intensité", Min = 5, Max = 100, Step = 5, Suffix = "%",
+		Default = math.floor(Library.Gradient.Strength * 100 + 0.5), Favorite = false,
+		Callback = function(v) Library:SetGradient({ Strength = v / 100 }) end })
+
+	GR:CreateButton({ Name = "Désactiver le dégradé", Favorite = false, Callback = function()
+		Library:SetGradient({ Enabled = false })
+	end })
+
 	-- ───────────── Apparence ─────────────
 	local A = BK("Apparence", { Name = "Apparence", Side = "Left" })
 	A:CreateSlider({ Name = "Opacité de la fenêtre", Flag = "ui.opacity", Min = 20, Max = 100, Step = 1, Suffix = "%",
@@ -11666,11 +11685,11 @@ function Window:CreateSettingsTab(name, icon, docked)
 	-- ───────────── Trou noir & fond ─────────────
 	local H = BK("Apparence", { Name = "Trou noir & fond", Side = "Left", Collapsed = true })
 	H:CreateToggle({ Name = "Trou noir", Flag = "ui.hole", Default = Library.HoleVisible, Callback = opt("HoleVisible") })
-	local holeItems, holeKeys = { "Haut droite", "Haut gauche", "Bas droite", "Bas gauche", "Centre" }, {}
+	local holeItems, holeKeys = { "Centre", "Haut droite", "Haut gauche", "Bas droite", "Bas gauche" }, {}
 	for k, v in pairs(N.HolePos) do holeKeys[v] = k end
 	H:CreateDropdown({ Name = "Position", Flag = "ui.holepos", Items = holeItems, Search = false,
-		Default = N.HolePos[Library.HolePos] or "Haut droite",
-		Callback = function(v) Library:SetOption("HolePos", holeKeys[v] or "TopRight") end })
+		Default = N.HolePos[Library.HolePos] or "Centre",
+		Callback = function(v) Library:SetOption("HolePos", holeKeys[v] or "Center") end })
 	H:CreateSlider({ Name = "Taille du trou noir", Flag = "ui.holescale", Min = 50, Max = 160, Step = 5, Suffix = "%",
 		Default = pct(Library.HoleScale), Callback = optPct("HoleScale") })
 	H:CreateSlider({ Name = "Vitesse de rotation", Flag = "ui.spin", Min = 0, Max = 300, Step = 10, Suffix = "%",
@@ -12289,15 +12308,13 @@ function Window:CreateSettingsTab(name, icon, docked)
 		tab.Button.Parent = self.Footer
 		tab.Button.LayoutOrder = 1
 		if win._ecStyleTab then win._ecStyleTab(tab) end
-		tab.Label.Position = UDim2.new(0, 34, 0, 0)
-		tab.Label.Size = UDim2.new(1, -48, 1, 0)
-		local ico = new("Frame", { Position = UDim2.new(0, 12, 0.5, -7), Size = UDim2.fromOffset(14, 14),
-			BackgroundTransparency = 1, BorderSizePixel = 0 }, tab.Button)
-		new("UICorner", { CornerRadius = UDim.new(1, 0) }, ico)
-		new("UIStroke", { Color = T.Accent, Thickness = 2, Transparency = 0.2 }, ico)
-		local dot = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(4, 4), BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, ico)
-		new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+		tab.Label.Position = UDim2.new(0, 40, 0, 0)
+		tab.Label.Size = UDim2.new(1, -52, 1, 0)
+		local ICO = 26   -- taille de l'icône des réglages
+		local img = (icon and icon ~= "") and icon or "rbxassetid://13300915301"
+		if string.match(img, "^%d+$") then img = "rbxassetid://" .. img end
+		new("ImageLabel", { Name = "SettingsIcon", BackgroundTransparency = 1, Image = img, ImageColor3 = T.Text,
+			ScaleType = Enum.ScaleType.Fit, Position = UDim2.new(0, 8, 0.5, -ICO / 2), Size = UDim2.fromOffset(ICO, ICO) }, tab.Button)
 	end
 	return tab
 end
@@ -14254,11 +14271,11 @@ function Library:CreateWindow(cfg)
 		BottomLeft = { 0, 66, 1, -54 }, Center = { 0.5, 0, 0.5, 0 },
 	}
 	local function holePos()
-		local p = HOLE_POS[Library.HolePos] or HOLE_POS.TopRight
+		local p = HOLE_POS[Library.HolePos] or HOLE_POS.Center
 		return UDim2.new(p[1], p[2], p[3], p[4])
 	end
 	local function holeCenter(w, h)
-		local p = HOLE_POS[Library.HolePos] or HOLE_POS.TopRight
+		local p = HOLE_POS[Library.HolePos] or HOLE_POS.Center
 		return p[1] * w + p[2], p[3] * h + p[4]
 	end
 	local hole = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = holePos(),
@@ -15777,16 +15794,12 @@ function Library:CreateWindow(cfg)
 		Set = function(_, d) if type(d) == "table" then Library:SetGradient(d) end end,
 	}
 	Library:SetGradient()
+	if cfg.UpdateURL then Library.UpdateURL = tostring(cfg.UpdateURL) end
+	if cfg.UpdateInterval then Library.UpdateInterval = tonumber(cfg.UpdateInterval) or 120 end
 	if cfg.Home ~= false then
 		local okh, errh = pcall(function() win:CreateHomeTab(cfg.HomeName or "Home", cfg.HomeIcon, cfg) end)
 		if not okh then warn("[Ui-Lib] Onglet Home : " .. tostring(errh)) end
 	end
-	win._noSelect = true
-	if cfg.ThemeEditor ~= false then
-		local okt, errt = pcall(function() win:CreateThemeEditorTab(cfg.ThemeEditorName or "Éditeur de thème", cfg.ThemeEditorIcon) end)
-		if not okt then warn("[Ui-Lib] Éditeur de thème : " .. tostring(errt)) end
-	end
-	win._noSelect = nil
 	if cfg.Settings ~= false then
 		win._noSelect = true
 		local ok, err = pcall(function() win:CreateSettingsTab(cfg.SettingsName or "Réglages", cfg.SettingsIcon, true) end)
@@ -15808,6 +15821,7 @@ function Library:CreateWindow(cfg)
 	Library:LoadSettings()
 	Library._settingsReady = true
 	Library:_startSettingsWatcher(win)
+	Library:StartUpdateWatcher()
 	if cfg.AutoLoad ~= false then
 		task.delay(tonumber(cfg.AutoLoadDelay) or 1.2, function()
 			if Library.Window == win then Library:AutoLoad() end
@@ -15822,6 +15836,8 @@ function Library:Destroy()
 	end
 	Library._settingsReady = false
 	Library._settingsToken = (Library._settingsToken or 0) + 1
+	Library._updToken = (Library._updToken or 0) + 1
+	Library._updRefresh = nil
 	for _, c in ipairs(Conns) do pcall(function() c:Disconnect() end) end
 	table.clear(Conns)
 	table.clear(spinners)
