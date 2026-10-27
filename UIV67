@@ -687,6 +687,17 @@ local function label(parent, text, size, props)
 	return new("TextLabel", p, parent)
 end
 
+-- Mesure d'un texte (TextService) : retourne un Vector2 (jamais d'erreur). Utilisé par les dropdowns / barres de progression.
+local TextServiceG = game:GetService("TextService")
+local function measureText(text, size, font, width)
+	local ok, v = pcall(TextServiceG.GetTextSize, TextServiceG, tostring(text), size, font, Vector2.new(width or 10000, 10000))
+	if ok and typeof(v) == "Vector2" then return v end
+	return Vector2.new(#tostring(text) * size * 0.55, size + 2)
+end
+-- Au-delà de ce nombre de caractères, une valeur affichée à droite devient une boîte de texte sous le nom (Library.LongTextChars)
+Library.LongTextChars = Library.LongTextChars or 27
+local function isLongText(t) return (utf8.len(tostring(t)) or #tostring(t)) >= (tonumber(Library.LongTextChars) or 27) end
+
 -- Appelle un callback sans jamais casser l'UI
 local function fire(cb, ...)
 	if type(cb) ~= "function" then return end
@@ -774,7 +785,9 @@ Library.PointerOffset = Library.PointerOffset or Vector2.new(0, 0)
 local ptrProbe
 Library._ptrCorrect = function()
 	local auto = 0
-	pcall(function()
+	-- La correction auto décalait la poignée du color picker par rapport au curseur (le curseur dessiné et les clics
+	-- utilisent la position brute de la souris). Désactivée par défaut : Library.AutoPointerFix = true pour la réactiver.
+	if Library.AutoPointerFix == true then pcall(function()
 		if not (ptrProbe and ptrProbe.Parent) then
 			ptrProbe = Instance.new("ScreenGui")
 			ptrProbe.Name = "SolarisPointerProbe"
@@ -785,7 +798,7 @@ Library._ptrCorrect = function()
 		end
 		local d = viewport().Y - ptrProbe.AbsoluteSize.Y
 		if d >= 8 and d <= 120 then auto = d end
-	end)
+	end) end
 	local man = Library.PointerOffset
 	return Vector2.new(man and man.X or 0, auto + (man and man.Y or 0))
 end
@@ -1005,52 +1018,23 @@ local function hover(f, st, hit)
 	end)
 end
 
--- Onde qui s'étend depuis le point de clic (le cadre hôte doit avoir ClipsDescendants = true)
+-- Effet au clic : un reflet qui balaie l'élément depuis le côté du clic. Il épouse les coins arrondis de l'hôte
+-- (l'ancienne onde circulaire était rognée en rectangle car ClipsDescendants ignore UICorner).
 local function ripple(host, tint)
 	if not (Library.Ripple and Library.Animations) then return end
-	local sc = pxScale()
+	if not (host and host.Parent) then return end
 	local m = UIS:GetMouseLocation()
-	local ax, ay = host.AbsoluteSize.X / sc, host.AbsoluteSize.Y / sc
-	local rx = math.clamp((m.X - host.AbsolutePosition.X) / sc, 0, ax)
-	local ry = math.clamp((m.Y - host.AbsolutePosition.Y) / sc, 0, ay)
-	local d = math.max(ax, ay) * 2.3
-	local r = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(rx, ry),
-		Size = UDim2.fromOffset(0, 0), BackgroundColor3 = tint or T.Accent, BackgroundTransparency = 0.8,
-		BorderSizePixel = 0, ZIndex = 4 }, host)
-	new("UICorner", { CornerRadius = UDim.new(1, 0) }, r)
-	tween(r, { Size = UDim2.fromOffset(d, d), BackgroundTransparency = 1 }, 0.6)
-	task.delay(0.65 / math.max(Library.AnimSpeed or 1, 0.05) + 0.05, function() r:Destroy() end)
-end
-
--- Tiroir animé (utilisé par le dropdown et le color picker)
-local function drawer(parent, order)
-	local wrap = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1, ClipsDescendants = true,
-		Visible = false, LayoutOrder = order, BorderSizePixel = 0,
-	}, parent)
-	local d = { Wrap = wrap, Open = false, Height = 0 }
-	local token = 0
-	d.Set = function(self, open, h)
-		if h then self.Height = h end
-		self.Open = open and true or false
-		token = token + 1
-		local my = token
-		Library._busyUntil = os.clock() + 0.4
-		if self.Open then
-			wrap.Visible = true
-			tween(wrap, { Size = UDim2.new(1, 0, 0, self.Height) }, 0.34)
-		else
-			local tw = tween(wrap, { Size = UDim2.new(1, 0, 0, 0) }, 0.26)
-			tw.Completed:Connect(function()
-				if token == my then wrap.Visible = false end
-			end)
-		end
-	end
-	d.Resize = function(self, h)
-		self.Height = h
-		if self.Open then tween(wrap, { Size = UDim2.new(1, 0, 0, h) }, 0.25) end
-	end
-	return d
+	local fromRight = m.X > host.AbsolutePosition.X + host.AbsoluteSize.X / 2
+	local r = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = tint or T.Accent, BackgroundTransparency = 0,
+		BorderSizePixel = 0, ZIndex = 4, Active = false }, host)
+	local uc = host:FindFirstChildOfClass("UICorner")
+	if uc then new("UICorner", { CornerRadius = uc.CornerRadius }, r) end
+	local g = new("UIGradient", { Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.3, 0.92), NumberSequenceKeypoint.new(0.5, 0.8),
+		NumberSequenceKeypoint.new(0.7, 0.92), NumberSequenceKeypoint.new(1, 1) }),
+		Offset = Vector2.new(fromRight and 1 or -1, 0) }, r)
+	tween(g, { Offset = Vector2.new(fromRight and -1 or 1, 0) }, 0.55)
+	task.delay(0.6 / math.max(Library.AnimSpeed or 1, 0.05) + 0.05, function() r:Destroy() end)
 end
 
 local function ringSeq()
@@ -1267,6 +1251,22 @@ do
 			solid(UDim2.fromOffset(th, L), UDim2.new(0.5, 0, 0.5, gap), Vector2.new(0.5, 0))
 			solid(UDim2.fromOffset(L, th), UDim2.new(0.5, -gap, 0.5, 0), Vector2.new(1, 0.5))
 			solid(UDim2.fromOffset(L, th), UDim2.new(0.5, gap, 0.5, 0), Vector2.new(0, 0.5))
+		elseif shape == "Flèche Roblox" then
+			-- vraie flèche du curseur Roblox (image native). Le point chaud est placé sous la souris ;
+			-- ajuste Library.RobloxCursorHotspot (0-1) si la pointe n'est pas pile sur le clic.
+			local hs = Library.RobloxCursorHotspot or Vector2.new(0.3, 0.3)
+			local img = Instance.new("ImageLabel")
+			img.Name = "RobloxArrow"
+			img.AnchorPoint = hs
+			img.Position = UDim2.fromScale(0.5, 0.5)
+			img.Size = UDim2.fromOffset(S * 3, S * 3)
+			img.BackgroundTransparency = 1
+			img.BorderSizePixel = 0
+			img.Active = false
+			img.Image = "rbxasset://textures/Cursors/KeyboardMouse/ArrowFarCursor.png"
+			img.ImageTransparency = tr
+			img.ZIndex = 2
+			img.Parent = dot
 		elseif shape == "Carré" then
 			solid(UDim2.fromOffset(S, S), nil, nil, false)
 		else   -- "Point"
@@ -1358,7 +1358,7 @@ do
 	function Library:SetCursorStyle(v)   -- "auto" | "dot" | "native"
 		Library.CursorStyle = (v == "dot" or v == "native") and v or "auto"
 	end
-	-- Shape ("Point" | "Cercle" | "Carré" | "Croix"), Size (4-64), Color, Outline (Color3), OutlineSize, Opacity (0-1),
+	-- Shape ("Point" | "Flèche Roblox" | "Cercle" | "Carré" | "Croix"), Size (4-64), Color, Outline (Color3), OutlineSize, Opacity (0-1),
 	-- UseAccent (bool), ClickShrink (bool)
 	function Library:SetCursorOption(name, value)
 		if Library.CursorDefaults[name] == nil then return false end
@@ -3951,7 +3951,63 @@ function Library._stretch(s)
 	return table.concat(out, Library.TitleSpacing or " ")
 end
 
-local function applyColorsNow()
+-- Transition des couleurs : UNE seule boucle fait glisser toutes les instances concernées vers leur nouvelle couleur
+-- (au lieu de milliers de tweens). Si une nouvelle couleur arrive en cours de route (ex. glisser dans le color picker),
+-- on repart de la couleur affichée et on vise la nouvelle cible.
+local colorAnim, colorAnimMap, colorAnimConn = {}, {}, nil
+local COLOR_ANIM_TIME = 0.4
+local function colorAnimStep()
+	local now = os.clock()
+	local dur = COLOR_ANIM_TIME / math.max(Library.AnimSpeed or 1, 0.05)
+	local i = 1
+	while i <= #colorAnim do
+		local e = colorAnim[i]
+		local done = false
+		if e.fn then
+			local a = math.clamp((now - e.t0) / dur, 0, 1)
+			pcall(e.fn, TweenService:GetValue(a, Enum.EasingStyle.Quad, OUT), a >= 1)
+			done = a >= 1
+		elseif not e.d.Parent then
+			done = true
+		else
+			local a = math.clamp((now - e.t0) / dur, 0, 1)
+			local k = TweenService:GetValue(a, Enum.EasingStyle.Quad, OUT)
+			pcall(function() e.d[e.p] = e.from:Lerp(e.to, k) end)
+			done = a >= 1
+		end
+		if done then
+			if not e.fn then
+				pcall(function() e.d[e.p] = e.to end)
+				local m = colorAnimMap[e.d]
+				if m and m[e.p] == e then m[e.p] = nil end
+			end
+			colorAnim[i] = colorAnim[#colorAnim]
+			colorAnim[#colorAnim] = nil
+		else
+			i += 1
+		end
+	end
+	if #colorAnim == 0 and colorAnimConn then
+		colorAnimConn:Disconnect()
+		colorAnimConn = nil
+	end
+end
+local function colorAnimStart()
+	if not colorAnimConn then colorAnimConn = RunService.Heartbeat:Connect(colorAnimStep) end
+end
+local function colorAnimAdd(d, p, from, to)
+	local m = colorAnimMap[d]
+	if not m then m = {} colorAnimMap[d] = m end
+	local old = m[p]
+	if old then old.to = to old.from = from old.t0 = os.clock() return end
+	local e = { d = d, p = p, from = from, to = to, t0 = os.clock() }
+	m[p] = e
+	colorAnim[#colorAnim + 1] = e
+end
+
+local gradAcc   -- accent actuellement affiché sur les dégradés (pour repartir de là si ça change en cours de route)
+local function applyColorsNow(instant)
+	local anim = Library.Animations and not instant
 	local list = {}
 	for _, k in ipairs(COLOR_KEYS) do
 		local o, n = appliedC[k], T[k]
@@ -3962,12 +4018,20 @@ local function applyColorsNow()
 			for _, d in ipairs(root:GetDescendants()) do
 				local props = ACC_PROPS[d.ClassName]
 				if props then
+					local m = colorAnimMap[d]
 					for _, p in ipairs(props) do
 						local ok, cur = pcall(function() return d[p] end)
 						if ok and typeof(cur) == "Color3" then
+							local ref = (m and m[p]) and m[p].to or cur   -- si une transition est en cours : on compare à sa cible
 							for _, pr in ipairs(list) do
-								if nearColor(cur, pr[1]) then
-									if not noAccent(d, root) then d[p] = pr[2] end
+								if nearColor(ref, pr[1]) then
+									if not noAccent(d, root) then
+										if anim then colorAnimAdd(d, p, cur, pr[2])
+										else
+											d[p] = pr[2]
+											if m and m[p] then m[p].to = pr[2] m[p].from = pr[2] end
+										end
+									end
 									break
 								end
 							end
@@ -3979,21 +4043,37 @@ local function applyColorsNow()
 	end
 	snapshotColors()
 	-- dégradés (anneaux du trou noir, bordure, logo, titre) : suivent la couleur d'accent
-	local a = T.Accent
-	local dim = a:Lerp(Color3.new(0, 0, 0), 0.55)
-	for _, sp in ipairs(spinners) do
-		if sp.g and sp.g.Parent then sp.g.Color = ColorSequence.new(a, dim) end
+	local newAcc = T.Accent
+	local function paintGrad(a)
+		local dim = a:Lerp(Color3.new(0, 0, 0), 0.55)
+		for _, sp in ipairs(spinners) do
+			if sp.g and sp.g.Parent then sp.g.Color = ColorSequence.new(a, dim) end
+		end
+		if Library._titleGrad and Library._titleGrad.Parent then
+			Library._titleGrad.Color = Library._titleSeq(a)
+		end
 	end
-	if Library._titleGrad and Library._titleGrad.Parent then
-		Library._titleGrad.Color = Library._titleSeq(a)
+	if anim and gradAcc and not nearColor(gradAcc, newAcc) then
+		local fromAcc = gradAcc
+		for j = #colorAnim, 1, -1 do   -- une seule animation de dégradé à la fois
+			if colorAnim[j].grad then table.remove(colorAnim, j) end
+		end
+		colorAnim[#colorAnim + 1] = { grad = true, t0 = os.clock(), fn = function(k, done)
+			gradAcc = done and newAcc or fromAcc:Lerp(newAcc, k)
+			paintGrad(gradAcc)
+		end }
+	else
+		gradAcc = newAcc
+		paintGrad(newAcc)
 	end
+	if #colorAnim > 0 then colorAnimStart() end
 end
 
 local colorToken = 0
 local function scheduleColors(immediate)
 	colorToken += 1
 	local my = colorToken
-	if immediate then applyColorsNow() return end
+	if immediate then applyColorsNow(true) return end
 	task.delay(0.06, function()
 		if my == colorToken then applyColorsNow() end
 	end)
@@ -5221,6 +5301,33 @@ function Block:CreateSlider(o)
 	hover(f, st)
 
 	local value
+	local shownV, numTok, fillTw, knobTw = nil, 0, nil, nil
+	-- le chiffre défile jusqu'à la nouvelle valeur (pendant un glisser continu : direct)
+	local function showNumber(v, animate)
+		numTok += 1
+		local my = numTok
+		if valBox:IsFocused() then shownV = v return end
+		if not animate or not Library.Animations or shownV == nil or shownV == v then
+			shownV = v
+			valBox.Text = fmt(v)
+			return
+		end
+		local from, to = shownV, v
+		local dur = 0.3 / math.max(Library.AnimSpeed or 1, 0.05)
+		local t0 = os.clock()
+		task.spawn(function()
+			while numTok == my and f.Parent do
+				local a = math.clamp((os.clock() - t0) / dur, 0, 1)
+				local cur = from + (to - from) * TweenService:GetValue(a, QUINT, OUT)
+				shownV = (a >= 1) and to or cur
+				if not valBox:IsFocused() then
+					valBox.Text = (a >= 1) and fmt(to) or fmt(math.floor(cur * mult + 0.5) / mult)
+				end
+				if a >= 1 then break end
+				RunService.Heartbeat:Wait()
+			end
+		end)
+	end
 	local function apply(v, silent, instant, exact)
 		v = snap(v, exact)
 		if v == value and not silent then return end
@@ -5228,13 +5335,15 @@ function Block:CreateSlider(o)
 		local span = max - min
 		local ratio = span == 0 and 0 or (v - min) / span
 		if instant then
+			if fillTw then fillTw:Cancel() fillTw = nil end
+			if knobTw then knobTw:Cancel() knobTw = nil end
 			fill.Size = UDim2.new(ratio, 0, 1, 0)
 			knob.Position = UDim2.new(ratio, 0, 0.5, 0)
 		else
-			tween(fill, { Size = UDim2.new(ratio, 0, 1, 0) }, 0.14)
-			tween(knob, { Position = UDim2.new(ratio, 0, 0.5, 0) }, 0.14)
+			fillTw = tween(fill, { Size = UDim2.new(ratio, 0, 1, 0) }, 0.24)
+			knobTw = tween(knob, { Position = UDim2.new(ratio, 0, 0.5, 0) }, 0.24)
 		end
-		if not valBox:IsFocused() then valBox.Text = fmt(v) end
+		showNumber(v, not instant)
 		if o.Flag then Library.Flags[o.Flag] = v end
 		if not silent then fire(o.Callback, v) end
 	end
@@ -5248,9 +5357,11 @@ function Block:CreateSlider(o)
 	hit.InputBegan:Connect(function(i)
 		if isPress(i) then
 			tween(knob, { Size = UDim2.new(0, 17, 0, 17) }, 0.2, BACK)
+			local firstHit = true   -- premier point = clic sur la barre : la poignée glisse et le chiffre défile ; ensuite direct
 			startDrag(function(p)
 				local t = math.clamp((p.X - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1)
-				apply(min + t * (max - min), false, true)
+				apply(min + t * (max - min), false, not firstHit)
+				firstHit = false
 			end, self.Scroll, i.Position, function()
 				tween(knob, { Size = UDim2.new(0, 12, 0, 12) }, 0.25)
 			end)
@@ -5267,6 +5378,7 @@ function Block:CreateSlider(o)
 		local n = tonumber(string.match(txt, "-?%d*%.?%d+"))
 		if n then apply(n, false, false, true) end
 		valBox.Text = fmt(value)
+		shownV = value
 	end)
 
 	apply(def, true, true, true)
@@ -5785,11 +5897,73 @@ function Block:CreateDropdown(o)
 	local hst = stroke(head, 0.93)
 	trackStyled(head, hst, "row")
 	hover(head, hst)
-	label(head, o.Name or "Dropdown", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0.5, -12, 1, 0) })
-	local valL = label(head, "", 12, { Position = UDim2.new(0.5, 0, 0, 0), Size = UDim2.new(0.5, -34, 1, 0),
+	local nameL = label(head, o.Name or "Dropdown", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0.5, -12, 1, 0) })
+	local valL = label(head, "", 12, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -34, 0, 0), Size = UDim2.new(0.5, -34, 1, 0),
 		TextXAlignment = RIGHT, TextColor3 = T.ElementAccent, TextTruncate = Enum.TextTruncate.AtEnd })
 	local arrow = label(head, ">", 13, { Position = UDim2.new(1, -26, 0, 0), Size = UDim2.new(0, 16, 1, 0),
 		TextXAlignment = CENTER, Font = F_BOLD, TextColor3 = T.ElementAccent })
+	-- largeur partagée selon le texte : la valeur choisie passe en priorité, le nom est raccourci (…) seulement si besoin.
+	-- Valeur très longue (27 caractères ou plus) : elle devient une boîte de texte sous le nom (retour à la ligne).
+	local headH, lastKey, firstLay = 34, nil, true
+	local boxPad = new("UIPadding", {}, valL)
+	new("UICorner", { CornerRadius = UDim.new(0, 6) }, valL)
+	arrow.Size = UDim2.new(0, 16, 0, 34)
+	valL.AnchorPoint = Vector2.new(0, 0)   -- ancre fixe : la position peut ainsi être animée d'un mode à l'autre
+	-- transition fluide entre « valeur à droite » et « boîte sous le nom » (direct au tout premier calcul)
+	local function go(obj, props)
+		if firstLay then
+			for k, v in pairs(props) do obj[k] = v end
+		else
+			tween(obj, props, 0.32)
+		end
+	end
+	local function layoutHead()
+		local W = head.AbsoluteSize.X / math.max(pxScale(), 0.05)
+		if W <= 0 then return end
+		local txt = valL.Text
+		local key = txt .. "|" .. math.floor(W) .. "|" .. nameL.Text
+		if key == lastKey then return end
+		lastKey = key
+		if isLongText(txt) then
+			local bh = math.ceil(measureText(txt, valL.TextSize, valL.Font, math.max(W - 24 - 16, 40)).Y) + 12
+			nameL.TextXAlignment = CENTER   -- nom centré au-dessus de la boîte (marges égales : la flèche reste à droite)
+			valL.TextWrapped = true
+			valL.TextTruncate = Enum.TextTruncate.None
+			valL.TextXAlignment = LEFT
+			valL.TextYAlignment = Enum.TextYAlignment.Top
+			valL.BackgroundColor3 = T.Off
+			go(nameL, { Position = UDim2.new(0, 34, 0, 0), Size = UDim2.new(1, -68, 0, 34) })
+			go(valL, { Position = UDim2.new(0, 12, 0, 32), Size = UDim2.new(1, -24, 0, bh), BackgroundTransparency = 0.5 })
+			go(boxPad, { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6) })
+			headH = 34 + bh + 8
+		else
+			nameL.TextXAlignment = LEFT
+			valL.TextWrapped = false
+			valL.TextTruncate = Enum.TextTruncate.AtEnd
+			valL.TextXAlignment = RIGHT
+			valL.TextYAlignment = Enum.TextYAlignment.Center
+			local avail = W - 12 - 34 - 8
+			local nameNeed = measureText(nameL.Text, nameL.TextSize, nameL.Font).X + 2
+			local valNeed = measureText(txt, valL.TextSize, valL.Font).X + 2
+			local valW
+			if nameNeed + valNeed <= avail then
+				valW = valNeed
+			else
+				valW = math.min(valNeed, math.max(avail * 0.5, avail - nameNeed))
+			end
+			valW = math.max(valW, 20)
+			go(nameL, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0, math.max(avail - valW, 20), 1, 0) })
+			go(valL, { Position = UDim2.new(1, -34 - valW, 0, 0), Size = UDim2.new(0, valW, 1, 0), BackgroundTransparency = 1 })
+			go(boxPad, { PaddingLeft = UDim.new(0, 0), PaddingRight = UDim.new(0, 0), PaddingTop = UDim.new(0, 0), PaddingBottom = UDim.new(0, 0) })
+			headH = 34
+		end
+		go(head, { Size = UDim2.new(1, 0, 0, headH) })
+		firstLay = false
+	end
+	head:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutHead)
+	nameL:GetPropertyChangedSignal("Text"):Connect(layoutHead)
+	valL:GetPropertyChangedSignal("Text"):Connect(layoutHead)
+	task.defer(layoutHead)
 
 	local dr = drawer(holder, 2)
 	local panel = new("Frame", {
@@ -6267,8 +6441,8 @@ function Block:CreateDropdown(o)
 				local scroller = holder.Parent
 				while scroller and not scroller:IsA("ScrollingFrame") do scroller = scroller.Parent end
 				if not scroller then return end
-				local sc = (head.AbsoluteSize.Y > 0) and (head.AbsoluteSize.Y / 34) or 1
-				local need = holder.AbsolutePosition.Y + (34 + 4 + dr.Height) * sc + 10
+				local sc = (head.AbsoluteSize.Y > 0) and (head.AbsoluteSize.Y / headH) or 1
+				local need = holder.AbsolutePosition.Y + (headH + 4 + dr.Height) * sc + 10
 				local have = scroller.AbsolutePosition.Y + scroller.AbsoluteSize.Y
 				if need > have then
 					local target = scroller.CanvasPosition.Y + (need - have) / sc
@@ -6290,8 +6464,8 @@ function Block:CreateDropdown(o)
 				-- 🛠️ FIX : on compare à la taille FINALE du dropdown (en-tête + liste ouverte), pas à celle de l'animation en cours
 				-- (sinon un clic sur les dernières lignes pendant l'ouverture / un redimensionnement fermait la liste sans choisir)
 				local ap, as = holder.AbsolutePosition, holder.AbsoluteSize
-				local sc = (head.AbsoluteSize.Y > 0) and (head.AbsoluteSize.Y / 34) or 1
-				local fullH = math.max(as.Y, (34 + 4 + dr.Height) * sc)
+				local sc = (head.AbsoluteSize.Y > 0) and (head.AbsoluteSize.Y / headH) or 1
+				local fullH = math.max(as.Y, (headH + 4 + dr.Height) * sc)
 				if m.X >= ap.X - 4 and m.Y >= ap.Y - 4 and m.X <= ap.X + as.X + 4 and m.Y <= ap.Y + fullH + 4 then return end
 				if Library._ddPopHit and Library._ddPopHit(m) then return end
 				setOpen(false)
@@ -7419,6 +7593,59 @@ function Block:CreateProgress(o)
 		BorderSizePixel = 0 }, bar)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
 
+	-- texte de la valeur : à droite du nom s'il est court (la largeur s'adapte) ; à partir de 27 caractères il devient
+	-- une boîte de texte sous le nom (retour à la ligne) et la barre descend en dessous.
+	local boxPad = new("UIPadding", {}, valL)
+	new("UICorner", { CornerRadius = UDim.new(0, 6) }, valL)
+	local lastKey, firstLay = nil, true
+	valL.AnchorPoint = Vector2.new(0, 0)
+	-- transition fluide entre « valeur à droite » et « boîte sous le nom » (direct au tout premier calcul)
+	local function go(obj, props)
+		if firstLay then
+			for k, v in pairs(props) do obj[k] = v end
+		else
+			tween(obj, props, 0.32)
+		end
+	end
+	local function layoutRow()
+		local W = f.AbsoluteSize.X / math.max(pxScale(), 0.05)
+		if W <= 0 then return end
+		local txt = valL.Text
+		local key = txt .. "|" .. math.floor(W)
+		if key == lastKey then return end
+		lastKey = key
+		if isLongText(txt) then
+			local bh = math.ceil(measureText(txt, valL.TextSize, valL.Font, math.max(W - 24 - 16, 40)).Y) + 12
+			nameL.TextXAlignment = CENTER   -- nom centré au-dessus de la boîte de texte
+			valL.TextWrapped = true
+			valL.TextTruncate = Enum.TextTruncate.None
+			valL.TextXAlignment = LEFT
+			valL.TextYAlignment = Enum.TextYAlignment.Top
+			valL.BackgroundColor3 = T.Off
+			go(nameL, { Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -24, 0, 18) })
+			go(valL, { Position = UDim2.new(0, 12, 0, 28), Size = UDim2.new(1, -24, 0, bh), BackgroundTransparency = 0.5 })
+			go(boxPad, { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6) })
+			go(bar, { Position = UDim2.new(0, 12, 0, 28 + bh + 6) })
+			go(f, { Size = UDim2.new(1, 0, 0, 28 + bh + 6 + 8 + 8) })
+		else
+			nameL.TextXAlignment = LEFT
+			valL.TextWrapped = false
+			valL.TextTruncate = Enum.TextTruncate.AtEnd
+			valL.TextXAlignment = RIGHT
+			valL.TextYAlignment = Enum.TextYAlignment.Center
+			local avail = W - 24 - 8
+			local valW = math.clamp(measureText(txt, valL.TextSize, valL.Font).X + 2, 94, math.max(avail * 0.6, 94))
+			go(nameL, { Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(0, math.max(avail - valW, 20), 0, 18) })
+			go(valL, { Position = UDim2.new(1, -12 - valW, 0, 6), Size = UDim2.new(0, valW, 0, 18), BackgroundTransparency = 1 })
+			go(boxPad, { PaddingLeft = UDim.new(0, 0), PaddingRight = UDim.new(0, 0), PaddingTop = UDim.new(0, 0), PaddingBottom = UDim.new(0, 0) })
+			go(bar, { Position = UDim2.new(0, 12, 0, 31) })
+			go(f, { Size = UDim2.new(1, 0, 0, 46) })
+		end
+		firstLay = false
+	end
+	f:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutRow)
+	valL:GetPropertyChangedSignal("Text"):Connect(layoutRow)
+
 	local value = math.clamp(tonumber(o.Default or o.Value) or min, min, max)
 	local runTw, runTok, indet = nil, 0, nil
 
@@ -7526,6 +7753,7 @@ function Block:CreateProgress(o)
 	item.Instance = f
 
 	setValue(value, true)
+	task.defer(layoutRow)
 	return item
 end
 
@@ -8797,10 +9025,23 @@ end
 --     Name · NameText · NameColor · Health · HealthValue (0..1) · Distance · DistanceText · DistanceColor
 --     Tracer · TracerColor · TracerOrigin ("Bottom" | "Center" | "Top") · HeadDot · HeadDotColor
 --     AutoRotate · RotateSpeed (°/s) · Animate (balancement des membres) · Floor · Zoom (1 = normal)
+--     Wave (le rig R6 fait coucou et reste face à la caméra) · et à la création : Background (Color3), FloorColor (Color3),
+--     Yaw (degrés, 180 = de face) · Pitch (radians)
 --   Glisser avec la souris / le doigt pour tourner l'aperçu. pv:ResetView() · pv:SetRotation(deg) · pv:SetHeight(px)
+--   IdleFPS (à la création, défaut Library.PreviewIdleFPS = 4) : images/s quand la fenêtre Roblox est en arrière-plan.
 --   Mode personnage : pv:Refresh() (re-clone l'avatar : tenue changée, respawn...) · pv:SetTarget(Player | Model | nil)
 --   Le personnage est cloné (statique : l'option Animate ne concerne que le rig factice) ; rechargé tout seul au respawn.
 -- ============================================================================
+-- Économie d'énergie : quand la fenêtre Roblox n'est pas au premier plan (alt-tab, autre fenêtre), les aperçus 3D se
+-- mettent à jour ~4 fois par seconde au lieu de 60 (Library.PreviewIdleFPS, ou IdleFPS dans CreatePreview3D).
+-- Un aperçu caché (onglet / fenêtre fermés) ne se met déjà plus à jour du tout.
+Library.PreviewIdleFPS = Library.PreviewIdleFPS or 4
+local pvFocused = true
+pcall(function()
+	track(UIS.WindowFocused:Connect(function() pvFocused = true end))
+	track(UIS.WindowFocusReleased:Connect(function() pvFocused = false end))
+end)
+
 local PV_WHITE = Color3.fromRGB(255, 255, 255)
 local PV_DEFAULTS = {
 	Highlight = false, HighlightFill = PV_WHITE, HighlightOutline = PV_WHITE,
@@ -8813,7 +9054,7 @@ local PV_DEFAULTS = {
 	Distance = true, DistanceText = "42 m", DistanceColor = Color3.fromRGB(190, 190, 198),
 	Tracer = false, TracerColor = PV_WHITE, TracerOrigin = "Bottom",
 	HeadDot = false, HeadDotColor = PV_WHITE,
-	AutoRotate = true, RotateSpeed = 30, Animate = true, Floor = true, Zoom = 1,
+	AutoRotate = true, RotateSpeed = 30, Animate = true, Floor = true, Zoom = 1, Wave = false,
 }
 local PV_KEYS = {}
 for k in pairs(PV_DEFAULTS) do PV_KEYS[string.lower(k)] = k end
@@ -8856,8 +9097,8 @@ function Block:CreatePreview3D(o)
 
 	local vp = new("ViewportFrame", {
 		Position = UDim2.new(0, 8, 0, top), Size = UDim2.new(1, -16, 0, h),
-		BackgroundColor3 = Color3.fromRGB(10, 10, 13), BackgroundTransparency = 0, BorderSizePixel = 0,
-		Ambient = Color3.fromRGB(170, 170, 176), LightColor = Color3.fromRGB(255, 255, 255),
+		BackgroundColor3 = typeof(o.Background) == "Color3" and o.Background or Color3.fromRGB(10, 10, 13), BackgroundTransparency = 0, BorderSizePixel = 0,
+		Ambient = typeof(o.Background) == "Color3" and Color3.fromRGB(200, 200, 205) or Color3.fromRGB(170, 170, 176), LightColor = Color3.fromRGB(255, 255, 255),
 		LightDirection = Vector3.new(-0.6, -1, -0.5), ClipsDescendants = true, Active = true,
 	}, f)
 	corner(vp, 6)
@@ -8901,7 +9142,7 @@ function Block:CreatePreview3D(o)
 	local floor = Instance.new("Part")
 	floor.Name = "Floor"
 	floor.Shape = Enum.PartType.Cylinder
-	floor.Color = Color3.fromRGB(26, 26, 31)
+	floor.Color = typeof(o.FloorColor) == "Color3" and o.FloorColor or Color3.fromRGB(26, 26, 31)
 	floor.Material = Enum.Material.SmoothPlastic
 	floor.Anchored, floor.CanCollide, floor.CanQuery, floor.CanTouch, floor.CastShadow = true, false, false, false, false
 	floor.Parent = vp
@@ -9003,14 +9244,26 @@ function Block:CreatePreview3D(o)
 			part.CFrame = cf * CFrame.new(off)
 			return cf * tip
 		end
-		poseFn = function(a)
+		poseFn = function(a, tt)
+			tt = tt or 0
+			if opt.Wave then a = 0 end
 			jj.handL = limb(armL, jj.shL, Vector3.new(-0.5, -0.5, 0), a, Vector3.new(-0.5, -1.5, 0))
-			jj.handR = limb(armR, jj.shR, Vector3.new(0.5, -0.5, 0), -a, Vector3.new(0.5, -1.5, 0))
 			jj.footL = limb(legL, jj.hipL, Vector3.new(0, -1, 0), -a, Vector3.new(0, -2, 0))
 			jj.footR = limb(legR, jj.hipR, Vector3.new(0, -1, 0), a, Vector3.new(0, -2, 0))
+			if opt.Wave then
+				-- coucou : bras droit levé (pivot = haut de l'épaule), le poignet balance de gauche à droite
+				local th = 2.55 + math.sin(tt * 7) * 0.3
+				local cf = CFrame.new(1.5, 1, 0) * CFrame.Angles(-0.2, 0, th)
+				armR.CFrame = cf * CFrame.new(0, -1, 0)
+				jj.handR = cf * Vector3.new(0, -2, 0)
+				head.CFrame = CFrame.new(0, 1.5, 0) * CFrame.Angles(math.sin(tt * 2) * 0.05, 0, math.sin(tt * 3.5) * 0.04)
+			else
+				jj.handR = limb(armR, jj.shR, Vector3.new(0.5, -0.5, 0), -a, Vector3.new(0.5, -1.5, 0))
+				head.CFrame = CFrame.new(0, 1.5, 0)
+			end
 		end
 		poseFn(0)
-		fit = { focus = PV_FOCUS, size = Vector3.new(4, 5, 1), corners = PV_CORNERS, dist = 9.6, animated = true }
+		fit = { focus = PV_FOCUS, size = Vector3.new(4, 5, 1), corners = PV_CORNERS, dist = opt.Wave and 10.8 or 9.6, animated = true }
 		finishModel()
 	end
 
@@ -9183,7 +9436,8 @@ function Block:CreatePreview3D(o)
 	cam.FieldOfView = 40
 	cam.Parent = vp
 	vp.CurrentCamera = cam
-	local YAW0, PITCH0 = math.pi + 0.5, -0.12
+	local YAW0 = tonumber(o.Yaw) and math.rad(o.Yaw) or (math.pi + 0.5)
+	local PITCH0 = tonumber(o.Pitch) or -0.12
 	local yaw, pitch = YAW0, PITCH0
 	local dragging = false
 
@@ -9258,7 +9512,7 @@ function Block:CreatePreview3D(o)
 	end
 
 	-- ---------------------------------------------------------------- boucle de rendu
-	local t, pollT, shownT, shown = 0, 0, -1, true
+	local t, pollT, shownT, shown, idleAcc = 0, 0, -1, true, 0
 	local function isShown()
 		local p = vp
 		while p and p:IsA("GuiObject") do
@@ -9277,7 +9531,12 @@ function Block:CreatePreview3D(o)
 		if opt.AutoRotate and not dragging then yaw += math.rad(opt.RotateSpeed) * dt end
 		local dist = fit.dist / math.clamp(opt.Zoom, 0.4, 3)
 		cam.CFrame = CFrame.new(fit.focus) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0) * CFrame.new(0, 0, dist)
-		if fit.animated then poseFn(opt.Animate and math.sin(t * 3) * 0.55 or 0) end
+		if opt.Wave and not dragging then   -- face à la caméra : revient doucement de face après un glissement
+			local k = math.min(dt * 4, 1)
+			yaw += (((YAW0 - yaw + math.pi) % (2 * math.pi)) - math.pi) * k
+			pitch += (PITCH0 - pitch) * k
+		end
+		if fit.animated then poseFn(opt.Animate and math.sin(t * 3) * 0.55 or 0, t) end
 
 		local tanH = math.tan(math.rad(cam.FieldOfView) / 2)
 		local asp = W / H
@@ -9391,6 +9650,14 @@ function Block:CreatePreview3D(o)
 			shown = isShown()
 		end
 		if not shown then return end
+		-- fenêtre Roblox en arrière-plan : on ne rend qu'à ~4 images/s (le temps écoulé est cumulé, l'animation reste juste)
+		if not pvFocused then
+			idleAcc += dt
+			if idleAcc < 1 / math.max(tonumber(o.IdleFPS) or tonumber(Library.PreviewIdleFPS) or 4, 1) then return end
+			dt, idleAcc = idleAcc, 0
+		else
+			idleAcc = 0
+		end
 		pollT += dt
 		if pollT >= 0.05 then
 			pollT = 0
@@ -10296,8 +10563,9 @@ function Window:CreateHomeTab(name, icon, cfg)
 	-- ===================== COLONNE GAUCHE =====================
 	-- ----- mon personnage : aperçu 3D + identité
 	local prof = subInfo:CreateBlock({ Name = "Mon personnage", Side = "Left" })
-	local pv = prof:CreatePreview3D({ Name = false, Height = 260, Character = true,
-		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = true, AutoRotate = true, RotateSpeed = 24 } })
+	local pv = prof:CreatePreview3D({ Name = false, Height = 260,
+		Background = Color3.fromRGB(135, 206, 235), FloorColor = Color3.fromRGB(240, 248, 255), Yaw = 180, Pitch = -0.04,
+		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = true, AutoRotate = false, Wave = true, Animate = true } })
 	prof:CreateButton({ Name = "Actualiser l'aperçu", Favorite = false, Callback = function() pv:Refresh() end })
 	prof:CreateStats({ Columns = 2, CellHeight = 46, Items = {
 		{ Id = "name", Name = "Pseudo", Value = (lp.DisplayName ~= lp.Name) and (lp.DisplayName .. " (@" .. lp.Name .. ")") or lp.Name, Size = 13 },
@@ -11144,35 +11412,42 @@ function Tab:CreateBlock(o)
 
 	local flagKey = "__block:" .. tostring(self.Name or "Tab") .. "/" .. tostring(o.Name or "Block")
 	local collapsed = false
-	local foldGen, foldTween = 0, nil   -- jeton + tween en cours : évite les animations qui se battent quand on spamme
+	local foldGen, foldConn = 0, nil   -- jeton + animation en cours : évite les animations qui se battent quand on spamme
+	local function contentH() return lay.AbsoluteContentSize.Y / math.max(pxScale(), 0.05) + 14 end
+	local function stopFold() if foldConn then foldConn:Disconnect() foldConn = nil end end
 	local function setCollapsed(c)
 		if c == collapsed then return end
 		collapsed = c
 		foldGen += 1
-		local gen = foldGen
 		Library.Flags[flagKey] = c
 		tween(arrow, { Rotation = c and 0 or 90 }, 0.3)
 		Library._busyUntil = os.clock() + 0.45
-		local sc = pxScale()
-		-- 1) on coupe l'animation précédente et on part de la hauteur RÉELLEMENT affichée
-		if foldTween then pcall(function() foldTween:Cancel() end) foldTween = nil end
-		local cur = clip.AbsoluteSize.Y / sc
-		-- 2) hauteur cible mesurée via le layout (14 = padding haut 6 + bas 8)
-		local h = lay.AbsoluteContentSize.Y / sc + 14
+		stopFold()
+		-- on part de la hauteur RÉELLEMENT affichée ; la cible est relue à chaque image (le texte à retour à la ligne,
+		-- les tiroirs, etc. changent de hauteur) : plus d'arrêt à mi-course suivi d'un saut à la fin.
+		local startH = clip.AbsoluteSize.Y / math.max(pxScale(), 0.05)
 		clip.AutomaticSize = AN
-		clip.Size = UDim2.new(1, 0, 0, math.clamp(cur, 0, h))
-		local tw = tween(clip, { Size = UDim2.new(1, 0, 0, c and 0 or h) }, 0.36)
-		foldTween = tw
-		tw.Completed:Connect(function(state)
-			-- on ignore tout tween périmé (un clic plus récent a pris le relais)
-			if gen ~= foldGen or state ~= Enum.PlaybackState.Completed then return end
-			foldTween = nil
+		clip.Size = UDim2.new(1, 0, 0, math.max(startH, 0))
+		local dur = Library.Animations and (0.36 / math.max(Library.AnimSpeed or 1, 0.05)) or 0
+		local function finish()
+			stopFold()
 			if c then
 				clip.Size = UDim2.new(1, 0, 0, 0)
 			else
 				clip.AutomaticSize = AY
 				clip.Size = UDim2.new(1, 0, 0, 0)
 			end
+		end
+		if dur <= 0 then finish() return end
+		local t0 = os.clock()
+		local gen = foldGen
+		foldConn = RunService.RenderStepped:Connect(function()
+			if gen ~= foldGen or not clip.Parent then stopFold() return end
+			local a = math.clamp((os.clock() - t0) / dur, 0, 1)
+			local e = TweenService:GetValue(a, QUINT, OUT)
+			local goal = c and 0 or contentH()
+			clip.Size = UDim2.new(1, 0, 0, math.max(startH + (goal - startH) * e, 0))
+			if a >= 1 then finish() end
 		end)
 	end
 	head.MouseButton1Click:Connect(function()
@@ -11555,12 +11830,12 @@ function Tab:CreateSubTabs(list)
 		local name = type(d) == "table" and tostring(d.Name or d[1] or ("Page " .. idx)) or tostring(d)
 		local icon = type(d) == "table" and d.Icon or nil
 		local hasIcon = icon and icon ~= ""
-		local padL, padR = hasIcon and 30 or 14, 14
+		local padL, padR = hasIcon and 30 or 14, 14   -- marges de la pastille (gauche / droite)
 
 		-- zone cliquable transparente ; la largeur est calculée depuis le texte (jamais d'AutomaticSize : voir plus haut)
 		local pill = new("TextButton", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, X0, 0.5, 0),
 			Size = UDim2.new(0, 60, 0, H), BackgroundColor3 = T.Accent, BackgroundTransparency = 1, Text = "",
-			AutoButtonColor = false, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 2 }, strip)
+			AutoButtonColor = false, BorderSizePixel = 0, ClipsDescendants = false, ZIndex = 2 }, strip)
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, pill)
 		local pic
 		if hasIcon then
@@ -11569,7 +11844,10 @@ function Tab:CreateSubTabs(list)
 		end
 		local pl = new("TextLabel", { Position = UDim2.new(0, padL, 0, 0), Size = UDim2.new(1, -padL, 1, 0),
 			BackgroundTransparency = 1, Text = name, TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED,
-			TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.None, ZIndex = 3 }, pill)
+			TextXAlignment = Enum.TextXAlignment.Center, TextTruncate = Enum.TextTruncate.None, ZIndex = 3 }, pill)
+		-- texte centré dans la zone restante (après l'icône s'il y en a une) : une petite erreur de mesure se répartit des deux côtés
+		pl.Position = UDim2.new(0, hasIcon and 28 or 0, 0, 0)
+		pl.Size = UDim2.new(1, hasIcon and -28 or 0, 1, 0)
 
 		local page = new("Frame", { Name = "Sub_" .. name, Position = UDim2.new(0, 0, 0, 36), Size = UDim2.new(1, 0, 1, -36),
 			BackgroundTransparency = 1, Visible = false }, parent.Page)
@@ -11596,7 +11874,14 @@ function Tab:CreateSubTabs(list)
 
 		-- largeur = texte + marges ; recalculée si la police / la taille change
 		local function measure()
-			local w = math.ceil(pl.TextBounds.X) + padL + padR
+			local tb = pl.TextBounds.X
+			if tb <= 0 then   -- pas encore calculé (police pas chargée) : estimation par TextService
+				local ok, b = pcall(function()
+					return game:GetService("TextService"):GetTextSize(pl.Text, pl.TextSize, pl.Font, Vector2.new(10000, 100)).X
+				end)
+				tb = ok and b or (#name * pl.TextSize * 0.6)
+			end
+			local w = math.ceil(tb) + padL + padR + 6   -- +6 : marge de sécurité pour que le titre ne soit jamais rogné
 			if w ~= sub.PillW then
 				sub.PillW = w
 				pill.Size = UDim2.new(0, w, 0, H)
@@ -11605,6 +11890,10 @@ function Tab:CreateSubTabs(list)
 		end
 		measure()
 		pl:GetPropertyChangedSignal("TextBounds"):Connect(measure)
+		pl:GetPropertyChangedSignal("Font"):Connect(measure)
+		pl:GetPropertyChangedSignal("TextSize"):Connect(measure)
+		task.defer(measure)
+		task.delay(0.5, measure)   -- re-mesure une fois la police chargée
 
 		-- survol : simple éclaircissement du fond et du texte (aucun changement de taille)
 		pill.MouseEnter:Connect(function()
@@ -11623,7 +11912,11 @@ function Tab:CreateSubTabs(list)
 			end
 		end)
 		pill.MouseButton1Click:Connect(function()
-			ripple(pill)
+			-- (ClipsDescendants ignore les coins arrondis : l'onde sortait en rectangle) -> petit flash arrondi sur la pastille
+			if Library.Animations then
+				ind.BackgroundTransparency = 0.55
+				tween(ind, { BackgroundTransparency = 0.82 }, 0.35)
+			end
 			if parent.CurrentSub ~= sub then uiSnd("tab") end
 			select(sub)
 		end)
@@ -12923,7 +13216,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 			Tooltip = "Auto : le curseur dessiné par l'UI n'apparaît qu'en vue à la première personne (là où Roblox cache l'icône). Toujours dessiné : visible partout tant que l'interface est ouverte. Curseur Roblox : jamais de curseur dessiné.",
 			Callback = function(v) Library:SetCursorStyle(MODE_KEYS[v] or "auto") end })
 		CA:CreateDropdown({ Name = "Forme", Flag = "ui.cursor.shape", Search = false, Favorite = false,
-			Items = { "Point", "Cercle", "Carré", "Croix" }, Default = Library.CursorCfg.Shape,
+			Items = { "Point", "Flèche Roblox", "Cercle", "Carré", "Croix" }, Default = Library.CursorCfg.Shape,
 			Callback = co("Shape") })
 		CA:CreateSlider({ Name = "Taille", Flag = "ui.cursor.size", Min = 6, Max = 48, Step = 1, Suffix = " px",
 			Default = Library.CursorCfg.Size, Favorite = false, Callback = co("Size") })
