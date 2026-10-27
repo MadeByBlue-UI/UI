@@ -1099,6 +1099,141 @@ do
 	local KEY_ACTION, STEP_NAME = "UiLibGameKeys", "UiLibCursor"
 	local owners, gui, btn, savedIcon = {}, nil, nil, nil
 	local freed, keysBound = false, false
+	local dotGui, dot, dotScale, dotCol = nil, nil, nil, nil
+
+	-- Réglages du curseur dessiné (sous-onglet Réglages > Curseur). Library:SetCursorOption(nom, valeur)
+	Library.CursorDefaults = { Shape = "Point", Size = 12, Color = Color3.new(1, 1, 1), Outline = Color3.new(0, 0, 0),
+		OutlineSize = 1.5, Opacity = 1, UseAccent = false, ClickShrink = true }
+	if type(Library.CursorCfg) ~= "table" then
+		Library.CursorCfg = {}
+		for k, v in pairs(Library.CursorDefaults) do Library.CursorCfg[k] = v end
+	end
+
+	-- Curseur dessiné par l'UI : en 1re personne, Roblox / le jeu cache souvent le curseur natif
+	-- (même déverrouillé). Library.CursorStyle = "auto" (seulement en 1re personne) | "dot" (toujours) | "native".
+	local function useDot()
+		if (Library._cursorPreviewUntil or 0) > os.clock() then return true end
+		local style = Library.CursorStyle or "auto"
+		if style == "native" then return false end
+		if style == "dot" then return true end
+		if LP and LP.CameraMode == Enum.CameraMode.LockFirstPerson then return true end
+		local cam = workspace.CurrentCamera
+		return cam ~= nil and (cam.CFrame.Position - cam.Focus.Position).Magnitude < 1.5
+	end
+
+	local function destroyDot()
+		if dotGui then pcall(function() dotGui:Destroy() end) end
+		dotGui, dot, dotScale, dotCol = nil, nil, nil, nil
+	end
+
+	local function curColor()
+		local c = Library.CursorCfg
+		return c.UseAccent and T.Accent or c.Color
+	end
+
+	local function ensureDot()
+		local col = curColor()
+		if dot and dot.Parent and dotCol == col then return end
+		destroyDot()
+		dotCol = col
+		local c = Library.CursorCfg
+		local S = math.clamp(tonumber(c.Size) or 12, 4, 64)
+		local tr = 1 - math.clamp(tonumber(c.Opacity) or 1, 0, 1)
+		local ot = math.max(tonumber(c.OutlineSize) or 0, 0)
+		local ocol = c.Outline or Color3.new(0, 0, 0)
+		dotGui = Instance.new("ScreenGui")
+		dotGui.Name = "SolarisCursorDot"
+		dotGui.ResetOnSpawn = false
+		dotGui.DisplayOrder = 2147483647
+		dotGui.IgnoreGuiInset = true
+		dotGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		mount(dotGui)
+		dot = Instance.new("Frame")
+		dot.Name = "Cursor"
+		dot.AnchorPoint = Vector2.new(0.5, 0.5)
+		dot.Size = UDim2.fromOffset(S, S)
+		dot.BackgroundTransparency = 1
+		dot.BorderSizePixel = 0
+		dot.Active = false
+		dot.Parent = dotGui
+		dotScale = Instance.new("UIScale")
+		dotScale.Parent = dot
+
+		local function strokeOn(f, thick, color)
+			if thick <= 0 then return end
+			local st = Instance.new("UIStroke")
+			st.Color = color
+			st.Thickness = thick
+			st.Transparency = tr
+			st.Parent = f
+		end
+		-- forme pleine (avec contour extérieur)
+		local function solid(size, pos, anchor, round, z)
+			local f = Instance.new("Frame")
+			f.AnchorPoint = anchor or Vector2.new(0.5, 0.5)
+			f.Position = pos or UDim2.fromScale(0.5, 0.5)
+			f.Size = size
+			f.BackgroundColor3 = col
+			f.BackgroundTransparency = tr
+			f.BorderSizePixel = 0
+			f.Active = false
+			f.ZIndex = z or 2
+			if round then
+				local uc = Instance.new("UICorner")
+				uc.CornerRadius = UDim.new(1, 0)
+				uc.Parent = f
+			end
+			strokeOn(f, ot, ocol)
+			f.Parent = dot
+			return f
+		end
+
+		local shape = c.Shape
+		if shape == "Cercle" then
+			-- anneau : trait coloré + liseré du contour de chaque côté
+			local t = math.max(2, math.floor(S / 6 + 0.5))
+			if ot > 0 then
+				local back = Instance.new("Frame")
+				back.AnchorPoint = Vector2.new(0.5, 0.5)
+				back.Position = UDim2.fromScale(0.5, 0.5)
+				back.Size = UDim2.fromOffset(math.max(S - ot * 2, 2), math.max(S - ot * 2, 2))
+				back.BackgroundTransparency = 1
+				back.BorderSizePixel = 0
+				back.Active = false
+				back.ZIndex = 1
+				local uc = Instance.new("UICorner")
+				uc.CornerRadius = UDim.new(1, 0)
+				uc.Parent = back
+				strokeOn(back, t + ot * 2, ocol)
+				back.Parent = dot
+			end
+			local ring = Instance.new("Frame")
+			ring.AnchorPoint = Vector2.new(0.5, 0.5)
+			ring.Position = UDim2.fromScale(0.5, 0.5)
+			ring.Size = UDim2.fromOffset(S, S)
+			ring.BackgroundTransparency = 1
+			ring.BorderSizePixel = 0
+			ring.Active = false
+			ring.ZIndex = 2
+			local uc = Instance.new("UICorner")
+			uc.CornerRadius = UDim.new(1, 0)
+			uc.Parent = ring
+			strokeOn(ring, t, col)
+			ring.Parent = dot
+		elseif shape == "Croix" then
+			local gap = math.max(2, math.floor(S * 0.12 + 0.5))
+			local L = math.max(S / 2 - gap, 2)
+			local th = math.max(2, math.floor(S / 6 + 0.5))
+			solid(UDim2.fromOffset(th, L), UDim2.new(0.5, 0, 0.5, -gap), Vector2.new(0.5, 1))
+			solid(UDim2.fromOffset(th, L), UDim2.new(0.5, 0, 0.5, gap), Vector2.new(0.5, 0))
+			solid(UDim2.fromOffset(L, th), UDim2.new(0.5, -gap, 0.5, 0), Vector2.new(1, 0.5))
+			solid(UDim2.fromOffset(L, th), UDim2.new(0.5, gap, 0.5, 0), Vector2.new(0, 0.5))
+		elseif shape == "Carré" then
+			solid(UDim2.fromOffset(S, S), nil, nil, false)
+		else   -- "Point"
+			solid(UDim2.fromOffset(S, S), nil, nil, true)
+		end
+	end
 
 	local function wantCursor()
 		for _, mode in pairs(owners) do
@@ -1131,12 +1266,29 @@ do
 				pcall(function()
 					RunService:BindToRenderStep(STEP_NAME, Enum.RenderPriority.Camera.Value + 10, function()
 						if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then UIS.MouseBehavior = Enum.MouseBehavior.Default end
-						if not UIS.MouseIconEnabled then UIS.MouseIconEnabled = true end
+						if useDot() then
+							-- curseur natif masqué + point dessiné à la position de la souris
+							if UIS.MouseIconEnabled then UIS.MouseIconEnabled = false end
+							ensureDot()
+							local m = UIS:GetMouseLocation()
+							dot.Position = UDim2.fromOffset(m.X, m.Y)
+							dot.Visible = true
+							if dotScale then
+								local down = Library.CursorCfg.ClickShrink and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+								dotScale.Scale = dotScale.Scale + ((down and 0.7 or 1) - dotScale.Scale) * 0.35
+							end
+						else
+							if not UIS.MouseIconEnabled then UIS.MouseIconEnabled = true end
+							if dot then dot.Visible = false end
+						end
 					end)
 				end)
-			elseif savedIcon ~= nil then
-				pcall(function() UIS.MouseIconEnabled = savedIcon end)
-				savedIcon = nil
+			else
+				destroyDot()
+				if savedIcon ~= nil then
+					pcall(function() UIS.MouseIconEnabled = savedIcon end)
+					savedIcon = nil
+				end
 			end
 		end
 		local keys = Library.BlockGameKeys == true and next(owners) ~= nil
@@ -1164,6 +1316,25 @@ do
 		apply()
 	end
 	function Library:IsCursorFree() return freed end
+	function Library:SetCursorStyle(v)   -- "auto" | "dot" | "native"
+		Library.CursorStyle = (v == "dot" or v == "native") and v or "auto"
+	end
+	-- Shape ("Point" | "Cercle" | "Carré" | "Croix"), Size (4-64), Color, Outline (Color3), OutlineSize, Opacity (0-1),
+	-- UseAccent (bool), ClickShrink (bool)
+	function Library:SetCursorOption(name, value)
+		if Library.CursorDefaults[name] == nil then return false end
+		Library.CursorCfg[name] = value
+		destroyDot()   -- reconstruit à la frame suivante
+		return true
+	end
+	function Library:PreviewCursor(seconds)   -- force le curseur dessiné quelques secondes pour voir les réglages
+		seconds = tonumber(seconds) or 6
+		Library._cursorPreviewUntil = os.clock() + seconds
+		Library:AcquireCursor("preview", true)
+		task.delay(seconds + 0.1, function()
+			if (Library._cursorPreviewUntil or 0) <= os.clock() then Library:ReleaseCursor("preview") end
+		end)
+	end
 	function Library:SetFreeCursor(v)
 		Library.FreeCursor = v and true or false
 		apply()
@@ -1186,6 +1357,7 @@ do
 		apply()
 		pcall(function() CAS:UnbindAction(KEY_ACTION) end)
 		keysBound = false
+		destroyDot()
 		if gui then pcall(function() gui:Destroy() end) end
 		gui, btn = nil, nil
 	end
@@ -11698,7 +11870,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	tab._isSettings = true   -- ses toggles ne sont pas listés dans le HUD des actifs
 
 	-- Rangement : les blocs sont répartis en pages (pastilles en haut) au lieu d'une seule liste interminable
-	local subs = tab:CreateSubTabs({ "Apparence", "Thèmes", "Interface", "Notifications", "Joueurs", "Raccourcis & configs" })
+	local subs = tab:CreateSubTabs({ "Apparence", "Thèmes", "Interface", "Curseur", "Notifications", "Joueurs", "Raccourcis & configs" })
 	local blkCount = {}
 	local function BK(group, o)
 		blkCount[group] = (blkCount[group] or 0) + 1
@@ -12390,6 +12562,66 @@ function Window:CreateSettingsTab(name, icon, docked)
 	SP:CreateButton({ Name = "Ouvrir la barre de recherche", Favorite = false, Callback = function() Library:OpenSpotlight() end })
 	SP:CreateParagraph({ Title = "Utilisation",
 		Content = "Ctrl+T ouvre la barre au milieu de l'écran, sans la fenêtre : juste le trou noir et les étoiles.\nTape pour trouver n'importe quel bouton, interrupteur, curseur, liste, champ, couleur ou touche, et règle-le directement.\nEntrée : lance / bascule le premier résultat.   Échap : efface puis ferme.   Clic dehors : ferme." })
+
+	-- ───────────── Curseur ─────────────
+	do
+		local CD = Library.CursorDefaults
+		local MODE_NAMES = { auto = "Auto (1re personne)", dot = "Toujours dessiné", native = "Curseur Roblox" }
+		local MODE_KEYS = { ["Auto (1re personne)"] = "auto", ["Toujours dessiné"] = "dot", ["Curseur Roblox"] = "native" }
+		local function co(n) return function(v) Library:SetCursorOption(n, v) end end
+
+		local CA = BK("Curseur", { Name = "Affichage", Side = "Left" })
+		CA:CreateDropdown({ Name = "Mode", Flag = "ui.cursor.mode", Search = false, Favorite = false,
+			Items = { "Auto (1re personne)", "Toujours dessiné", "Curseur Roblox" },
+			Default = MODE_NAMES[Library.CursorStyle or "auto"],
+			Tooltip = "Auto : le curseur dessiné par l'UI n'apparaît qu'en vue à la première personne (là où Roblox cache l'icône). Toujours dessiné : visible partout tant que l'interface est ouverte. Curseur Roblox : jamais de curseur dessiné.",
+			Callback = function(v) Library:SetCursorStyle(MODE_KEYS[v] or "auto") end })
+		CA:CreateDropdown({ Name = "Forme", Flag = "ui.cursor.shape", Search = false, Favorite = false,
+			Items = { "Point", "Cercle", "Carré", "Croix" }, Default = Library.CursorCfg.Shape,
+			Callback = co("Shape") })
+		CA:CreateSlider({ Name = "Taille", Flag = "ui.cursor.size", Min = 6, Max = 48, Step = 1, Suffix = " px",
+			Default = Library.CursorCfg.Size, Favorite = false, Callback = co("Size") })
+		CA:CreateSlider({ Name = "Opacité", Flag = "ui.cursor.opacity", Min = 20, Max = 100, Step = 5, Suffix = "%",
+			Default = math.floor(Library.CursorCfg.Opacity * 100 + 0.5), Favorite = false,
+			Callback = function(v) Library:SetCursorOption("Opacity", v / 100) end })
+		CA:CreateToggle({ Name = "Rétrécir au clic", Flag = "ui.cursor.shrink", Default = Library.CursorCfg.ClickShrink,
+			Favorite = false, Tooltip = "Le curseur se réduit légèrement tant que le clic gauche est enfoncé.",
+			Callback = co("ClickShrink") })
+
+		local CC = BK("Curseur", { Name = "Couleurs", Side = "Right" })
+		CC:CreateToggle({ Name = "Suivre la couleur d'accent", Flag = "ui.cursor.accent", Default = Library.CursorCfg.UseAccent,
+			Favorite = false, Tooltip = "Le curseur prend la couleur d'accent du thème (et la suit quand tu la changes).",
+			Callback = co("UseAccent") })
+		CC:CreateColorPicker({ Name = "Couleur", Flag = "ui.cursor.color", Default = Library.CursorCfg.Color, Opacity = false,
+			Favorite = false, Callback = function(c) Library:SetCursorOption("Color", c) end })
+		CC:CreateColorPicker({ Name = "Contour", Flag = "ui.cursor.outline", Default = Library.CursorCfg.Outline, Opacity = false,
+			Favorite = false, Callback = function(c) Library:SetCursorOption("Outline", c) end })
+		CC:CreateSlider({ Name = "Épaisseur du contour", Flag = "ui.cursor.outsize", Min = 0, Max = 4, Step = 0.5, Suffix = " px",
+			Default = Library.CursorCfg.OutlineSize, Favorite = false, Callback = co("OutlineSize") })
+
+		local CP = BK("Curseur", { Name = "Aperçu", Side = "Left" })
+		CP:CreateParagraph({ Title = "Voir le résultat",
+			Content = "Le curseur dessiné n'apparaît qu'en 1re personne en mode Auto. « Aperçu » le force pendant 6 secondes : bouge la souris dans la fenêtre pour le voir avec tes réglages." })
+		CP:CreateButton({ Name = "Aperçu (6 s)", Favorite = false, Callback = function() Library:PreviewCursor(6) end })
+		CP:CreateButton({ Name = "Réinitialiser le curseur", Favorite = false, Confirm = true,
+			Tooltip = "Remet mode, forme, taille, couleurs, contour et opacité par défaut.",
+			Callback = function()
+				local function set(flag, v)
+					local it = Library.Items[flag]
+					if it and it.Set then pcall(it.Set, it, v) end
+				end
+				set("ui.cursor.mode", MODE_NAMES.auto)
+				set("ui.cursor.shape", CD.Shape)
+				set("ui.cursor.size", CD.Size)
+				set("ui.cursor.opacity", math.floor(CD.Opacity * 100 + 0.5))
+				set("ui.cursor.shrink", CD.ClickShrink)
+				set("ui.cursor.accent", CD.UseAccent)
+				set("ui.cursor.color", CD.Color)
+				set("ui.cursor.outline", CD.Outline)
+				set("ui.cursor.outsize", CD.OutlineSize)
+				Library:Notify({ Title = "Curseur", Content = "Réglages du curseur réinitialisés", Type = "Success", Duration = 3 })
+			end })
+	end
 
 	-- ───────────── HUD des actifs ─────────────
 	local HU = BK("Interface", { Name = "HUD des actifs", Side = "Left", Collapsed = true })
