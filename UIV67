@@ -573,6 +573,8 @@ local function new(class, props, parent)
 		end
 	end
 	if parent then o.Parent = parent end
+	if class == "TextBox" and Library._attachSelection then Library._attachSelection(o) end
+	if class == "ScrollingFrame" and Library._regScroll then Library._regScroll(o) end
 	return o
 end
 
@@ -616,6 +618,201 @@ local function tween(o, props, t, style, dir)
 	local tw = TweenService:Create(o, info, props)
 	tw:Play()
 	return tw
+end
+
+-- ============================================================================
+-- RESSORTS : une animation « ressort » garde sa VITESSE quand on l'interrompt (un tween repart de zéro et saccade).
+-- Library._spring(objet, { Position = UDim2, Size = ..., BackgroundColor3 = ..., Propriete = nombre }, "snappy" | "bouncy" | "smooth" | "soft")
+-- Library._springStop(objet [, propriete]) : arrête (à appeler avant de poser une valeur directement).
+-- Une seule boucle partagée, active uniquement pendant qu'un ressort bouge. Library.Springs = false : retour aux tweens.
+-- ============================================================================
+Library.Springs = true
+Library.SpringPresets = {   -- { raideur (rad/s), amortissement }  (amortissement < 1 = léger rebond, 1 = sans dépassement)
+	snappy = { 26, 0.84 }, bouncy = { 22, 0.6 }, smooth = { 24, 1 }, soft = { 16, 1 },
+}
+local springs, springConn = {}, nil
+
+-- ressort amorti, solution exacte (stable quel que soit dt)
+function Library._springStep(x, v, target, w, z, dt)
+	local d = x - target
+	if z >= 0.999 then
+		local e = math.exp(-w * dt)
+		return target + e * (d * (1 + w * dt) + v * dt), e * (v * (1 - w * dt) - d * w * w * dt)
+	end
+	local wd = w * math.sqrt(1 - z * z)
+	local e = math.exp(-z * w * dt)
+	local c, sn = math.cos(wd * dt), math.sin(wd * dt)
+	local k = z * w / wd
+	return target + e * (d * (c + k * sn) + v * sn / wd), e * (v * (c - k * sn) - d * (w * w / wd) * sn)
+end
+
+local function springDecode(val)
+	local t = typeof(val)
+	if t == "number" then return { val }, { 0.001 }, t end
+	if t == "UDim2" then return { val.X.Scale, val.X.Offset, val.Y.Scale, val.Y.Offset }, { 0.0004, 0.03, 0.0004, 0.03 }, t end
+	if t == "Color3" then return { val.R, val.G, val.B }, { 0.002, 0.002, 0.002 }, t end
+	if t == "Vector2" then return { val.X, val.Y }, { 0.03, 0.03 }, t end
+	return nil
+end
+local function springEncode(kind, x)
+	if kind == "number" then return x[1] end
+	if kind == "UDim2" then return UDim2.new(x[1], x[2], x[3], x[4]) end
+	if kind == "Color3" then return Color3.new(math.clamp(x[1], 0, 1), math.clamp(x[2], 0, 1), math.clamp(x[3], 0, 1)) end
+	return Vector2.new(x[1], x[2])
+end
+
+local function springLoop(dt)
+	dt = math.min(dt, 1 / 20) * math.max(Library.AnimSpeed or 1, 0.05)
+	for obj, props in pairs(springs) do
+		if not obj.Parent then
+			springs[obj] = nil
+		else
+			for prop, st in pairs(props) do
+				local rest = true
+				for i = 1, #st.x do
+					local nx, nv = Library._springStep(st.x[i], st.v[i], st.t[i], st.w, st.z, dt)
+					st.x[i], st.v[i] = nx, nv
+					if math.abs(nx - st.t[i]) > st.eps[i] or math.abs(nv) > st.eps[i] * 20 then rest = false end
+				end
+				if rest then
+					for i = 1, #st.x do st.x[i], st.v[i] = st.t[i], 0 end
+					props[prop] = nil
+				end
+				obj[prop] = springEncode(st.kind, st.x)
+			end
+			if next(props) == nil then springs[obj] = nil end
+		end
+	end
+	if next(springs) == nil and springConn then
+		springConn:Disconnect()
+		springConn = nil
+	end
+end
+
+function Library._springStop(obj, prop)
+	local ps = springs[obj]
+	if not ps then return end
+	if prop then ps[prop] = nil else springs[obj] = nil end
+end
+
+function Library._spring(obj, props, preset)
+	if Library.Springs == false or Library.Animations == false then
+		for k in pairs(props) do Library._springStop(obj, k) end
+		if Library.Animations == false then
+			for k, v in pairs(props) do obj[k] = v end
+		else
+			tween(obj, props, 0.3)
+		end
+		return
+	end
+	local pr = Library.SpringPresets[preset or "snappy"] or Library.SpringPresets.snappy
+	local ps = springs[obj]
+	if not ps then ps = {} springs[obj] = ps end
+	for prop, target in pairs(props) do
+		local tx, eps, kind = springDecode(target)
+		if tx then
+			local st = ps[prop]
+			local cx = springDecode(obj[prop])
+			if st and st.kind == kind then
+				-- quelqu'un a posé la valeur à la main entre-temps : on repart de la vraie valeur, sans vitesse
+				for i = 1, #cx do
+					if math.abs(cx[i] - st.x[i]) > eps[i] * 2 then
+						for j = 1, #cx do st.x[j], st.v[j] = cx[j], 0 end
+						break
+					end
+				end
+			else
+				local vz = {}
+				for i = 1, #cx do vz[i] = 0 end
+				st = { kind = kind, x = cx, v = vz, eps = eps }
+				ps[prop] = st
+			end
+			st.t, st.w = tx, pr[1]
+			st.z = (kind == "Color3") and math.max(pr[2], 1) or pr[2]
+		end
+	end
+	if not springConn then springConn = RunService.RenderStepped:Connect(springLoop) end
+end
+
+-- ============================================================================
+-- DÉFILEMENT FLUIDE (molette) : au lieu de sauter de quelques lignes, le contenu glisse vers sa position avec un ressort
+-- (inertie). Le saut natif est annulé avant l'affichage ; les autres modes (barre de défilement, tactile, code) restent natifs.
+-- Library.SmoothScroll = false pour couper · Library.SmoothScrollSpeed (raideur, 16) · Library.SmoothScrollGain (distance, 1).
+-- ============================================================================
+Library.SmoothScroll      = true
+Library.SmoothScrollSpeed = 16
+Library.SmoothScrollGain  = 1
+local scrollActive, scrollConn, wheelAt = {}, nil, 0
+track(UIS.InputChanged:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseWheel then wheelAt = os.clock() end
+end))
+
+local function scrollLoop(dt)
+	dt = math.min(dt, 1 / 20)
+	local w = Library.SmoothScrollSpeed or 16
+	for sf, st in pairs(scrollActive) do
+		if not sf.Parent then
+			scrollActive[sf] = nil
+		else
+			local p, v = Library._springStep(st.pos, st.vel, st.target, w, 1, dt)
+			st.pos, st.vel = p, v
+			local done = math.abs(st.target - p) < 0.35 and math.abs(v) < 4
+			if done then p = st.target end
+			local old = st.last
+			sf.CanvasPosition = Vector2.new(sf.CanvasPosition.X, p)
+			local act = sf.CanvasPosition.Y
+			st.prev, st.last, st.known = old, act, act
+			if math.abs(act - p) > 1 then   -- haut / bas du contenu atteint
+				st.pos, st.vel, st.target = act, 0, act
+				done = true
+			end
+			if done then scrollActive[sf] = nil end
+		end
+	end
+	if next(scrollActive) == nil and scrollConn then
+		scrollConn:Disconnect()
+		scrollConn = nil
+	end
+end
+
+local function scrollChanged(sf, st)
+	local y = sf.CanvasPosition.Y
+	if (st.last and math.abs(y - st.last) < 1) or (st.prev and math.abs(y - st.prev) < 1) then
+		st.known = y   -- notre propre écriture
+		return
+	end
+	local wheel = Library.SmoothScroll ~= false and sf.ScrollingEnabled and (os.clock() - wheelAt) < 0.15
+		and not UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+	if wheel then
+		local delta = y - st.known
+		if math.abs(delta) < 1 then return end
+		local active = scrollActive[sf] ~= nil
+		st.target = (active and st.target or st.known) + delta * (Library.SmoothScrollGain or 1)
+		if not active then st.pos, st.vel = st.known, 0 end
+		-- on annule le saut natif : la position affichée reste où elle était, le ressort la fait avancer
+		local back = st.pos
+		sf.CanvasPosition = Vector2.new(sf.CanvasPosition.X, back)
+		st.prev, st.last, st.known = st.last, sf.CanvasPosition.Y, sf.CanvasPosition.Y
+		scrollActive[sf] = st
+		if not scrollConn then scrollConn = RunService.RenderStepped:Connect(scrollLoop) end
+	else
+		-- changement venu d'ailleurs (barre de défilement, tactile, code) : on abandonne le glissement
+		scrollActive[sf] = nil
+		st.known = y
+	end
+end
+
+function Library._regScroll(sf)
+	local st = { known = sf.CanvasPosition.Y, pos = 0, vel = 0, target = 0 }
+	local queued = false
+	sf:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+		if queued then return end
+		queued = true
+		task.defer(function()   -- après l'événement de molette de la même image
+			queued = false
+			if sf.Parent then scrollChanged(sf, st) end
+		end)
+	end)
 end
 
 local function corner(parent, base)
@@ -4785,6 +4982,19 @@ local TOGGLE_STYLES = {}
 local toggleSkins = {}   -- toggles existants : { f = ligne, skin = fonction qui redessine }
 
 local function tgl(o, props, instant, t, style)
+	if props.Position ~= nil then
+		if not instant and Library.Springs ~= false and Library.Animations ~= false then
+			-- la position passe en ressort (garde sa vitesse si on rebascule en plein mouvement), le reste en tween
+			local rest
+			for k, v in pairs(props) do
+				if k ~= "Position" then rest = rest or {} rest[k] = v end
+			end
+			Library._spring(o, { Position = props.Position }, style == BACK and "bouncy" or "snappy")
+			if rest then tween(o, rest, t or 0.25, style) end
+			return
+		end
+		Library._springStop(o, "Position")
+	end
 	tween(o, props, instant and 0 or (t or 0.25), style)
 end
 local function circ(o) new("UICorner", { CornerRadius = UDim.new(1, 0) }, o) end
@@ -5348,13 +5558,13 @@ function Block:CreateSlider(o)
 		local span = max - min
 		local ratio = span == 0 and 0 or (v - min) / span
 		if instant then
-			if fillTw then fillTw:Cancel() fillTw = nil end
-			if knobTw then knobTw:Cancel() knobTw = nil end
+			Library._springStop(fill)
+			Library._springStop(knob, "Position")
 			fill.Size = UDim2.new(ratio, 0, 1, 0)
 			knob.Position = UDim2.new(ratio, 0, 0.5, 0)
 		else
-			fillTw = tween(fill, { Size = UDim2.new(ratio, 0, 1, 0) }, 0.24)
-			knobTw = tween(knob, { Position = UDim2.new(ratio, 0, 0.5, 0) }, 0.24)
+			Library._spring(fill, { Size = UDim2.new(ratio, 0, 1, 0) }, "smooth")
+			Library._spring(knob, { Position = UDim2.new(ratio, 0, 0.5, 0) }, "smooth")
 		end
 		showNumber(v, not instant)
 		if o.Flag then Library.Flags[o.Flag] = v end
@@ -5470,12 +5680,15 @@ function Block:CreateRangeSlider(o)
 	local function paint(instant)
 		local rl, rh = ratioOf(low), ratioOf(high)
 		if instant then
+			Library._springStop(fill)
+			Library._springStop(kLow, "Position")
+			Library._springStop(kHigh, "Position")
 			fill.Position, fill.Size = UDim2.new(rl, 0, 0, 0), UDim2.new(rh - rl, 0, 1, 0)
 			kLow.Position, kHigh.Position = UDim2.new(rl, 0, 0.5, 0), UDim2.new(rh, 0, 0.5, 0)
 		else
-			tween(fill, { Position = UDim2.new(rl, 0, 0, 0), Size = UDim2.new(rh - rl, 0, 1, 0) }, 0.14)
-			tween(kLow, { Position = UDim2.new(rl, 0, 0.5, 0) }, 0.14)
-			tween(kHigh, { Position = UDim2.new(rh, 0, 0.5, 0) }, 0.14)
+			Library._spring(fill, { Position = UDim2.new(rl, 0, 0, 0), Size = UDim2.new(rh - rl, 0, 1, 0) }, "smooth")
+			Library._spring(kLow, { Position = UDim2.new(rl, 0, 0.5, 0) }, "smooth")
+			Library._spring(kHigh, { Position = UDim2.new(rh, 0, 0.5, 0) }, "smooth")
 		end
 		if not lowBox:IsFocused() then lowBox.Text = fmt(low) end
 		if not highBox:IsFocused() then highBox.Text = fmt(high) end
@@ -5874,7 +6087,8 @@ end
 -- TIROIR ANIMÉ (liste déroulante, color picker) : dr.Wrap = cadre rogné qui s'ouvre / se ferme en glissant,
 -- dr:Set(bool), dr:Resize(hauteur), dr.Open, dr.Height. Stocké dans Library (pas de variable locale en plus).
 -- ============================================================================
-Library._drawer = function(holder, order)
+Library._drawer = function(holder, order, gap)
+	gap = gap or 0   -- écart au-dessus du contenu, animé AVEC le tiroir (sinon il disparaît d'un coup à la fin de la fermeture)
 	local d = { Open = false, Height = 0 }
 	local wrap = new("Frame", { Name = "Drawer", Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1,
 		BorderSizePixel = 0, ClipsDescendants = true, LayoutOrder = order or 2, Visible = false }, holder)
@@ -5882,7 +6096,7 @@ Library._drawer = function(holder, order)
 	local gen = 0
 	function d:Resize(h)
 		d.Height = h
-		if d.Open then tween(wrap, { Size = UDim2.new(1, 0, 0, h) }, 0.28) end
+		if d.Open then tween(wrap, { Size = UDim2.new(1, 0, 0, h + gap) }, 0.28) end
 	end
 	function d:Set(v)
 		v = v and true or false
@@ -5892,9 +6106,10 @@ Library._drawer = function(holder, order)
 		local my = gen
 		if v then
 			wrap.Visible = true
-			tween(wrap, { Size = UDim2.new(1, 0, 0, d.Height) }, 0.34)
+			tween(wrap, { Size = UDim2.new(1, 0, 0, d.Height + gap) }, 0.34)
 		else
-			local tw = tween(wrap, { Size = UDim2.new(1, 0, 0, 0) }, 0.26)
+			-- InOut : plus de ralentissement final suivi d'une disparition brusque
+			local tw = tween(wrap, { Size = UDim2.new(1, 0, 0, 0) }, 0.3, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
 			tw.Completed:Connect(function()
 				if gen == my and not d.Open then wrap.Visible = false end
 			end)
@@ -5932,7 +6147,7 @@ function Block:CreateDropdown(o)
 	end
 
 	local holder = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1 }, self.Body)
-	new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = BYORDER }, holder)
+	new("UIListLayout", { Padding = UDim.new(0, 0), SortOrder = BYORDER }, holder)
 	self:_reg(holder, o.Name)
 
 	local head = new("TextButton", {
@@ -6011,9 +6226,9 @@ function Block:CreateDropdown(o)
 	valL:GetPropertyChangedSignal("Text"):Connect(layoutHead)
 	task.defer(layoutHead)
 
-	local dr = Library._drawer(holder, 2)
+	local dr = Library._drawer(holder, 2, 4)
 	local panel = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 100), BackgroundColor3 = T.Panel, BackgroundTransparency = 0.1, BorderSizePixel = 0,
+		Position = UDim2.new(0, 0, 0, 4), Size = UDim2.new(1, 0, 0, 100), BackgroundColor3 = T.Panel, BackgroundTransparency = 0.1, BorderSizePixel = 0,
 	}, dr.Wrap)
 	corner(panel, 8)
 	trackStyled(panel, stroke(panel, 0.9), "panel")
@@ -6021,16 +6236,17 @@ function Block:CreateDropdown(o)
 		Position = UDim2.new(0, 6, 0, 6), Size = UDim2.new(1, -12, 0, 24), BackgroundColor3 = T.Off,
 		BackgroundTransparency = 0.45, Text = "", PlaceholderText = "Rechercher...",
 		PlaceholderColor3 = Color3.fromRGB(120, 120, 126), TextColor3 = T.Text, TextSize = 12, Font = F_REG,
-		ClearTextOnFocus = false, TextXAlignment = LEFT, Visible = false, BorderSizePixel = 0,
+		ClearTextOnFocus = false, TextXAlignment = CENTER, Visible = false, BorderSizePixel = 0,
 	}, panel)
-	corner(search, 6)
-	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, search)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, search)   -- pilule : totalement arrondie
+	new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, search)
+	Library._attachTextFade(search)
 	local list = new("ScrollingFrame", {
 		Position = UDim2.new(0, 0, 0, 0), Size = UDim2.new(1, 0, 0, 100), BackgroundTransparency = 1,
 		BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageColor3 = T.Accent, ScrollBarImageTransparency = 0.5,
 		CanvasSize = UDim2.new(), AutomaticCanvasSize = AY,
 	}, panel)
-	new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = BYORDER }, list)
+	new("UIListLayout", { Padding = UDim.new(0, 0), SortOrder = BYORDER }, list)
 	new("UIPadding", { PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4),
 		PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4) }, list)
 
@@ -6155,21 +6371,24 @@ function Block:CreateDropdown(o)
 				if b.Shown ~= vis then
 					b.Shown = vis
 					b.Tok = (b.Tok or 0) + 1
-					local my, btn = b.Tok, b.Btn
+					local my, btn, row = b.Tok, b.Btn, b.Row
 					if vis then
-						btn.Visible = true
+						row.Visible = true
 						if firstLayout then
-							btn.Size = UDim2.new(1, 0, 0, 24)
+							row.Size = UDim2.new(1, 0, 0, 26)
 							btn.TextTransparency = 0
 						else
-							btn.Size = UDim2.new(1, 0, 0, 0)
+							row.Size = UDim2.new(1, 0, 0, 0)
 							btn.TextTransparency = 1
-							tween(btn, { Size = UDim2.new(1, 0, 0, 24), TextTransparency = 0 }, 0.28)
+							tween(row, { Size = UDim2.new(1, 0, 0, 26) }, 0.28)
+							tween(btn, { TextTransparency = 0 }, 0.22)
 						end
 					else
-						local tw = tween(btn, { Size = UDim2.new(1, 0, 0, 0), TextTransparency = 1 }, 0.2)
+						-- même durée que la hauteur de la liste : pas de vide qui reste puis disparaît
+						tween(btn, { TextTransparency = 1 }, 0.18)
+						local tw = tween(row, { Size = UDim2.new(1, 0, 0, 0) }, 0.28)
 						tw.Completed:Connect(function()
-							if b.Tok == my and not b.Shown then btn.Visible = false end
+							if b.Tok == my and not b.Shown then row.Visible = false end
 						end)
 					end
 				end
@@ -6188,7 +6407,7 @@ function Block:CreateDropdown(o)
 
 	local function rebuild()
 		for _, c in ipairs(list:GetChildren()) do
-			if c:IsA("TextButton") or c:IsA("TextLabel") then c:Destroy() end
+			if c:IsA("GuiObject") then c:Destroy() end
 		end
 		table.clear(btns)
 		firstLayout = true
@@ -6196,12 +6415,14 @@ function Block:CreateDropdown(o)
 			label(list, "(vide)", 12, { Size = UDim2.new(1, 0, 0, 24), TextColor3 = T.ElementAccent, TextXAlignment = CENTER })
 		end
 		for idx, text in ipairs(items) do
+			local row = new("Frame", { Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1,
+				BorderSizePixel = 0, LayoutOrder = idx, ClipsDescendants = true }, list)
 			local b = new("TextButton", {
 				Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
 				Text = text, TextColor3 = T.ElementAccent, TextSize = 12, Font = F_REG,
 				TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd,
-				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = idx, ClipsDescendants = true,
-			}, list)
+				AutoButtonColor = false, BorderSizePixel = 0, ClipsDescendants = true,
+			}, row)
 			local pad = new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 26) }, b)
 			new("UICorner", { CornerRadius = UDim.new(0, 5) }, b)
 			local ind
@@ -6223,7 +6444,7 @@ function Block:CreateDropdown(o)
 				Visible = false, BorderSizePixel = 0 }, b)
 			new("UICorner", { CornerRadius = UDim.new(0, 4) }, tag)
 			new("UIPadding", { PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5) }, tag)
-			btns[text] = { Btn = b, Ind = ind, Shown = true, Tag = tag, Pad = pad }
+			btns[text] = { Btn = b, Row = row, Ind = ind, Shown = true, Tag = tag, Pad = pad }
 			b.MouseEnter:Connect(function()
 				if not isOn(text) then tween(b, { BackgroundTransparency = 0.93 }, 0.15) end
 			end)
@@ -6789,6 +7010,161 @@ function Library._attachTextFade(tb)
 	task.defer(layoutCheck)
 end
 
+-- ============================================================================
+-- SURLIGNAGE DE SÉLECTION (tous les champs de texte) : un rectangle bleu vif balaie le texte sélectionné depuis la gauche
+-- (Ctrl+A, double-clic, glisser...). Roblox ne permet pas de changer la couleur native de la sélection : ce calque se pose
+-- par-dessus (translucide, le texte reste lisible). Champs multi-lignes (TextArea) : sélection native conservée.
+-- Library.SelectionColor / Library.SelectionTransparency / Library.SelectionAnim = false pour couper l'animation.
+-- ============================================================================
+Library.SelectionColor        = Color3.fromRGB(0, 110, 255)
+Library.SelectionTransparency = 0.3
+Library.SelectionAnim         = true
+function Library._attachSelection(tb)
+	if not tb or tb.MultiLine then return end
+	local host = Instance.new("Frame")
+	host.Name = "SelHost"
+	host.BackgroundTransparency = 1
+	host.BorderSizePixel = 0
+	host.Active = false
+	host.ClipsDescendants = true
+	host.Size = UDim2.fromScale(1, 1)
+	host.ZIndex = tb.ZIndex
+	host.Parent = tb
+	local hl = Instance.new("Frame")
+	hl.Name = "Sel"
+	hl.AnchorPoint = Vector2.new(0, 0.5)
+	hl.BackgroundColor3 = Library.SelectionColor
+	hl.BackgroundTransparency = 1
+	hl.BorderSizePixel = 0
+	hl.Active = false
+	hl.Visible = false
+	hl.ZIndex = tb.ZIndex
+	hl.Parent = host
+	local cr = Instance.new("UICorner")
+	cr.CornerRadius = UDim.new(0, 3)
+	cr.Parent = hl
+
+	local lastA, lastB, tok = nil, nil, 0
+
+	local function localScale()
+		local k, p = 1, tb
+		while p do
+			if p:IsA("GuiObject") or p:IsA("LayerCollector") then
+				for _, ch in ipairs(p:GetChildren()) do
+					if ch:IsA("UIScale") then k = k * ch.Scale end
+				end
+			end
+			p = p.Parent
+		end
+		return math.max(k, 0.05)
+	end
+
+	local function range()
+		if not tb:IsFocused() then return nil end
+		local cp, ss = tb.CursorPosition, tb.SelectionStart
+		if cp < 1 or ss < 1 or cp == ss then return nil end
+		local a, b = math.min(cp, ss), math.max(cp, ss)
+		return a, math.min(b, #tb.Text + 1)
+	end
+
+	-- position / largeur du surlignage (en pixels UI, dans la zone de texte du champ)
+	local function geometry(a, b)
+		local txt, size, font = tb.Text, tb.TextSize, tb.Font
+		local sc = localScale()
+		local cw = host.AbsoluteSize.X / sc
+		local total = measureText(txt, size, font).X
+		local pre = (a > 1) and measureText(string.sub(txt, 1, a - 1), size, font).X or 0
+		local upTo = measureText(string.sub(txt, 1, b - 1), size, font).X
+		local off = 0
+		local al = tb.TextXAlignment
+		if total <= cw then
+			if al == CENTER then off = (cw - total) / 2 elseif al == RIGHT then off = cw - total end
+		else
+			off = cw - total   -- texte qui défile : la fin est visible
+			if a <= 1 then off = 0 end
+		end
+		local x0 = math.clamp(off + pre, 0, cw)
+		local x1 = math.clamp(off + upTo, 0, cw)
+		return x0, math.max(x1 - x0, 0)
+	end
+
+	local function place(x0, w, animate, dur)
+		local hh = tb.TextSize + 4
+		local ya = tb.TextYAlignment
+		local yS, yO = 0.5, 0
+		if ya == Enum.TextYAlignment.Top then yS, yO = 0, hh / 2
+		elseif ya == Enum.TextYAlignment.Bottom then yS, yO = 1, -hh / 2 end
+		hl.Position = UDim2.new(0, x0, yS, yO)
+		local goal = UDim2.new(0, w, 0, hh)
+		if animate then
+			tween(hl, { Size = goal }, dur or 0.3)
+		else
+			hl.Size = goal
+		end
+	end
+
+	local function apply()
+		local a, b = range()
+		if a == lastA and b == lastB then return end
+		local had = lastA ~= nil
+		lastA, lastB = a, b
+		tok += 1
+		local my = tok
+		if not a then
+			local tw = tween(hl, { BackgroundTransparency = 1 }, 0.16)
+			tw.Completed:Connect(function()
+				if tok == my then hl.Visible = false end
+			end)
+			return
+		end
+		local x0, w = geometry(a, b)
+		hl.BackgroundColor3 = Library.SelectionColor
+		hl.Visible = true
+		if not had and Library.SelectionAnim ~= false then
+			-- nouvelle sélection : balayage depuis la gauche
+			hl.BackgroundTransparency = 1
+			hl.Position = UDim2.new(0, x0, 0.5, 0)
+			hl.Size = UDim2.new(0, 0, 0, tb.TextSize + 4)
+			place(x0, w, true, 0.32)
+			tween(hl, { BackgroundTransparency = Library.SelectionTransparency }, 0.2)
+		else
+			-- la sélection change (glisser à la souris, Maj + flèches) : le surlignage suit sans retard
+			hl.BackgroundTransparency = Library.SelectionTransparency
+			place(x0, w, had, 0.07)
+		end
+	end
+
+	local function refresh()
+		lastA, lastB = nil, nil
+		if tb:IsFocused() then
+			local a, b = range()
+			if a then
+				local x0, w = geometry(a, b)
+				lastA, lastB = a, b
+				hl.Visible = true
+				hl.BackgroundTransparency = Library.SelectionTransparency
+				place(x0, w, false)
+				return
+			end
+		end
+		tok += 1
+		hl.Visible = false
+		hl.BackgroundTransparency = 1
+	end
+
+	tb:GetPropertyChangedSignal("SelectionStart"):Connect(apply)
+	tb:GetPropertyChangedSignal("CursorPosition"):Connect(apply)
+	tb:GetPropertyChangedSignal("Text"):Connect(function() task.defer(apply) end)
+	tb.Focused:Connect(function() task.defer(apply) end)
+	tb.FocusLost:Connect(refresh)
+	host:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		if lastA then refresh() end
+	end)
+	for _, pn in ipairs({ "Font", "TextSize", "TextXAlignment" }) do
+		tb:GetPropertyChangedSignal(pn):Connect(function() if lastA then refresh() end end)
+	end
+end
+
 function Block:CreateInput(o)
 	o = o or {}
 	local f, st = makeRow(self, 34, o.Name)
@@ -7329,9 +7705,12 @@ function Block:CreateColorPicker(o)
 		local old = fx.tw[key]
 		if old then old:Cancel() fx.tw[key] = nil end
 		if fx.glide and Library.Animations then
-			fx.tw[key] = tween(obj, props, 0.42)
+			Library._spring(obj, props, "smooth")   -- ressort : si une autre couleur arrive en plein glissement, la vitesse est conservée
 		else
-			for k2, val in pairs(props) do obj[k2] = val end
+			for k2, val in pairs(props) do
+				Library._springStop(obj, k2)
+				obj[k2] = val
+			end
 		end
 	end
 	local function visuals()
@@ -7703,6 +8082,7 @@ function Block:CreateProgress(o)
 	local nameL = label(f, o.Name or "Progression", 13, { Position = UDim2.new(0, 12, 0, 6), Size = UDim2.new(1, -118, 0, 18) })
 	local valL = label(f, "", 12, { Position = UDim2.new(1, -106, 0, 6), Size = UDim2.new(0, 94, 0, 18),
 		TextXAlignment = RIGHT, TextColor3 = T.ElementAccent })
+	Library._rollText(valL)
 	local bar = new("Frame", { Position = UDim2.new(0, 12, 0, 31), Size = UDim2.new(1, -24, 0, 8),
 		BackgroundColor3 = T.Off, BorderSizePixel = 0, ClipsDescendants = true }, f)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
@@ -10326,7 +10706,8 @@ Library.Changelog = {
 --   • Réglages de Home sauvegardés automatiquement (flags « ui.home.* ») : notes, limite de session, météo, ville, temps de jeu total.
 --   • Block:CreateStats({ Columns = 2, CellHeight = 48, Items = { { Id = "fps", Name = "FPS", Value = "--", Size = 16 }, ... } })
 --       -> stats:Set("fps", "60", Color3 | nil) : grille de tuiles chiffrées, mise à jour par ton script.
---   • Block:CreateGraph({ Name, Height = 64, Samples = 90, Unit = " ms", MinMax = 100, Max = nil, ColorFn = function(v) return Color3 end })
+--   • Block:CreateGraph({ Name, Height = 64, Samples = 90, Unit = " ms", MinMax = 100, Max = nil, Colored = false, ColorFn = function(v) return Color3 end })
+--       (courbe lissée + aire en fondu, noir et blanc ; Colored = true + ColorFn redonne une couleur selon la valeur)
 --       -> g:Push(valeur) (enregistre) · g:Flush() (redessine si besoin) · g:Clear()
 -- ============================================================================
 Library.Version = Library.Changelog[1] and Library.Changelog[1].Version or Library.Version
@@ -10420,6 +10801,189 @@ function Library._smoothNum(apply, rate)
 end
 
 -- ---------------------------------------------------------------------------
+-- CHIFFRES EN ROULEAU : quand le texte d'un label change, seuls les caractères qui changent glissent et se fondent
+-- (l'ancien part vers le haut / le bas selon que le chiffre monte ou descend, le nouveau arrive de l'autre côté).
+-- Les autres caractères restent en place (ou glissent si la largeur change). Le vrai label devient transparent : son .Text
+-- reste lisible par le reste du code. Texte trop long / sur plusieurs lignes : affichage normal. Changements très rapides
+-- (compteurs, décomptes) : mise à jour directe pour rester net. Library.NumberRoll = false pour désactiver.
+-- ---------------------------------------------------------------------------
+Library.NumberRoll = true
+function Library._uiScale(inst)
+	local k, p = 1, inst
+	while p do
+		if p:IsA("GuiObject") or p:IsA("LayerCollector") then
+			for _, ch in ipairs(p:GetChildren()) do
+				if ch:IsA("UIScale") then k = k * ch.Scale end
+			end
+		end
+		p = p.Parent
+	end
+	return math.max(k, 0.05)
+end
+function Library._rollText(lbl)
+	if not lbl or Library.NumberRoll == false then return end
+	local baseT = lbl.TextTransparency
+	local host = Instance.new("Frame")
+	host.Name = "RollHost"
+	host.BackgroundTransparency = 1
+	host.BorderSizePixel = 0
+	host.Active = false
+	host.Size = UDim2.fromScale(1, 1)
+	host.ZIndex = lbl.ZIndex + 1
+	host.Parent = lbl
+
+	local cur, plain, last, lastT, ivl = {}, nil, nil, 0, nil   -- ivl = rythme moyen des changements (lissé)
+
+	local function split(str)
+		local t = {}
+		local ok = pcall(function()
+			for _, cp in utf8.codes(str) do t[#t + 1] = utf8.char(cp) end
+		end)
+		if not ok then
+			t = {}
+			for i = 1, #str do t[i] = string.sub(str, i, i) end
+		end
+		return t
+	end
+
+	local function mk(ch)
+		local t = Instance.new("TextLabel")
+		t.BackgroundTransparency = 1
+		t.BorderSizePixel = 0
+		t.Active = false
+		t.AnchorPoint = Vector2.new(0, 0.5)
+		t.Size = UDim2.new(0, 0, 0, lbl.TextSize + 6)
+		t.AutomaticSize = Enum.AutomaticSize.X
+		t.Text = ch
+		t.Font = lbl.Font
+		t.TextSize = lbl.TextSize
+		t.TextColor3 = lbl.TextColor3
+		t.TextXAlignment = Enum.TextXAlignment.Left
+		t.TextYAlignment = Enum.TextYAlignment.Center
+		t.ZIndex = host.ZIndex
+		t.Parent = host
+		return t
+	end
+
+	local function positions(chars)
+		local text = table.concat(chars)
+		local cw = host.AbsoluteSize.X / Library._uiScale(lbl)
+		local total = measureText(text, lbl.TextSize, lbl.Font).X
+		local x0 = 0
+		local al = lbl.TextXAlignment
+		if al == CENTER then x0 = (cw - total) / 2 elseif al == RIGHT then x0 = cw - total end
+		local xs, acc = {}, ""
+		for i, c in ipairs(chars) do
+			xs[i] = x0 + (i > 1 and measureText(acc, lbl.TextSize, lbl.Font).X or 0)
+			acc = acc .. c
+		end
+		return xs, total, cw
+	end
+
+	local function clearCur()
+		for _, e in ipairs(cur) do e.l:Destroy() end
+		cur = {}
+	end
+	local function setPlain(on)
+		if plain == on then return end
+		plain = on
+		lbl.TextTransparency = on and baseT or 1
+		host.Visible = not on
+	end
+
+	local function exitLabel(l, dy, anim, dur)
+		if not anim then l:Destroy() return end
+		local tw = tween(l, { TextTransparency = 1, Position = UDim2.new(0, l.Position.X.Offset, 0.5, dy) }, dur)
+		tw.Completed:Connect(function() l:Destroy() end)
+	end
+
+	local function onText(force)
+		local text = lbl.Text
+		if text == last and not force then return end
+		last = text
+		local chars = split(text)
+		local now = os.clock()
+		-- vitesse adaptée au rythme des changements : lent = rouleau doux (jusqu'à 0,45 s), rapide = rouleau vif,
+		-- très rapide (plusieurs changements par image) = mise à jour directe
+		local gap = math.min(now - lastT, 2)
+		lastT = now
+		ivl = ivl and (ivl + (gap - ivl) * 0.5) or 0.5
+		local fast = ivl < 0.04
+		local dur = math.clamp(ivl * 0.85, 0.12, 0.45)
+		local canAnim = Library.Animations ~= false and host.AbsoluteSize.X > 0 and #cur > 0 and not plain and not fast
+		local xs, total, cw = positions(chars)
+		if lbl.TextWrapped or string.find(text, "\n", 1, true) or (cw > 0 and total > cw + 1) then
+			clearCur()
+			setPlain(true)
+			return
+		end
+		setPlain(false)
+		local old = cur
+		local out = {}
+		local d = math.max(3, math.floor(lbl.TextSize * 0.55))
+		local nOld, nNew = #old, #chars
+		-- comparaison alignée sur la DROITE : les unités restent face aux unités quand le nombre de chiffres change
+		for k = 0, math.max(nOld, nNew) - 1 do
+			local oe = (nOld - k >= 1) and old[nOld - k] or nil
+			local ni = nNew - k
+			local nc = (ni >= 1) and chars[ni] or nil
+			if oe and nc and oe.c == nc then
+				out[ni] = oe
+				local goal = UDim2.new(0, xs[ni], 0.5, 0)
+				if canAnim then tween(oe.l, { Position = goal }, dur * 0.7) else oe.l.Position = goal end
+			else
+				local dir = 1
+				if oe and nc then
+					local a, b = tonumber(oe.c), tonumber(nc)
+					if a and b and b < a then dir = -1 end
+				end
+				if oe then exitLabel(oe.l, -dir * d, canAnim, dur * 0.8) end
+				if nc then
+					local t = mk(nc)
+					local goal = UDim2.new(0, xs[ni], 0.5, 0)
+					if canAnim then
+						t.TextTransparency = 1
+						t.Position = UDim2.new(0, xs[ni], 0.5, dir * d)
+						tween(t, { TextTransparency = 0, Position = goal }, dur)
+					else
+						t.Position = goal
+					end
+					out[ni] = { c = nc, l = t }
+				end
+			end
+		end
+		cur = out
+	end
+
+	local function relayout()
+		if plain or #cur == 0 then return end
+		local chars = {}
+		for i, e in ipairs(cur) do chars[i] = e.c end
+		local xs = positions(chars)
+		for i, e in ipairs(cur) do e.l.Position = UDim2.new(0, xs[i], 0.5, 0) end
+	end
+
+	lbl:GetPropertyChangedSignal("Text"):Connect(function() onText(false) end)
+	lbl:GetPropertyChangedSignal("TextColor3"):Connect(function()
+		for _, e in ipairs(cur) do e.l.TextColor3 = lbl.TextColor3 end
+	end)
+	for _, pn in ipairs({ "Font", "TextSize" }) do
+		lbl:GetPropertyChangedSignal(pn):Connect(function()
+			clearCur()
+			onText(true)
+		end)
+	end
+	lbl:GetPropertyChangedSignal("TextXAlignment"):Connect(relayout)
+	lbl:GetPropertyChangedSignal("TextWrapped"):Connect(function() onText(true) end)
+	host:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		if plain then onText(true) else relayout() end
+	end)
+	lbl.TextTransparency = 1
+	onText(true)
+	task.defer(function() if lbl.Parent then onText(true) end end)
+end
+
+-- ---------------------------------------------------------------------------
 -- Block:CreateStats : grille de tuiles « NOM / valeur »
 -- ---------------------------------------------------------------------------
 function Block:CreateStats(o)
@@ -10440,6 +11004,7 @@ function Block:CreateStats(o)
 			Size = UDim2.new(1, -20, 0, 14), Font = F_BOLD, TextColor3 = T.ElementAccent })
 		local val = label(c, tostring(it.Value or "—"), it.Size or o.ValueSize or 16, { Position = UDim2.new(0, 10, 0, 22),
 			Size = UDim2.new(1, -20, 0, cellH - 26), Font = F_BOLD })
+		Library._rollText(val)
 		cells[it.Id or i] = { val = val, name = nm }
 		names[#names + 1] = tostring(it.Name or it.Id or "")
 	end
@@ -10464,13 +11029,9 @@ function Block:CreateStats(o)
 		v = tonumber(v)
 		if not c or not v then return end
 		c.fmt = fmt
-		if not c.sm then
-			c.sm = Library._smoothNum(function(x)
-				local txt = c.fmt and c.fmt(x) or tostring(math.floor(x + 0.5))
-				if txt ~= c.val.Text then c.val.Text = txt end
-			end, 9)
-		end
-		c.sm.Set(v)
+		-- plus de « compte à rebours » : le nouveau texte est posé tel quel, les chiffres qui changent roulent
+		local txt = fmt and fmt(v) or tostring(math.floor(v + 0.5))
+		if txt ~= c.val.Text then c.val.Text = txt end
 		local target = col or T.Text
 		if c.col ~= target then
 			c.col = target
@@ -10489,28 +11050,45 @@ function Block:CreateGraph(o)
 	local samples = math.clamp(math.floor(tonumber(o.Samples) or 90), 20, 240)
 	local h = math.clamp(tonumber(o.Height) or 64, 36, 200)
 	local unit = o.Unit and tostring(o.Unit) or ""
-	local COLS = 96   -- colonnes fines : l'ensemble se lit comme une courbe pleine
+	local COLS = 120          -- points de la courbe (la courbe est lissée entre les mesures)
+	local PADX, PADY = 7, 4   -- marges intérieures (la pointe de la courbe reste entièrement visible)
 	local f = makeRow(self, h + 34, o.Name)
 	label(f, o.Name or "Graphique", 12, { Position = UDim2.new(0, 12, 0, 4), Size = UDim2.new(0, 64, 0, 18), Font = F_BOLD })
 	local infoL = label(f, "—", 11, { Position = UDim2.new(0, 78, 0, 4), Size = UDim2.new(1, -90, 0, 18),
 		TextXAlignment = RIGHT, TextColor3 = T.ElementAccent, Font = F_REG })
+	Library._rollText(infoL)
 	local plot = new("Frame", { Position = UDim2.new(0, 10, 0, 26), Size = UDim2.new(1, -20, 0, h), BackgroundColor3 = T.Main,
 		BackgroundTransparency = 0.55, BorderSizePixel = 0, ClipsDescendants = true }, f)
-	corner(plot, 6)
+	corner(plot, 8)
 	for _, y in ipairs({ 0.25, 0.5, 0.75 }) do
 		new("Frame", { Position = UDim2.new(0, 0, y, 0), Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = T.Accent,
-			BackgroundTransparency = 0.93, BorderSizePixel = 0 }, plot)
+			BackgroundTransparency = 0.94, BorderSizePixel = 0 }, plot)
 	end
-	local cols, caps, lastCol = {}, {}, {}
+	local scaleL = label(plot, "", 10, { Position = UDim2.new(0, 8, 0, 3), Size = UDim2.new(0, 70, 0, 12),
+		TextColor3 = T.ElementAccent, TextXAlignment = LEFT, ZIndex = 6 })
+	scaleL.TextTransparency = 0.45
+
+	-- aire sous la courbe (fondu vertical) + courbe tracée par de petits segments inclinés : noir et blanc, bords qui s'estompent
+	local fills, segs = {}, {}
 	for i = 1, COLS do
-		local c = new("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new((i - 1) / COLS, 0, 1, 0),
-			Size = UDim2.new(1 / COLS, 1, 0, 0), BorderSizePixel = 0, BackgroundColor3 = T.Accent,
-			BackgroundTransparency = 0.6, Visible = false }, plot)
-		cols[i] = c
-		-- liseré clair sur le dessus : dessine la ligne de la courbe
-		caps[i] = new("Frame", { Size = UDim2.new(1, 0, 0, 2), BorderSizePixel = 0, BackgroundColor3 = T.Accent,
-			BackgroundTransparency = 0.05 }, c)
+		local fadeFill = math.clamp((i - 1) / (COLS * 0.3), 0, 1)
+		local c = new("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromOffset(0, h), Size = UDim2.fromOffset(2, 0),
+			BorderSizePixel = 0, BackgroundColor3 = T.Accent, BackgroundTransparency = 1 - 0.3 * fadeFill, Visible = false, ZIndex = 2 }, plot)
+		new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }) }, c)
+		fills[i] = c
+		local fadeLine = math.clamp((i - 1) / (COLS * 0.18), 0, 1)
+		segs[i] = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(4, 2), BorderSizePixel = 0,
+			BackgroundColor3 = T.Accent, BackgroundTransparency = math.max(0.02, 1 - fadeLine), Visible = false, ZIndex = 4 }, plot)
 	end
+	-- point lumineux en bout de courbe, avec une onde qui pulse
+	local dot = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(6, 6), BackgroundColor3 = T.Accent,
+		BorderSizePixel = 0, ZIndex = 6, Visible = false }, plot)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+	local ring = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(8, 8), BackgroundTransparency = 1,
+		BorderSizePixel = 0, ZIndex = 5, Visible = false }, plot)
+	new("UICorner", { CornerRadius = UDim.new(1, 0) }, ring)
+	local ringSt = new("UIStroke", { Color = T.Accent, Thickness = 1.5, Transparency = 0.5 }, ring)
 
 	-- ------------------------------------------------------------ données
 	local data = {}
@@ -10519,6 +11097,8 @@ function Block:CreateGraph(o)
 	local tgt = { cur = 0, mn = 0, av = 0, mx = 0 }
 	local vis = nil                       -- valeurs de la ligne d'info, animées vers tgt
 	local colorCache, nCache = {}, 0
+	local lastAcc, lastScaleTxt
+	local px, py, okp = {}, {}, {}
 	local item = {}
 
 	item.Push = function(...)
@@ -10541,12 +11121,17 @@ function Block:CreateGraph(o)
 		tgt.cur, tgt.mn, tgt.av, tgt.mx = v, mn, sum / cnt, mx
 		if not vis then vis = { cur = v, mn = mn, av = sum / cnt, mx = mx } end
 	end
+	local function hideAll()
+		for i = 1, COLS do fills[i].Visible = false segs[i].Visible = false end
+		dot.Visible = false
+		ring.Visible = false
+	end
 	item.Clear = function()
 		data, lastPush, vis, topCur = {}, nil, nil, nil
 		infoL.Text = "—"
-		for i = 1, COLS do cols[i].Visible = false end
+		hideAll()
 	end
-	item.Flush = function() end   -- conservé pour compatibilité : le rendu est maintenant continu et automatique
+	item.Flush = function() end   -- conservé pour compatibilité : le rendu est continu et automatique
 
 	-- courbe lissée (Catmull-Rom) entre les échantillons ; idx flottant dans [1, n]
 	local function sampleAt(idx)
@@ -10561,8 +11146,9 @@ function Block:CreateGraph(o)
 		return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
 	end
 
+	-- noir et blanc par défaut ; { Colored = true, ColorFn = ... } redonne une couleur selon la valeur
 	local function colorFor(v)
-		if not o.ColorFn then return T.Accent end
+		if not (o.Colored and o.ColorFn) then return T.Accent end
 		local key = math.floor(v + 0.5)
 		local c = colorCache[key]
 		if c == nil then
@@ -10586,33 +11172,70 @@ function Block:CreateGraph(o)
 			vis.av += (tgt.av - vis.av) * k
 			vis.mx += (tgt.mx - vis.mx) * k
 			local function r(x) return math.floor(x + 0.5) end
-			local txt = string.format("%d%s  ·  min %d  ·  moy %d  ·  max %d", r(vis.cur), unit, r(vis.mn), r(vis.av), r(vis.mx))
+			local txt = string.format("%d%s  ·  min %d  ·  moy %d  ·  max %d", r(tgt.cur), unit, r(tgt.mn), r(tgt.av), r(tgt.mx))
 			if txt ~= infoL.Text then infoL.Text = txt end
 		end
 		if n < 2 then return end
 		local topT = tonumber(o.Max) or math.max(tgt.mx * 1.15, tonumber(o.MinMax) or 1)
 		if not topCur then topCur = topT end
 		topCur += (topT - topCur) * (anim and (1 - math.exp(-dt * 5)) or 1)
+
+		local sc = plot.AbsoluteSize.Y / h
+		if sc <= 0 then return end
+		local W = plot.AbsoluteSize.X / sc
+		local usableW = math.max(W - PADX * 2, 10)
+
+		-- couleur (suit le thème en direct)
+		local acc = colorFor(tgt.cur)
+		if acc ~= lastAcc then
+			lastAcc = acc
+			for i = 1, COLS do fills[i].BackgroundColor3 = acc segs[i].BackgroundColor3 = acc end
+			dot.BackgroundColor3 = acc
+			ringSt.Color = acc
+		end
+		local st = string.format("%d%s", math.floor(topCur + 0.5), unit)
+		if st ~= lastScaleTxt then lastScaleTxt = st scaleL.Text = st end
+
 		-- défilement continu : la tête de courbe avance d'un échantillon pendant l'intervalle entre deux mesures
 		local offset = anim and math.clamp(1 - (os.clock() - lastPush) / interval, 0, 1) or 0
 		local head = n - offset
 		local span = samples - 1
-		for i = 1, COLS do
-			local idx = head - (1 - (i - 0.5) / COLS) * span
-			local c = cols[i]
+		for i = 0, COLS do
+			local idx = head - (1 - i / COLS) * span
 			if idx < 1 then
-				if c.Visible then c.Visible = false end
+				okp[i] = false
 			else
 				local v = sampleAt(idx)
-				if not c.Visible then c.Visible = true end
-				c.Size = UDim2.new(1 / COLS, 1, math.clamp(v / topCur, 0.02, 1), 0)
-				local col = colorFor(v)
-				if lastCol[i] ~= col then
-					lastCol[i] = col
-					c.BackgroundColor3 = col
-					caps[i].BackgroundColor3 = col:Lerp(Color3.new(1, 1, 1), 0.35)
-				end
+				okp[i] = true
+				px[i] = PADX + (i / COLS) * usableW
+				py[i] = h - PADY - math.clamp(v / topCur, 0.02, 1) * (h - PADY * 2)
 			end
+		end
+		for i = 1, COLS do
+			local sg, fl = segs[i], fills[i]
+			if okp[i - 1] and okp[i] then
+				local x0, y0, x1, y1 = px[i - 1], py[i - 1], px[i], py[i]
+				local dx, dy = x1 - x0, y1 - y0
+				sg.Visible = true
+				sg.Position = UDim2.fromOffset((x0 + x1) / 2, (y0 + y1) / 2)
+				sg.Size = UDim2.fromOffset(math.sqrt(dx * dx + dy * dy) + 1.2, 2)
+				sg.Rotation = math.deg(math.atan2(dy, dx))
+				fl.Visible = true
+				fl.Position = UDim2.fromOffset(x0, h)
+				fl.Size = UDim2.fromOffset(dx + 1, math.max(h - (y0 + y1) / 2, 1))
+			else
+				if sg.Visible then sg.Visible = false end
+				if fl.Visible then fl.Visible = false end
+			end
+		end
+		if okp[COLS] then
+			dot.Visible, ring.Visible = true, true
+			dot.Position = UDim2.fromOffset(px[COLS], py[COLS])
+			ring.Position = dot.Position
+			local ph = (os.clock() * 0.9) % 1
+			local d = 8 + 16 * ph
+			ring.Size = UDim2.fromOffset(d, d)
+			ringSt.Transparency = 0.35 + 0.65 * ph
 		end
 	end
 
@@ -10634,7 +11257,7 @@ function Block:CreateGraph(o)
 		end
 		if not shown then return end
 		acc += dt
-		if acc < 1 / 45 then return end
+		if acc < 1 / 60 then return end   -- à chaque image jusqu'à 60 par seconde
 		dt, acc = math.min(acc, 0.25), 0
 		render(dt)
 	end)
@@ -14617,6 +15240,7 @@ end
 			TextColor3 = T.Text, TextSize = 12, Font = F_REG, ClearTextOnFocus = false, TextXAlignment = CENTER,
 			TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 4 }, P.hub)
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, P.search)
+		Library._attachTextFade(P.search)
 		P.searchSt = new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.85, ApplyStrokeMode = BORDER }, P.search)
 
 		P.hint = new("TextLabel", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, 108),
@@ -15458,6 +16082,7 @@ local spotOk, spotErr = pcall(function()
 			BorderSizePixel = 0 }, hdr)
 		round(tb, 8)
 		new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, tb)
+		Library._attachTextFade(tb)
 		tb.FocusLost:Connect(function()
 			pcall(it.Set, it, tb.Text)
 			remember(e)
@@ -15478,6 +16103,7 @@ local spotOk, spotErr = pcall(function()
 			TextSize = 12, Font = F_REG, ClearTextOnFocus = false, TextXAlignment = LEFT, BorderSizePixel = 0 }, hdr)
 		round(tb, 8)
 		new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, tb)
+		Library._attachTextFade(tb)
 		tb.FocusLost:Connect(function()
 			local a, b = string.match(tb.Text, "^%s*(-?[%d%.]+)%s*[,;:–%-]%s*(-?[%d%.]+)%s*$")
 			a, b = tonumber(a), tonumber(b)
@@ -15539,6 +16165,7 @@ local spotOk, spotErr = pcall(function()
 			Text = "", PlaceholderText = "#FFFFFF", TextColor3 = T.Text, TextSize = 12, Font = F_MED,
 			ClearTextOnFocus = false, BorderSizePixel = 0, LayoutOrder = 100 }, body)
 		round(hex, 8)
+		Library._attachTextFade(hex)
 		local function show()
 			local c = safeGet(it)
 			if typeof(c) == "Color3" then
@@ -15825,6 +16452,7 @@ local spotOk, spotErr = pcall(function()
 			PlaceholderColor3 = Color3.fromRGB(125, 125, 132), TextColor3 = T.Text, TextSize = 17, Font = F_MED,
 			ClearTextOnFocus = false, TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd,
 			BorderSizePixel = 0 }, bar)
+		Library._attachTextFade(box)
 		if showChip then
 			local chip = new("TextLabel", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.5, 0),
 				Size = UDim2.fromOffset(56, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, Text = "Échap",
@@ -16242,6 +16870,7 @@ function Library:CreateWindow(cfg)
 	local fpsLabel = label(titleBar, "", 11, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -80, 0.5, 0),
 		Size = UDim2.new(0, 104, 0, 16), TextXAlignment = RIGHT, Font = F_REG, TextColor3 = T.ElementAccent,
 		Visible = statsOn })
+	Library._rollText(fpsLabel)
 	-- bouton « Annuler » : à gauche de l'indicateur FPS / ping, visible seulement quand celui-ci l'est
 	local undoBtn = new("TextButton", { Name = "UndoButton", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -192, 0.5, 0),
 		Size = UDim2.new(0, 58, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.93,
@@ -16311,6 +16940,7 @@ function Library:CreateWindow(cfg)
 	roundOf(search)
 	local sst = glassEdge(search, 0.3)
 	new("UIPadding", { PaddingLeft = UDim.new(0, 36), PaddingRight = UDim.new(0, 14) }, search)
+	Library._attachTextFade(search)
 	-- loupe dessinée (le padding décale les enfants : on la recale à gauche)
 	local sIcon = new("Frame", { Name = "SearchIcon", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0, 0.5),
 		Position = UDim2.new(0, -24, 0.5, 0), Size = UDim2.fromOffset(16, 16) }, search)
@@ -17518,7 +18148,7 @@ function Library:CreateWindow(cfg)
 			local k = (Library.Animations == false) and 1 or (1 - math.exp(-dt * 9))
 			fpsShown += (fpsGoal - fpsShown) * k
 			pingShown += (pingGoal - pingShown) * k
-			local txt = math.floor(fpsShown + 0.5) .. " fps | " .. math.floor(pingShown + 0.5) .. " ms"
+			local txt = math.floor(fpsGoal + 0.5) .. " fps | " .. math.floor(pingGoal + 0.5) .. " ms"
 			if txt ~= fpsLabel.Text then fpsLabel.Text = txt end
 		end
 
