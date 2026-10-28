@@ -327,6 +327,7 @@ local Library = {
 	BlockedKeys       = { Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D, Enum.KeyCode.Space },
 	RecentColors      = {},    -- couleurs récentes du color picker (hexadécimal), sauvegardées avec les réglages
 	RecentColorMax    = 8,
+	ResizeMode        = "Contour", -- "Contour" (rapide : contour pendant le geste) | "Direct" (ancien : suit en direct, lent)
 	NoCanvasGroup     = true,  -- true = fenêtre en simple Frame (beaucoup plus fluide) ; false = fondu d'ouverture mais plus lourd
 	StarCount         = 20,    -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 pour désactiver)
 	ConfigFolder      = "Ui-Lib",
@@ -17448,8 +17449,54 @@ function Library:CreateWindow(cfg)
 			rsDir = Vector2.new(dx, dy)
 			-- la taille suit le curseur avec un lissage court : la fenêtre et son contenu (colonnes, textes, graphiques)
 			-- se redimensionnent en continu, image par image, au lieu de sauter d'un cran à l'autre
-			rsSmooth = Library.Animations and true or false
 			Library._resizing = true   -- allège le fond animé et les mises en page de texte pendant le geste
+			if Library.ResizeMode ~= "Direct" then
+				-- MODE « CONTOUR » (défaut) : pendant le geste, la vraie fenêtre ne bouge pas (aucun recalcul des colonnes,
+				-- blocs, textes...). Seul un contour léger suit le curseur ; la taille réelle est appliquée UNE fois au relâchement.
+				rsSmooth = false
+				local startPos = curPos
+				Library._rsTok = (Library._rsTok or 0) + 1   -- invalide la fin différée d'un geste précédent
+				local outline = new("Frame", { Name = "ResizeOutline", AnchorPoint = Vector2.new(0.5, 0.5),
+					BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.93, BorderSizePixel = 0,
+					ZIndex = 900, Active = false }, gui)
+				new("UICorner", { CornerRadius = UDim.new(0, 14) }, outline)
+				local outStroke = new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 1.5, Transparency = 0.25 }, outline)
+				local final
+				local function place(p)
+					local d = (Vector2.new(p.X, p.Y) - start) / sc
+					local v = viewport()
+					local ns = Vector2.new(
+						dx == 0 and sw or math.clamp(sw + d.X * dx, minW, math.max(minW, v.X / sc - 10)),
+						dy == 0 and sh or math.clamp(sh + d.Y * dy, minH, math.max(minH, v.Y / sc - 10))
+					)
+					ns = Vector2.new(math.floor(ns.X / 2 + 0.5) * 2, math.floor(ns.Y / 2 + 0.5) * 2)
+					final = ns
+					local c = startPos + (ns - Vector2.new(sw, sh)) * scaleBase * rsDir / 2
+					outline.Position = UDim2.fromOffset(math.floor(c.X + 0.5), math.floor(c.Y + 0.5))
+					outline.Size = UDim2.fromOffset(ns.X * scaleBase, ns.Y * scaleBase)
+				end
+				startDrag(place, nil, i.Position, function()
+					-- relâchement : la fenêtre GLISSE vers la nouvelle taille (lissage de la boucle) pendant que le contour s'efface
+					local tok = Library._rsTok
+					if final and final ~= Vector2.new(sw, sh) then
+						rsSmooth = Library.Animations and true or false
+						curSize, tgtSize = Vector2.new(sw, sh), final
+						tween(outline, { BackgroundTransparency = 1 }, 0.3)
+						tween(outStroke, { Transparency = 1 }, 0.3)
+						task.delay(0.35, function() outline:Destroy() end)
+						-- _resizing reste vrai pendant la transition : le fond animé est en pause et la mise en page est limitée à ~30 Hz
+						task.delay(0.7, function()
+							if Library._rsTok == tok then Library._resizing = false end
+						end)
+					else
+						outline:Destroy()
+						Library._resizing = false
+					end
+					saveWinLater()
+				end)
+				return
+			end
+			rsSmooth = Library.Animations and true or false
 			startDrag(function(p)
 				local d = (Vector2.new(p.X, p.Y) - start) / sc
 				local v = viewport()
@@ -17475,16 +17522,49 @@ function Library:CreateWindow(cfg)
 	handle(1, -1, UDim2.new(1, -14, 0, 0),  UDim2.fromOffset(14, 14))  -- haut droite
 	handle(-1, 1, UDim2.new(0, 0, 1, -14),  UDim2.fromOffset(14, 14))  -- bas gauche
 
-	-- poignée visible (coin bas-droite)
-	local grip = new("TextButton", { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -4, 1, -4),
-		Size = UDim2.new(0, 20, 0, 20), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 60 }, main)
-	local dots = { { 15, 15 }, { 9, 15 }, { 15, 9 } }
-	for _, d in ipairs(dots) do
-		new("Frame", { Position = UDim2.new(0, d[1], 0, d[2]), Size = UDim2.new(0, 2, 0, 2),
-			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.6, BorderSizePixel = 0 }, grip)
+	-- poignée visible (coin bas-droite) : un trait en arc posé À L'EXTÉRIEUR de la fenêtre, qui épouse l'arrondi du coin.
+	-- La fenêtre rogne tout ce qui dépasse (ClipsDescendants) : l'arc est donc dans l'écran (gui), pas dans la fenêtre, et
+	-- se replace tout seul quand la fenêtre bouge / change de taille / d'échelle / d'arrondi.
+	local GRIP_GAP = 5   -- écart entre le rebord de la fenêtre et le trait (px)
+	local gripClip = new("Frame", { Name = "GripArcClip", BackgroundTransparency = 1, BorderSizePixel = 0,
+		ClipsDescendants = true, Active = false, ZIndex = 5, Visible = false }, gui)
+	local gripArc = new("Frame", { Name = "GripArc", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0, 0),
+		BackgroundTransparency = 1, BorderSizePixel = 0, Active = false, ZIndex = 5 }, gripClip)
+	local gripCorner = new("UICorner", { CornerRadius = UDim.new(0, 30) }, gripArc)
+	local gripStroke = new("UIStroke", { Color = T.Accent, Thickness = 2.5, Transparency = 0.45,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border, LineJoinMode = Enum.LineJoinMode.Round }, gripArc)
+	-- les extrémités de l'arc s'estompent (pas de bout coupé net)
+	new("UIGradient", { Rotation = -45, Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.2, 1), NumberSequenceKeypoint.new(0.36, 0.25),
+		NumberSequenceKeypoint.new(0.5, 0), NumberSequenceKeypoint.new(0.64, 0.25), NumberSequenceKeypoint.new(0.8, 1),
+		NumberSequenceKeypoint.new(1, 1) }) }, gripStroke)
+	-- zone cliquable invisible autour de l'arc (dans l'écran, donc utilisable même à l'extérieur de la fenêtre)
+	local grip = new("TextButton", { Name = "GripHit", AnchorPoint = Vector2.new(1, 1), BackgroundTransparency = 1,
+		Text = "", AutoButtonColor = false, ZIndex = 6, Visible = false }, gui)
+	local function updateGrip()
+		local vis = main.Visible and not collapsed
+		gripClip.Visible, grip.Visible = vis, vis
+		if not vis then return end
+		local sc = scaleBase
+		local R = math.max(mainCorner.CornerRadius.Offset, 12) * sc   -- rayon réel du coin (petit minimum en type « Carré »)
+		local gap, m = GRIP_GAP * sc, 5 * sc
+		local rc = R + gap                                            -- rayon de l'arc : même centre que le coin de la fenêtre
+		local ap, as = main.AbsolutePosition, main.AbsoluteSize
+		local cx, cy = ap.X + as.X - R, ap.Y + as.Y - R               -- centre du coin arrondi
+		gripClip.Position = UDim2.fromOffset(cx, cy)
+		gripClip.Size = UDim2.fromOffset(rc + m, rc + m)              -- seul le quart bas-droit du cercle est gardé
+		gripArc.Size = UDim2.fromOffset(rc * 2, rc * 2)
+		gripCorner.CornerRadius = UDim.new(0, rc)
+		grip.Position = UDim2.fromOffset(ap.X + as.X + gap + m, ap.Y + as.Y + gap + m)
+		grip.Size = UDim2.fromOffset(36 * sc, 36 * sc)
 	end
-	grip.MouseEnter:Connect(function() tween(grip, { BackgroundTransparency = 0.9 }, 0.2) end)
-	grip.MouseLeave:Connect(function() tween(grip, { BackgroundTransparency = 1 }, 0.25) end)
+	updateGrip()
+	main:GetPropertyChangedSignal("AbsolutePosition"):Connect(updateGrip)
+	main:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateGrip)
+	main:GetPropertyChangedSignal("Visible"):Connect(updateGrip)
+	mainCorner:GetPropertyChangedSignal("CornerRadius"):Connect(updateGrip)
+	grip.MouseEnter:Connect(function() tween(gripStroke, { Transparency = 0.05, Thickness = 3.5 }, 0.2) end)
+	grip.MouseLeave:Connect(function() tween(gripStroke, { Transparency = 0.45, Thickness = 2.5 }, 0.25) end)
 	attachResize(grip, 1, 1)
 
 	-- ------------------------------------------------------------------
