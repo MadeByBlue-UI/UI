@@ -160,6 +160,12 @@
 
 	─────────────  NOUVEAUTÉS DE CETTE VERSION  ─────────────
 	FLUIDITÉ
+		• BOUCLE D'ANIMATION PARTAGÉE (Library.Ticker) : une seule connexion Heartbeat pour tout (fond, étoiles, graphiques,
+		  ressorts, défilement, couleurs, chiffres, repli des blocs, FPS). Chaque tâche a sa cadence (rate) et un « gate » :
+		  elle dort quand rien ne bouge ou quand son élément est caché ; la fenêtre Roblox sans focus met le décoratif en pause ;
+		  si tout dort, la connexion est coupée. Le FPS est mesuré une seule fois (Library.Ticker.Fps).
+		  Pour tes propres animations : local h = Library.Ticker.connect(function(dt, now) ... end, { rate = 30, gate = monFrame })
+		  puis h:Disconnect() quand c'est fini.
 		• Le fond animé (anneaux + étoiles) n'est plus recalculé à chaque frame : boucle Heartbeat à ~30 Hz
 		  (~15 Hz pendant un geste), au lieu de RenderStepped + pause/reprise brutale (c'était la cause de l'effet « 15 fps »).
 		• RenderStepped ne gère plus que le déplacement / redimensionnement (très léger). Le redimensionnement suit
@@ -547,6 +553,159 @@ local canvasSupported = pcall(function() Instance.new("CanvasGroup"):Destroy() e
 local Conns = {}
 local function track(c) Conns[#Conns + 1] = c return c end
 
+-- ============================================================================
+-- BOUCLE D'ANIMATION PARTAGÉE (Ticker)
+-- UNE seule connexion Heartbeat pour toutes les animations de la lib (fond, étoiles, graphiques, chiffres, ressorts,
+-- défilement, couleurs, repli des blocs...). Avant : une quinzaine de connexions Heartbeat / RenderStepped séparées.
+--   Ticker.connect(fn, opts) -> poignée avec :Disconnect() (compatible track())
+--     fn(dt, now)  dt = temps écoulé depuis le dernier appel de CETTE tâche
+--     opts.rate    appels max par seconde (nombre ou fonction qui renvoie un nombre) ; absent = à chaque image
+--     opts.gate    Instance (la tâche dort tant qu'elle n'est pas affichée) ou fonction -> bool (false = elle dort)
+--     opts.deco    true = décoratif : en pause quand la fenêtre Roblox n'a pas le focus
+--   Les tâches endormies ne coûtent rien. Si TOUTES dorment (fenêtre cachée...), la connexion Heartbeat est coupée ;
+--   elle repart avec Ticker.wake() ou par un sondage léger toutes les 0.25 s. Ticker.Fps = FPS mesuré (une seule mesure).
+-- ============================================================================
+local Ticker = { Fps = 60 }
+Library.Ticker = Ticker
+do
+	local tasks, hb, dead = {}, nil, 0
+	local waiters = {}   -- coroutines en attente de la prochaine image (Ticker.wait)
+	local focused = true
+	local fpsN, fpsT0, lastOpen = 0, os.clock(), os.clock()
+	local shownCache = setmetatable({}, { __mode = "k" })
+
+	-- Instance affichée ? (toute la chaîne de parents visible), résultat gardé 0.25 s
+	function Ticker.shown(inst, now)
+		now = now or os.clock()
+		local c = shownCache[inst]
+		if c and now - c.t < 0.25 then return c.v end
+		local v, p = true, inst
+		while p and p:IsA("GuiObject") do
+			if not p.Visible then v = false break end
+			p = p.Parent
+		end
+		if v then
+			if p and p:IsA("ScreenGui") then v = p.Enabled else v = p ~= nil end
+		end
+		shownCache[inst] = { t = now, v = v }
+		return v
+	end
+
+	local function isOpen(t, now)
+		local g = t.gate
+		if g ~= nil then
+			if type(g) == "function" then
+				if not g() then return false end
+			elseif not Ticker.shown(g, now) then
+				return false
+			end
+		end
+		if t.deco and not focused then return false end
+		return true
+	end
+
+	local start, poll
+	local function loop(dt)
+		local now = os.clock()
+		fpsN += 1
+		if now - fpsT0 >= 0.5 then
+			Ticker.Fps = fpsN / (now - fpsT0)
+			fpsN, fpsT0 = 0, now
+		end
+		local anyOpen = false
+		if #waiters > 0 then
+			local list = waiters
+			waiters, anyOpen = {}, true
+			for i = 1, #list do task.spawn(list[i], dt) end
+		end
+		for i = 1, #tasks do
+			local t = tasks[i]
+			if t.alive then
+				if isOpen(t, now) then
+					anyOpen = true
+					t.acc += dt
+					local r = t.rate
+					if type(r) == "function" then r = r() end
+					if not r or r <= 0 or t.acc >= 1 / r then
+						local step = t.acc
+						t.acc = 0
+						local ok, err = pcall(t.fn, step, now)
+						if not ok and not t.warned then
+							t.warned = true
+							warn("[Ui-Lib] Boucle partagée : " .. tostring(err))
+						end
+					end
+				else
+					t.acc = 0   -- endormie : pas de gros dt au réveil
+				end
+			end
+		end
+		if dead > 0 then
+			local keep = {}
+			for i = 1, #tasks do
+				if tasks[i].alive then keep[#keep + 1] = tasks[i] end
+			end
+			tasks, dead = keep, 0
+		end
+		if #tasks == 0 and #waiters == 0 then
+			if hb then hb:Disconnect() hb = nil end
+			return
+		end
+		if anyOpen then
+			lastOpen = now
+		elseif now - lastOpen > 0.3 and hb then
+			-- tout dort : on coupe la connexion, un sondage léger surveille le réveil
+			hb:Disconnect()
+			hb = nil
+			task.delay(0.25, poll)
+		end
+	end
+
+	function start()
+		if hb or (#tasks == 0 and #waiters == 0) then return end
+		fpsN, fpsT0, lastOpen = 0, os.clock(), os.clock()
+		hb = RunService.Heartbeat:Connect(loop)
+	end
+
+	function poll()
+		if hb then return end
+		local now = os.clock()
+		for i = 1, #tasks do
+			local t = tasks[i]
+			if t.alive and isOpen(t, now) then start() return end
+		end
+		if #tasks > 0 then task.delay(0.25, poll) end
+	end
+
+	-- remplace RunService.Heartbeat:Wait() : reprend à la prochaine image de la boucle partagée, renvoie dt
+	function Ticker.wait()
+		waiters[#waiters + 1] = coroutine.running()
+		if not hb then start() end
+		return coroutine.yield()
+	end
+
+	function Ticker.wake()
+		if not hb and #tasks > 0 then start() end
+	end
+
+	function Ticker.connect(fn, opts)
+		opts = opts or {}
+		local t = { fn = fn, rate = opts.rate, gate = opts.gate, deco = opts.deco, acc = 0, alive = true }
+		tasks[#tasks + 1] = t
+		start()
+		local h = { Connected = true }
+		function h:Disconnect()
+			if not t.alive then return end
+			t.alive, h.Connected = false, false
+			dead += 1
+		end
+		return h
+	end
+
+	UIS.WindowFocused:Connect(function() focused = true Ticker.wake() end)
+	UIS.WindowFocusReleased:Connect(function() focused = false end)
+end
+
 local TEXTCLASS = { TextLabel = true, TextButton = true, TextBox = true }
 
 -- type « Carré » : vrai si `parent` est dans la fenêtre principale (les notifications gardent leurs coins)
@@ -731,7 +890,7 @@ function Library._spring(obj, props, preset)
 			st.z = (kind == "Color3") and math.max(pr[2], 1) or pr[2]
 		end
 	end
-	if not springConn then springConn = RunService.RenderStepped:Connect(springLoop) end
+	if not springConn then springConn = Ticker.connect(springLoop) end
 end
 
 -- ============================================================================
@@ -794,7 +953,7 @@ local function scrollChanged(sf, st)
 		sf.CanvasPosition = Vector2.new(sf.CanvasPosition.X, back)
 		st.prev, st.last, st.known = st.last, sf.CanvasPosition.Y, sf.CanvasPosition.Y
 		scrollActive[sf] = st
-		if not scrollConn then scrollConn = RunService.RenderStepped:Connect(scrollLoop) end
+		if not scrollConn then scrollConn = Ticker.connect(scrollLoop) end
 	else
 		-- changement venu d'ailleurs (barre de défilement, tactile, code) : on abandonne le glissement
 		scrollActive[sf] = nil
@@ -2388,7 +2547,7 @@ local function blackHoleOut(slot, card, cardScale, h, accent)
 					p.f.BackgroundTransparency = tr
 				end
 			end
-			RunService.Heartbeat:Wait()
+			Ticker.wait()
 		end
 		for _, g in ipairs(ghosts) do g:Destroy() end
 		for _, p in ipairs(scraps) do p.f:Destroy() end
@@ -2695,7 +2854,7 @@ do
 			local t0 = os.clock()
 			local last = t0
 			while slot.Parent do
-				RunService.Heartbeat:Wait()
+				Ticker.wait()
 				local now = os.clock()
 				local dt = math.min(now - last, 0.05) / k
 				last = now
@@ -2828,7 +2987,7 @@ do
 		task.spawn(function()
 			local t0 = os.clock()
 			while alive and slot.Parent do
-				RunService.Heartbeat:Wait()
+				Ticker.wait()
 				local t = (os.clock() - t0) / k
 				if t > total then break end
 				for _, p in ipairs(pieces) do
@@ -3570,11 +3729,11 @@ function Library:Notify(o)
 
 	-- ---------------------------------------------------------------- animation d'entrée
 	task.spawn(function()
-		RunService.Heartbeat:Wait()
+		Ticker.wait()
 		if dead then return end
 		local h = card.AbsoluteSize.Y / math.max(cardScale.Scale, 0.01)
 		if h < 4 then
-			RunService.Heartbeat:Wait()
+			Ticker.wait()
 			h = card.AbsoluteSize.Y / math.max(cardScale.Scale, 0.01)
 		end
 		local estyle = Library.Animations and V6.resolveEntry(o.Entry, kind) or nil
@@ -4203,7 +4362,7 @@ local function colorAnimStep()
 	end
 end
 local function colorAnimStart()
-	if not colorAnimConn then colorAnimConn = RunService.Heartbeat:Connect(colorAnimStep) end
+	if not colorAnimConn then colorAnimConn = Ticker.connect(colorAnimStep) end
 end
 local function colorAnimAdd(d, p, from, to)
 	local m = colorAnimMap[d]
@@ -5547,7 +5706,7 @@ function Block:CreateSlider(o)
 					valBox.Text = (a >= 1) and fmt(to) or fmt(math.floor(cur * mult + 0.5) / mult)
 				end
 				if a >= 1 then break end
-				RunService.Heartbeat:Wait()
+				Ticker.wait()
 			end
 		end)
 	end
@@ -6955,7 +7114,7 @@ function Library._attachTextFade(tb)
 		if not busy and conn then conn:Disconnect() conn = nil end
 	end
 	local function kick()
-		if not conn then conn = RunService.RenderStepped:Connect(step) end
+		if not conn then conn = Ticker.connect(step) end
 	end
 
 	local function onText()
@@ -7510,7 +7669,7 @@ do
 
 		local current
 		local acc = 0
-		P.conns[#P.conns + 1] = RunService.RenderStepped:Connect(function(dt)
+		P.conns[#P.conns + 1] = Ticker.connect(function(dt)
 			local m = UIS:GetMouseLocation()
 			local vp = viewport()
 			card.Position = UDim2.fromOffset(math.clamp(m.X + 18, 0, vp.X - 120), math.clamp(m.Y + 18, 0, vp.Y - 46))
@@ -9158,7 +9317,7 @@ local function hudRefresh()
 	tween(hud.card, { Size = UDim2.new(0, w, 0, 0) }, 0.2)
 	-- garde-fou : si le HUD dépasse de l'écran, on le ramène (affichage seulement, la position enregistrée ne change pas)
 	task.spawn(function()
-		RunService.Heartbeat:Wait()
+		Ticker.wait()
 		hudPlace()
 		task.wait(0.3)
 		hudPlace()
@@ -10335,7 +10494,7 @@ function Block:CreatePreview3D(o)
 	end
 
 	local hbConn
-	hbConn = RunService.Heartbeat:Connect(function(dt)
+	hbConn = Ticker.connect(function(dt)
 		local now = os.clock()
 		if now - shownT > 0.25 then
 			shownT = now
@@ -10793,7 +10952,7 @@ function Library._smoothNum(apply, rate)
 			apply(cur)
 			return
 		end
-		if not conn then conn = RunService.Heartbeat:Connect(step) end
+		if not conn then conn = Ticker.connect(step) end
 	end
 	function s.Get() return cur end
 	function s.Destroy() stop() end
@@ -11239,28 +11398,9 @@ function Block:CreateGraph(o)
 		end
 	end
 
-	local function isShown()
-		local p = plot
-		while p and p:IsA("GuiObject") do
-			if not p.Visible then return false end
-			p = p.Parent
-		end
-		if p and p:IsA("ScreenGui") and not p.Enabled then return false end
-		return p ~= nil
-	end
-	local acc, shownT, shown = 0, -1, true
-	local conn = RunService.Heartbeat:Connect(function(dt)
-		local now = os.clock()
-		if now - shownT > 0.25 then
-			shownT = now
-			shown = isShown()
-		end
-		if not shown then return end
-		acc += dt
-		if acc < 1 / 60 then return end   -- à chaque image jusqu'à 60 par seconde
-		dt, acc = math.min(acc, 0.25), 0
-		render(dt)
-	end)
+	local conn = Ticker.connect(function(dt)
+		render(math.min(dt, 0.25))
+	end, { rate = 60, gate = plot })   -- dort tant que le graphique n'est pas affiché
 	track(conn)
 	plot.Destroying:Connect(function() pcall(function() conn:Disconnect() end) end)
 
@@ -12022,15 +12162,11 @@ function Window:CreateHomeTab(name, icon, cfg)
 	Library:_buildChangelog(tab)
 
 	-- ===================== BOUCLE DE MISE À JOUR (2 fois par seconde) =====================
-	local fpsFrames, fpsT, lastFlag, lastWeather = 0, os.clock(), os.clock(), os.clock()
+	local lastFlag, lastWeather = os.clock(), os.clock()
 	local pingItem
 	pcall(function() pingItem = Stats.Network.ServerStatsItem["Data Ping"] end)
-	track(RunService.Heartbeat:Connect(function()
-		fpsFrames += 1
-		local now = os.clock()
-		if now - fpsT < 0.5 then return end
-		local fps = math.floor(fpsFrames / (now - fpsT) + 0.5)
-		fpsFrames, fpsT = 0, now
+	track(Ticker.connect(function(_, now)
+		local fps = math.floor(Ticker.Fps + 0.5)
 		local ping = 0
 		if pingItem then
 			local ok, v = pcall(function() return pingItem:GetValue() end)
@@ -12086,7 +12222,7 @@ function Window:CreateHomeTab(name, icon, cfg)
 
 		if friendsDirty and friendLoaded then rebuildFriends() end
 		if friendLoaded and not friendBusy and now - friendAt > 90 then refreshFriends() end
-	end))
+	end, { rate = 2 }))
 	return tab
 end
 
@@ -12394,7 +12530,7 @@ function Library:_dragBlock(blk, startPos)
 		end
 	end
 
-	hb = RunService.Heartbeat:Connect(step)
+	hb = Ticker.connect(step)
 
 	startDrag(function(p) last = p end, blk.Scroll, startPos, function()
 		if hb then hb:Disconnect() hb = nil end
@@ -12508,7 +12644,7 @@ function Library._glideBlocks(tab, snap)
 	Library._busyUntil = os.clock() + 0.7
 	local t0 = os.clock()
 	local dur = 0.46 / math.max(Library.AnimSpeed or 1, 0.05)
-	g.conn = RunService.RenderStepped:Connect(function()
+	g.conn = Ticker.connect(function()
 		if Library._glide ~= g then return end
 		local ok = pcall(function()
 			local cp, cs = content.AbsolutePosition, content.AbsoluteSize
@@ -12732,7 +12868,7 @@ function Tab:CreateBlock(o)
 		if dur <= 0 then finish() return end
 		local t0 = os.clock()
 		local gen = foldGen
-		foldConn = RunService.RenderStepped:Connect(function()
+		foldConn = Ticker.connect(function()
 			if gen ~= foldGen or not clip.Parent then stopFold() return end
 			local a = math.clamp((os.clock() - t0) / dur, 0, 1)
 			local e = TweenService:GetValue(a, QUINT, OUT)
@@ -16389,13 +16525,9 @@ local spotOk, spotErr = pcall(function()
 				v = rng:NextNumber(4, 16), a = rng:NextNumber(0.4, 0.95), ph = rng:NextNumber(0, 6.28),
 				ts = rng:NextNumber(1, 3), dir = (rng:NextInteger(0, 9) == 0) and -1 or 1 }
 		end
-		local acc = 0
-		sess.hb = RunService.Heartbeat:Connect(function(dt)
+		sess.hb = Ticker.connect(function(dt)
 			sess.fade = sess.fade + (sess.target - sess.fade) * (1 - math.exp(-dt * 5))
-			acc = acc + dt
-			if acc < 1 / 30 then return end
-			local step = math.min(acc, 0.1)
-			acc = 0
+			local step = math.min(dt, 0.1)
 			local now = os.clock()
 			for _, s in ipairs(sess.stars) do
 				local rad = s.rad - (s.v + 9000 / (s.rad + 60)) * step
@@ -16410,7 +16542,7 @@ local spotOk, spotErr = pcall(function()
 					* (0.75 + 0.25 * math.sin(now * s.ts + s.ph)) * sess.fade
 				s.f.BackgroundTransparency = 1 - a
 			end
-		end)
+		end, { rate = 30, deco = true })
 
 		-- interface : barre + légende + liste de résultats (au-dessus du fond)
 		local ui = new(canvasSupported and "CanvasGroup" or "Frame", { Name = "UI", Size = UDim2.fromScale(1, 1),
@@ -17949,6 +18081,7 @@ function Library:CreateWindow(cfg)
 		local noAnim = Library.WindowAnim == false   -- réglage « Animation ouverture / fermeture » désactivé
 		skyTarget = v and 1 or 0
 		Library._skyInstant = noAnim
+		Ticker.wake()
 		if v and refreshSky then refreshSky() end
 		setBlurTarget(v and Library.BlurSize or 0, noAnim)
 		toggleToken = toggleToken + 1
@@ -18085,13 +18218,12 @@ function Library:CreateWindow(cfg)
 	end
 
 	-- ------------------------------------------------------------------
-	-- Boucles d'animation
-	--   RenderStepped : uniquement le déplacement / redimensionnement lissé + tooltip (léger, à chaque frame)
-	--   Heartbeat     : le fond (anneaux + étoiles), limité à ~30 Hz (~15 Hz pendant un geste) au lieu d'être
-	--                   recalculé à chaque frame ; il ne se met plus en pause brutalement, il ralentit seulement.
+	-- Boucles d'animation : toutes passent par la boucle partagée Ticker (une seule connexion Heartbeat)
+	--   déplacement / redimensionnement lissé : à chaque image, endormi tant que la fenêtre est cachée
+	--   fond (anneaux + étoiles) : ~30 Hz (~15 Hz pendant un geste), endormi si fenêtre cachée / fond coupé
+	--   FPS / ping : 2 fois par seconde, endormi si l'indicateur est coupé
 	-- ------------------------------------------------------------------
-	track(RunService.RenderStepped:Connect(function(dt)
-		if not main.Visible then return end
+	track(Ticker.connect(function(dt)
 		dt = math.min(dt, 0.1)
 		local dirty = false
 		if tgtSize then
@@ -18120,44 +18252,23 @@ function Library:CreateWindow(cfg)
 			dirty = true
 		end
 		if dirty then setMainPos() end
-	end))
+	end, { gate = function() return main.Visible end }))
 
-	local bgAcc = 0
-	local fpsFrames, fpsT = 0, os.clock()
-	local fpsGoal, pingGoal, fpsShown, pingShown = nil, 0, 0, 0   -- FPS / ping : la valeur affichée glisse vers la mesure
 	local pingItem
 	pcall(function() pingItem = Stats.Network.ServerStatsItem["Data Ping"] end)
-	track(RunService.Heartbeat:Connect(function(dt)
-		local now = os.clock()
-		fpsFrames += 1
-		if now - fpsT >= 0.5 then
-			if statsOn then
-				local fps = math.floor(fpsFrames / (now - fpsT) + 0.5)
-				local ping = 0
-				if pingItem then
-					local ok, v = pcall(function() return pingItem:GetValue() end)
-					if ok and v then ping = math.floor(v + 0.5) end
-				end
-				if fpsGoal == nil then fpsShown, pingShown = fps, ping end
-				fpsGoal, pingGoal = fps, ping
-			end
-			fpsFrames, fpsT = 0, now
+	track(Ticker.connect(function()
+		local ping = 0
+		if pingItem then
+			local ok, v = pcall(function() return pingItem:GetValue() end)
+			if ok and v then ping = math.floor(v + 0.5) end
 		end
+		local txt = math.floor(Ticker.Fps + 0.5) .. " fps | " .. ping .. " ms"
+		if txt ~= fpsLabel.Text then fpsLabel.Text = txt end
+	end, { rate = 2, gate = function() return statsOn end }))
 
-		if statsOn and fpsGoal then
-			local k = (Library.Animations == false) and 1 or (1 - math.exp(-dt * 9))
-			fpsShown += (fpsGoal - fpsShown) * k
-			pingShown += (pingGoal - pingShown) * k
-			local txt = math.floor(fpsGoal + 0.5) .. " fps | " .. math.floor(pingGoal + 0.5) .. " ms"
-			if txt ~= fpsLabel.Text then fpsLabel.Text = txt end
-		end
-
-		if not main.Visible or bgMode == "off" then return end
-		bgAcc += dt
-		local busy = activeDrag ~= nil or now < (Library._busyUntil or 0)
-		if bgAcc < (busy and (1 / 15) or (1 / 30)) then return end
-		local step = math.min(bgAcc, 0.1)
-		bgAcc = 0
+	-- fond animé : cadence gérée par le Ticker (30 Hz, 15 Hz pendant un geste)
+	track(Ticker.connect(function(step, now)
+		step = math.min(step, 0.1)
 
 		for _, sp in ipairs(spinners) do
 			sp.a = ((sp.a or 0) + step * sp.speed * (Library.SpinSpeed or 1)) % 360
@@ -18184,7 +18295,14 @@ function Library:CreateWindow(cfg)
 				s.f.BackgroundTransparency = 1 - s.a * fade
 			end
 		end
-	end))
+	end, {
+		rate = function()
+			local busy = activeDrag ~= nil or os.clock() < (Library._busyUntil or 0)
+			return busy and 15 or 30
+		end,
+		gate = function() return main.Visible and bgMode ~= "off" end,
+		deco = true,
+	}))
 
 	-- ------------------------------------------------------------------
 	-- Ciel : étoiles qui rebondissent sur les bords de l'écran (derrière la fenêtre, jamais dedans)
@@ -18231,9 +18349,10 @@ function Library:CreateWindow(cfg)
 		skyLim = n
 		for i, st in ipairs(skyStars) do st.f.Visible = i <= n end
 		sky.Visible = n > 0 and (skyTarget > 0 or skyFade > 0.01)
+		Ticker.wake()
 	end
 
-	track(RunService.Heartbeat:Connect(function(dt)
+	track(Ticker.connect(function(dt)
 		if Library._skyInstant then
 			skyFade = skyTarget
 		else
@@ -18270,7 +18389,7 @@ function Library:CreateWindow(cfg)
 			st.f.BackgroundTransparency = 1 - alpha
 			if st.halo then st.halo.BackgroundTransparency = 1 - alpha * 0.18 end
 		end
-	end))
+	end, { deco = true, gate = function() return skyLim > 0 and (skyTarget > 0 or skyFade > 0.01 or sky.Visible) end }))
 	refreshSky()
 
 	-- Animation d'apparition
