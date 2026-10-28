@@ -626,7 +626,19 @@ do
 					t.acc += dt
 					local r = t.rate
 					if type(r) == "function" then r = r() end
-					if not r or r <= 0 or t.acc >= 1 / r then
+					local due = true
+					if r and r > 0 then
+						-- échéances : à 60 Hz sur un écran à 60 images/s la tâche passe à CHAQUE image (l'ancien cumul de dt en
+						-- sautait une sur deux dès que le dt tombait à 16.6 ms au lieu de 16.7 ms)
+						local per = 1 / r
+						if not t.due then t.due = now + per end
+						due = now + dt * 0.5 >= t.due
+						if due then
+							t.due += per
+							if t.due < now - per then t.due = now end   -- trop en retard : on repart de maintenant
+						end
+					end
+					if due then
 						local step = t.acc
 						t.acc = 0
 						local ok, err = pcall(t.fn, step, now)
@@ -636,7 +648,7 @@ do
 						end
 					end
 				else
-					t.acc = 0   -- endormie : pas de gros dt au réveil
+					t.acc, t.due = 0, nil   -- endormie : pas de gros dt au réveil
 				end
 			end
 		end
@@ -704,6 +716,24 @@ do
 
 	UIS.WindowFocused:Connect(function() focused = true Ticker.wake() end)
 	UIS.WindowFocusReleased:Connect(function() focused = false end)
+end
+
+-- Appel direct, SAUF pendant un redimensionnement de la fenêtre : au plus 20 appels/s (le dernier est toujours exécuté).
+-- Sert aux mises en page de texte (mesures TextService) qui réagissent à chaque changement de largeur : le cadre de la
+-- fenêtre reste à pleine cadence, le recalcul du texte à l'intérieur suit à 20 Hz.
+function Library._lazy(fn)
+	local pending, last = false, 0
+	return function(...)
+		if not Library._resizing then return fn(...) end
+		local now = os.clock()
+		if now - last >= 0.05 then last = now return fn(...) end
+		if pending then return end
+		pending = true
+		task.delay(0.05 - (now - last), function()
+			pending, last = false, os.clock()
+			fn()
+		end)
+	end
 end
 
 local TEXTCLASS = { TextLabel = true, TextButton = true, TextBox = true }
@@ -5141,18 +5171,27 @@ local TOGGLE_STYLES = {}
 local toggleSkins = {}   -- toggles existants : { f = ligne, skin = fonction qui redessine }
 
 local function tgl(o, props, instant, t, style)
-	if props.Position ~= nil then
+	-- Position ET Size (poignées, billes, cases, barres) passent en ressort : si on rebascule en plein mouvement, la
+	-- vitesse est conservée au lieu de repartir de zéro ; les couleurs / transparences restent en tween.
+	if props.Position ~= nil or props.Size ~= nil then
 		if not instant and Library.Springs ~= false and Library.Animations ~= false then
-			-- la position passe en ressort (garde sa vitesse si on rebascule en plein mouvement), le reste en tween
-			local rest
+			local sp, rest = {}, nil
+			local preset = style == BACK and "bouncy" or "snappy"
 			for k, v in pairs(props) do
-				if k ~= "Position" then rest = rest or {} rest[k] = v end
+				if k == "Position" or k == "Size" then
+					sp[k] = v
+					-- une taille qui tombe à 0 : ressort sans rebond (jamais de taille négative)
+					if k == "Size" and (v.X.Offset == 0 and v.X.Scale == 0 or v.Y.Offset == 0 and v.Y.Scale == 0) then preset = "smooth" end
+				else
+					rest = rest or {} rest[k] = v
+				end
 			end
-			Library._spring(o, { Position = props.Position }, style == BACK and "bouncy" or "snappy")
+			Library._spring(o, sp, preset)
 			if rest then tween(o, rest, t or 0.25, style) end
 			return
 		end
 		Library._springStop(o, "Position")
+		Library._springStop(o, "Size")
 	end
 	tween(o, props, instant and 0 or (t or 0.25), style)
 end
@@ -5738,14 +5777,14 @@ function Block:CreateSlider(o)
 
 	hit.InputBegan:Connect(function(i)
 		if isPress(i) then
-			tween(knob, { Size = UDim2.new(0, 17, 0, 17) }, 0.2, BACK)
+			Library._spring(knob, { Size = UDim2.new(0, 17, 0, 17) }, "bouncy")
 			local firstHit = true   -- premier point = clic sur la barre : la poignée glisse et le chiffre défile ; ensuite direct
 			startDrag(function(p)
 				local t = math.clamp((p.X - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1)
 				apply(min + t * (max - min), false, not firstHit)
 				firstHit = false
 			end, self.Scroll, i.Position, function()
-				tween(knob, { Size = UDim2.new(0, 12, 0, 12) }, 0.25)
+				Library._spring(knob, { Size = UDim2.new(0, 12, 0, 12) }, "snappy")
 			end)
 		end
 	end)
@@ -5899,8 +5938,8 @@ function Block:CreateRangeSlider(o)
 		if dL < dH then which = "low" elseif dH < dL then which = "high" else which = (v0 >= high) and "high" or "low" end
 		local function setActive(w)
 			which = w
-			tween(kLow, { Size = UDim2.new(0, w == "low" and 17 or 12, 0, w == "low" and 17 or 12) }, 0.2, BACK)
-			tween(kHigh, { Size = UDim2.new(0, w == "high" and 17 or 12, 0, w == "high" and 17 or 12) }, 0.2, BACK)
+			Library._spring(kLow, { Size = UDim2.new(0, w == "low" and 17 or 12, 0, w == "low" and 17 or 12) }, "bouncy")
+			Library._spring(kHigh, { Size = UDim2.new(0, w == "high" and 17 or 12, 0, w == "high" and 17 or 12) }, "bouncy")
 		end
 		setActive(which)
 		startDrag(function(p)
@@ -5910,8 +5949,8 @@ function Block:CreateRangeSlider(o)
 			if which == "low" and v > high then setActive("high") end
 			if which == "low" then setLow(v, true) else setHigh(v, true) end
 		end, self.Scroll, i.Position, function()
-			tween(kLow, { Size = UDim2.new(0, 12, 0, 12) }, 0.25)
-			tween(kHigh, { Size = UDim2.new(0, 12, 0, 12) }, 0.25)
+			Library._spring(kLow, { Size = UDim2.new(0, 12, 0, 12) }, "snappy")
+			Library._spring(kHigh, { Size = UDim2.new(0, 12, 0, 12) }, "snappy")
 		end)
 	end)
 
@@ -6380,7 +6419,7 @@ function Block:CreateDropdown(o)
 		go(head, { Size = UDim2.new(1, 0, 0, headH) })
 		firstLay = false
 	end
-	head:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutHead)
+	head:GetPropertyChangedSignal("AbsoluteSize"):Connect(Library._lazy(layoutHead))
 	nameL:GetPropertyChangedSignal("Text"):Connect(layoutHead)
 	valL:GetPropertyChangedSignal("Text"):Connect(layoutHead)
 	task.defer(layoutHead)
@@ -7164,7 +7203,7 @@ function Library._attachTextFade(tb)
 	end
 
 	tb:GetPropertyChangedSignal("Text"):Connect(onText)
-	ov:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutCheck)
+	ov:GetPropertyChangedSignal("AbsoluteSize"):Connect(Library._lazy(layoutCheck))
 	render()
 	task.defer(layoutCheck)
 end
@@ -7316,9 +7355,9 @@ function Library._attachSelection(tb)
 	tb:GetPropertyChangedSignal("Text"):Connect(function() task.defer(apply) end)
 	tb.Focused:Connect(function() task.defer(apply) end)
 	tb.FocusLost:Connect(refresh)
-	host:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+	host:GetPropertyChangedSignal("AbsoluteSize"):Connect(Library._lazy(function()
 		if lastA then refresh() end
-	end)
+	end))
 	for _, pn in ipairs({ "Font", "TextSize", "TextXAlignment" }) do
 		tb:GetPropertyChangedSignal(pn):Connect(function() if lastA then refresh() end end)
 	end
@@ -7375,7 +7414,7 @@ function Block:CreateInput(o)
 			lbl.TextTransparency = hide and 1 or 0
 		end
 	end
-	f:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() fit(false, true) end)
+	f:GetPropertyChangedSignal("AbsoluteSize"):Connect(Library._lazy(function() fit(false, true) end))
 	fit(false, true)
 	task.defer(fit, false, true)
 
@@ -8299,7 +8338,7 @@ function Block:CreateProgress(o)
 		end
 		firstLay = false
 	end
-	f:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutRow)
+	f:GetPropertyChangedSignal("AbsoluteSize"):Connect(Library._lazy(layoutRow))
 	valL:GetPropertyChangedSignal("Text"):Connect(layoutRow)
 
 	local value = math.clamp(tonumber(o.Default or o.Value) or min, min, max)
@@ -10500,7 +10539,7 @@ function Block:CreatePreview3D(o)
 			shownT = now
 			shown = isShown()
 		end
-		if not shown then return end
+		if not shown or Library._resizing then return end
 		if jumpPending and Library._fullyLoaded then
 			jumpPending, jumpT0 = false, os.clock()
 		end
@@ -11134,9 +11173,9 @@ function Library._rollText(lbl)
 	end
 	lbl:GetPropertyChangedSignal("TextXAlignment"):Connect(relayout)
 	lbl:GetPropertyChangedSignal("TextWrapped"):Connect(function() onText(true) end)
-	host:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+	host:GetPropertyChangedSignal("AbsoluteSize"):Connect(Library._lazy(function()
 		if plain then onText(true) else relayout() end
-	end)
+	end))
 	lbl.TextTransparency = 1
 	onText(true)
 	task.defer(function() if lbl.Parent then onText(true) end end)
@@ -13089,8 +13128,14 @@ function Window:CreateTab(name, _, icon, parentTab)
 		end
 		page.Visible = true
 		Library._busyUntil = os.clock() + 0.55
-		tween(bar, { Size = UDim2.new(0, 3, 0, 16) }, 0.45, BACK)
-		tween(btn, { BackgroundTransparency = 0.92 }, 0.25)
+		if win._selSet and win._selSet(tab) then
+			-- la pastille de la sidebar glisse jusqu'à cet onglet : pas de fond ni de barre propres au bouton
+			tween(bar, { Size = UDim2.new(0, 3, 0, 0) }, 0.2)
+			tween(btn, { BackgroundTransparency = 1 }, 0.25)
+		else
+			tween(bar, { Size = UDim2.new(0, 3, 0, 16) }, 0.45, BACK)
+			tween(btn, { BackgroundTransparency = 0.92 }, 0.25)
+		end
 		tween(txt, { TextColor3 = T.Text }, 0.25)
 		if Library._openDD then Library._openDD(false) end
 
@@ -13200,8 +13245,9 @@ function Tab:CreateSubTabs(list)
 		if not sub or not sub.PillW then return end
 		local pos, size = UDim2.new(0, sub.PillX, 0.5, 0), UDim2.new(0, sub.PillW, 0, H)
 		if animate and ind.Visible then
-			tween(ind, { Position = pos, Size = size }, 0.38)
+			Library._spring(ind, { Position = pos, Size = size }, "snappy")
 		else
+			Library._springStop(ind)
 			ind.Position, ind.Size = pos, size
 			ind.Visible = true
 		end
@@ -17295,6 +17341,7 @@ function Library:CreateWindow(cfg)
 			-- la taille suit le curseur avec un lissage court : la fenêtre et son contenu (colonnes, textes, graphiques)
 			-- se redimensionnent en continu, image par image, au lieu de sauter d'un cran à l'autre
 			rsSmooth = Library.Animations and true or false
+			Library._resizing = true   -- allège le fond animé et les mises en page de texte pendant le geste
 			startDrag(function(p)
 				local d = (Vector2.new(p.X, p.Y) - start) / sc
 				local v = viewport()
@@ -17302,7 +17349,7 @@ function Library:CreateWindow(cfg)
 					dx == 0 and sw or math.clamp(sw + d.X * dx, minW, math.max(minW, v.X / sc - 10)),
 					dy == 0 and sh or math.clamp(sh + d.Y * dy, minH, math.max(minH, v.Y / sc - 10))
 				)
-			end, nil, i.Position, saveWinLater)
+			end, nil, i.Position, function() Library._resizing = false saveWinLater() end)
 		end)
 	end
 
@@ -17573,7 +17620,7 @@ function Library:CreateWindow(cfg)
 		local st = btn:FindFirstChild("EcSel")
 		if on and not st then
 			st = new("UIStroke", { Name = "EcSel", Color = T.Accent, Thickness = 1, ApplyStrokeMode = BORDER,
-				Transparency = (win.Current == tab) and 0.72 or 1 }, btn)
+				Transparency = 1 }, btn)   -- le contour de sélection est dessiné par la pastille de la sidebar
 		end
 		if st then st.Enabled = on end
 		if tab.Bar then tab.Bar.Visible = not on and not sq end
@@ -17585,7 +17632,7 @@ function Library:CreateWindow(cfg)
 		end
 		if ln then
 			ln.Visible = sq
-			ln.BackgroundTransparency = (sq and win.Current == tab) and 0 or 1
+			ln.BackgroundTransparency = (sq and win.Current == tab and not (win._selOwns and win._selOwns(tab))) and 0 or 1
 		end
 		-- texte : centré dans la barre du haut (Carré), position d'origine sinon (le bouton docké garde sa mise en page)
 		if txt and not docked and orig then
@@ -17626,7 +17673,9 @@ function Library:CreateWindow(cfg)
 			btn.LayoutOrder = tab._sqRealOrder
 			tab._sqRealOrder = nil
 		end
-		if win.Current == tab then btn.BackgroundTransparency = on and 0.88 or 0.92 end
+		if win.Current == tab then
+			btn.BackgroundTransparency = (win._selOwns and win._selOwns(tab)) and 1 or (on and 0.88 or 0.92)
+		end
 		if sq and ec.sqOrder then ec.sqOrder() end
 	end
 
@@ -17655,21 +17704,117 @@ function Library:CreateWindow(cfg)
 			end
 		end
 	end
+
+	-- ------------------------------------------------------------------
+	-- Pastille de sélection de la sidebar : UNE pastille qui glisse (ressort) vers l'onglet actif, comme celle des
+	-- sous-onglets, au lieu d'un fond qui s'allume sur place. Elle suit aussi le bouton si la mise en page bouge
+	-- (déploiement d'un onglet parent, changement de style, défilement). Éclipse : avec contour ; Carré : soulignement.
+	-- Un onglet « docké » hors de la sidebar garde l'ancien affichage.
+	-- ------------------------------------------------------------------
+	do
+		local selHost = new("Frame", { Name = "SelHost", Size = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1,
+			BorderSizePixel = 0, LayoutOrder = 2147483000, ZIndex = 0 }, sidebar)
+		local selPill = new("Frame", { Name = "SelPill", Size = UDim2.fromOffset(0, 0), BackgroundColor3 = T.Accent,
+			BackgroundTransparency = 0.92, BorderSizePixel = 0, Visible = false, ZIndex = 0 }, selHost)
+		local selCorner = new("UICorner", { CornerRadius = UDim.new(0, 8) }, selPill)
+		local selStroke = new("UIStroke", { Color = T.Accent, Thickness = 1, ApplyStrokeMode = BORDER, Transparency = 1 }, selPill)
+		local selBar = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+			Size = UDim2.new(0, 3, 0, 16), BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, selPill)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, selBar)
+
+		local selTab, selConns, selBorn, selQueued = nil, {}, 0, false
+
+		local function owns(tab)
+			local b = tab and tab.Button
+			return b ~= nil and b.Parent ~= nil and b:IsDescendantOf(sidebar)
+		end
+
+		local function style()
+			local ls = Library.LayoutStyle
+			local sqm, ecl = ls == "Carré", ls == "Éclipse"
+			selBar.Visible = not sqm and not ecl
+			selStroke.Transparency = ecl and 0.72 or 1
+			selPill.BackgroundTransparency = sqm and 0 or (ecl and 0.88 or 0.92)
+			if not sqm then selCorner.CornerRadius = UDim.new(0, ecl and 12 or 8) end
+		end
+
+		local function target(tab)
+			if not owns(tab) then return nil end
+			local ls = Library.LayoutStyle
+			if tab.ParentTab and ls ~= "Carré" and not tab.ParentTab.Expanded then return nil end
+			local sc = math.max(pxScale(), 0.05)
+			local ap, hp, as = tab.Button.AbsolutePosition, selHost.AbsolutePosition, tab.Button.AbsoluteSize
+			local x, y, w, h = (ap.X - hp.X) / sc, (ap.Y - hp.Y) / sc, as.X / sc, as.Y / sc
+			if w <= 0 or h <= 0 then return nil end
+			if ls == "Carré" then
+				return UDim2.fromOffset(math.floor(x + 6 + 0.5), math.floor(y + h - 2 + 0.5)), UDim2.fromOffset(math.max(math.floor(w - 12 + 0.5), 0), 2)
+			end
+			return UDim2.fromOffset(math.floor(x + 0.5), math.floor(y + 0.5)), UDim2.fromOffset(math.floor(w + 0.5), math.floor(h + 0.5))
+		end
+
+		local function place(instant)
+			if not selTab then selPill.Visible = false return end
+			local pos, size = target(selTab)
+			if not pos then selPill.Visible = false Library._springStop(selPill) return end
+			local first = not selPill.Visible
+			if first then selBorn = os.clock() end
+			selPill.Visible = true
+			-- les premiers instants (mise en page pas encore stable) : placement direct, sans glisser depuis un coin
+			if first or instant or os.clock() - selBorn < 0.35 or Library.Animations == false or Library.Springs == false then
+				Library._springStop(selPill)
+				selPill.Position, selPill.Size = pos, size
+			else
+				Library._spring(selPill, { Position = pos, Size = size }, "snappy")
+			end
+		end
+
+		local function queue()
+			if selQueued then return end
+			selQueued = true
+			task.defer(function() selQueued = false place(false) end)
+		end
+
+		local function follow(tab)
+			for _, c in ipairs(selConns) do c:Disconnect() end
+			selConns = {}
+			if not owns(tab) then return end
+			local b = tab.Button
+			selConns[1] = b:GetPropertyChangedSignal("AbsolutePosition"):Connect(queue)
+			selConns[2] = b:GetPropertyChangedSignal("AbsoluteSize"):Connect(queue)
+			selConns[3] = selHost:GetPropertyChangedSignal("AbsolutePosition"):Connect(queue)
+		end
+
+		-- appelé par Tab:Select : true = la pastille prend en charge l'affichage de l'onglet actif
+		win._selSet = function(tab)
+			selTab = owns(tab) and tab or nil
+			follow(selTab)
+			style()
+			place(false)
+			return selTab ~= nil
+		end
+		win._selOwns = function(tab) return selTab == tab and owns(tab) end
+		win._selRefresh = function()
+			style()
+			if selTab then place(true) end
+		end
+		track({ Disconnect = function() for _, c in ipairs(selConns) do c:Disconnect() end selConns = {} end })
+	end
+
 	win._ecStyleTab = ec.styleTab
 
 	win._ecTabSelected = function(tab)
 		if Library.LayoutStyle == "Carré" then
 			for _, t in ipairs(win.Tabs) do
 				local l = t.Button and t.Button:FindFirstChild("SqLine")
-				if l then tween(l, { BackgroundTransparency = (t == tab) and 0 or 1 }, 0.2) end
+				if l then tween(l, { BackgroundTransparency = ((t == tab) and not (win._selOwns and win._selOwns(t))) and 0 or 1 }, 0.2) end
 			end
 		end
 		if Library.LayoutStyle == "Éclipse" then
 			for _, t in ipairs(win.Tabs) do
 				local st = t.Button and t.Button:FindFirstChild("EcSel")
-				if st then tween(st, { Transparency = (t == tab) and 0.72 or 1 }, 0.25) end
+				if st then tween(st, { Transparency = ((t == tab) and not (win._selOwns and win._selOwns(t))) and 0.72 or 1 }, 0.25) end
 			end
-			tween(tab.Button, { BackgroundTransparency = 0.88 }, 0.25)
+			tween(tab.Button, { BackgroundTransparency = (win._selOwns and win._selOwns(tab)) and 1 or 0.88 }, 0.25)
 		end
 		ec.page(tab)
 	end
@@ -17858,6 +18003,7 @@ function Library:CreateWindow(cfg)
 		title.TextXAlignment = Enum.TextXAlignment.Left
 		if ec.logo then ec.logo.Visible = not on and not sq end
 		for _, t in ipairs(win.Tabs) do ec.styleTab(t) end
+		if win._selRefresh then win._selRefresh() end
 		for _, t in ipairs(win.Tabs) do   -- sous-menus dépliants : cachés dans la barre du haut, rétablis ensuite
 			if t._holder then t._holder.Visible = (not sq) and t.Expanded == true end
 		end
@@ -18233,7 +18379,7 @@ function Library:CreateWindow(cfg)
 					curSize = tgtSize
 					tgtSize = nil
 				else
-					curSize = curSize + d * (1 - math.exp(-dt * (activeDrag ~= nil and 32 or 16)))
+					curSize = curSize + d * (1 - math.exp(-dt * (activeDrag ~= nil and 48 or 16)))
 				end
 			else
 				curSize = tgtSize
@@ -18300,7 +18446,7 @@ function Library:CreateWindow(cfg)
 			local busy = activeDrag ~= nil or os.clock() < (Library._busyUntil or 0)
 			return busy and 15 or 30
 		end,
-		gate = function() return main.Visible and bgMode ~= "off" end,
+		gate = function() return main.Visible and bgMode ~= "off" and not Library._resizing end,
 		deco = true,
 	}))
 
