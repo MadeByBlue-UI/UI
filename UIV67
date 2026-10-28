@@ -7,6 +7,13 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9 — INTRO DE CHARGEMENT
+		• Animation « trou noir » dès le lancement : anneaux lumineux, étoiles qui spiralent vers le centre, titre lettre par lettre,
+		  barre de progression réelle et texte d'état. À la fin tout est aspiré, deux ondes de choc partent et le fond se dissipe
+		  sur la fenêtre prête. Clic = passer. Réglages > Animations & performances > « Intro de chargement ».
+		  API : Library:SetIntroEnabled(bool) / HoldIntro(bool) / FinishIntro() · Library.IntroMinTime · Library.IntroYield ·
+		  getgenv().UiLibIntro = false · getgenv().UiLibIntroTitle = "MON NOM".
+
 	V5.9 — TRANSITIONS PLUS FLUIDES
 		• Liste déroulante : le tiroir s'ouvre / se ferme en glissant, les options apparaissent une à une (fondu + léger glissement)
 		  et la flèche pivote en même temps, avec la même durée et la même courbe.
@@ -409,6 +416,404 @@ local Library = {
 	BlockLayout       = {},    -- [onglet][nbColonnes][bloc] = { c = colonne, o = ordre }  (sauvegardé : « ui.blocklayout »)
 }
 
+-- ============================================================================
+-- INTRO DE CHARGEMENT  « Trou noir »
+-- S'affiche dès le début du chargement de la lib et reste tant que l'interface se construit.
+--   • Un trou noir (anneaux lumineux qui tournent, étoiles qui spiralent et s'étirent vers le centre), le titre qui
+--     apparaît lettre par lettre, une barre de progression RÉELLE (nombre d'éléments créés / total du lancement précédent,
+--     mémorisé dans <ConfigFolder>/_intro.json) et un texte d'état qui change selon l'avancement.
+--   • Fin : la barre se remplit, tout est aspiré dans le trou noir, deux ondes de choc partent du centre et le fond noir
+--     se dissipe sur la fenêtre déjà prête.
+--   • Pendant le chargement, new() laisse respirer le rendu (une image toutes les ~22 ms de travail) pour que l'animation
+--     ne se fige pas. Library.IntroYield = false : coupe ça (chargement un peu plus rapide, animation saccadée).
+--   • Clique sur l'écran pour passer l'intro (dès que la fenêtre existe).
+--   API : Library:SetIntroEnabled(bool) · Library.IntroMinTime (s, défaut 2.2) · Library:HoldIntro(bool) (garde l'intro tant
+--   que ton script charge des choses) · Library:FinishIntro() · getgenv().UiLibIntro = false (couper) ·
+--   getgenv().UiLibIntroTitle = "MON NOM" (titre).
+-- ============================================================================
+do
+	local genv = (getgenv and getgenv()) or {}
+	local introFile = Library.ConfigFolder .. "/_intro.json"
+	local saved = {}
+	pcall(function()
+		if isfile and readfile and isfile(introFile) then
+			local d = HttpService:JSONDecode(readfile(introFile))
+			if type(d) == "table" then saved = d end
+		end
+	end)
+	local function writeIntro()
+		pcall(function()
+			if not writefile then return end
+			if makefolder and isfolder and not isfolder(Library.ConfigFolder) then makefolder(Library.ConfigFolder) end
+			writefile(introFile, HttpService:JSONEncode({ enabled = Library.IntroEnabled, total = saved.total }))
+		end)
+	end
+	Library.IntroEnabled = (saved.enabled ~= false) and (genv.UiLibIntro ~= false)
+	Library.IntroYield = true
+	Library.IntroMinTime = 2.2
+	Library.IntroActive = false
+	function Library:SetIntroEnabled(v)
+		Library.IntroEnabled = v and true or false
+		writeIntro()
+	end
+	function Library:HoldIntro(v) local I = Library._intro if I then I.hold = v and true or false end end
+	function Library:FinishIntro() local I = Library._intro if I then I.force = true end end
+
+	if Library.IntroEnabled then
+		local gui
+		local okIntro, errIntro = pcall(function()
+			for _, r in ipairs({ CoreGui, LP and LP:FindFirstChild("PlayerGui") }) do
+				local o = r and r:FindFirstChild("SolarisIntro")
+				if o then pcall(function() o:Destroy() end) end
+			end
+
+			gui = Instance.new("ScreenGui")
+			gui.Name = "SolarisIntro"
+			gui.ResetOnSpawn = false
+			gui.DisplayOrder = 2000
+			gui.IgnoreGuiInset = true
+			gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+			pcall(function()
+				if syn and syn.protect_gui then syn.protect_gui(gui)
+				elseif protectgui then protectgui(gui) end
+			end)
+			local okm = pcall(function() gui.Parent = CoreGui end)
+			if not okm or not gui.Parent then gui.Parent = LP:WaitForChild("PlayerGui") end
+
+			local WHITE = Color3.fromRGB(240, 240, 244)
+			local GREY  = Color3.fromRGB(150, 150, 160)
+			local BLACK = Color3.fromRGB(3, 3, 5)
+			local FBOLD, FREG = Enum.Font.GothamBold, Enum.Font.Gotham
+
+			local function mk(class, props, parent)
+				local o = Instance.new(class)
+				for k, v in pairs(props) do o[k] = v end
+				o.Parent = parent
+				return o
+			end
+
+			-- fond plein écran (avale aussi les clics pendant le chargement)
+			local root = mk("TextButton", { Name = "Root", Size = UDim2.fromScale(1, 1), BackgroundColor3 = BLACK,
+				BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, Active = true }, gui)
+			local content = mk("Frame", { Name = "Content", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(400, 430), BackgroundTransparency = 1 }, root)
+			local uiScale = mk("UIScale", { Scale = 1 }, content)
+			local CX, CY = 200, 150   -- centre du trou noir dans « content »
+
+			local function circle(d, props)
+				local f = mk("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(CX, CY),
+					Size = UDim2.fromOffset(d, d), BackgroundTransparency = 1, BorderSizePixel = 0 }, content)
+				for k, v in pairs(props or {}) do f[k] = v end
+				mk("UICorner", { CornerRadius = UDim.new(0.5, 0) }, f)
+				return f
+			end
+
+			-- anneaux : un reflet lumineux qui tourne le long du contour
+			local ringDefs = {
+				{ d = 112, th = 2.0, alpha = 0.90, spd = 150 },
+				{ d = 166, th = 1.5, alpha = 0.65, spd = -95 },
+				{ d = 228, th = 1.2, alpha = 0.45, spd = 60 },
+				{ d = 296, th = 1.0, alpha = 0.30, spd = -35 },
+			}
+			local rings = {}
+			for i, def in ipairs(ringDefs) do
+				local f = circle(def.d)
+				local st = mk("UIStroke", { Color = WHITE, Thickness = def.th, Transparency = 1,
+					ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, f)
+				local g = mk("UIGradient", { Rotation = i * 70, Transparency = NumberSequence.new({
+					NumberSequenceKeypoint.new(0, 0.92), NumberSequenceKeypoint.new(0.5, 0), NumberSequenceKeypoint.new(1, 0.92) }) }, st)
+				rings[i] = { f = f, st = st, g = g, def = def, rot = i * 70 }
+			end
+
+			local halo = circle(94)
+			local haloSt = mk("UIStroke", { Color = WHITE, Thickness = 7, Transparency = 1 }, halo)
+			local core = circle(70, { BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 1 })
+			local coreSt = mk("UIStroke", { Color = WHITE, Thickness = 2.5, Transparency = 1 }, core)
+
+			-- étoiles : spirale vers le centre, de plus en plus vite et de plus en plus étirées
+			local R0, RK = 150, 40
+			local rng = Random.new()
+			local parts = {}
+			local function respawn(p, first)
+				p.r = first and (RK + rng:NextNumber() * (R0 - RK)) or (R0 * (0.8 + rng:NextNumber() * 0.2))
+				p.th = rng:NextNumber() * math.pi * 2
+				p.v = rng:NextNumber() * 14
+				p.fade = first and 1 or 0
+			end
+			for i = 1, 52 do
+				local f = mk("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(2, 2),
+					BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0 }, content)
+				local p = { f = f }
+				respawn(p, true)
+				parts[i] = p
+			end
+
+			-- titre lettre par lettre
+			local TITLE = tostring(genv.UiLibIntroTitle or "INVINCIBLE")
+			local titleRow = mk("Frame", { Position = UDim2.fromOffset(0, 318), Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1 }, content)
+			mk("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 7), SortOrder = Enum.SortOrder.LayoutOrder }, titleRow)
+			local letters = {}
+			for _, cp in utf8.codes(string.upper(TITLE)) do
+				local ch = utf8.char(cp)
+				local n = #letters + 1
+				if ch == " " then
+					mk("Frame", { Size = UDim2.fromOffset(14, 2), BackgroundTransparency = 1, LayoutOrder = n }, titleRow)
+					letters[n] = false
+				else
+					letters[n] = mk("TextLabel", { Size = UDim2.fromOffset(0, 32), AutomaticSize = Enum.AutomaticSize.X,
+						BackgroundTransparency = 1, Text = ch, TextColor3 = WHITE, TextTransparency = 1, Font = FBOLD,
+						TextSize = 26, LayoutOrder = n }, titleRow)
+				end
+			end
+
+			local sub = mk("TextLabel", { Position = UDim2.fromOffset(0, 358), Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1,
+				Text = "", TextColor3 = GREY, TextTransparency = 1, Font = FREG, TextSize = 13 }, content)
+			local track = mk("Frame", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.fromOffset(200, 392), Size = UDim2.fromOffset(240, 3),
+				BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0 }, content)
+			mk("UICorner", { CornerRadius = UDim.new(0.5, 0) }, track)
+			local fill = mk("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0 }, track)
+			mk("UICorner", { CornerRadius = UDim.new(0.5, 0) }, fill)
+			local fillGrad = mk("UIGradient", { Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, GREY),
+				ColorSequenceKeypoint.new(0.5, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, GREY) }) }, fill)
+			local pct = mk("TextLabel", { Position = UDim2.fromOffset(0, 404), Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
+				Text = "0 %", TextColor3 = GREY, TextTransparency = 1, Font = FREG, TextSize = 11 }, content)
+
+			-- état
+			local I = { hold = false, force = false }
+			local state = "run"            -- run -> outro -> dead
+			local count, lastBuild, lastYield = 0, os.clock(), os.clock()
+			local t0 = os.clock()
+			local expected = tonumber(saved.total) or 0
+			if expected < 800 then expected = 4000 end
+			local disp, subBase, subA, lastPct = 0, "", 0, -1
+			local outroT0, shockDone = 0, false
+			local hb
+
+			Library._intro = I
+			Library.IntroActive = true
+
+			-- appelé par new() à chaque élément créé : compte + laisse le rendu respirer
+			local isY = coroutine.isyieldable
+			function I.tick()
+				count += 1
+				local now = os.clock()
+				lastBuild = now
+				-- jamais pendant CreateWindow (fenêtre à moitié construite) : seulement une fois Library.Window posée
+				if state == "run" and Library.Window ~= nil and Library.IntroYield ~= false and now - lastYield > 0.022 then
+					if isY then
+						if isY() then task.wait() end
+					else
+						pcall(task.wait)
+					end
+					lastYield = os.clock()
+				end
+			end
+
+			-- ouvre la fenêtre (restée cachée pendant le chargement) avec sa vraie animation d'ouverture
+			local function revealWindow()
+				local w = Library.Window
+				if w and w._introHidden then
+					w._introHidden = nil
+					pcall(w.Toggle, w, true)
+				end
+			end
+
+			function I.destroy()
+				if hb then hb:Disconnect() hb = nil end
+				state = "dead"
+				Library.IntroActive = false
+				if Library._intro == I then Library._intro = nil end
+				if not I.noReveal then revealWindow() end
+				pcall(function() gui:Destroy() end)
+			end
+
+			root.MouseButton1Click:Connect(function() I.force = true end)
+
+			local function phaseText(p, ready)
+				if ready then return "Prêt" end
+				if p < 0.2 then return "Initialisation" end
+				if p < 0.6 then return "Construction de l'interface" end
+				if p < 0.9 then return "Chargement des onglets" end
+				return "Dernières retouches"
+			end
+
+			local function spawnShock(delay, thick)
+				task.delay(delay, function()
+					if state == "dead" then return end
+					local f = circle(70)
+					f.ZIndex = 5
+					local st = mk("UIStroke", { Color = WHITE, Thickness = thick, Transparency = 0.1 }, f)
+					TweenService:Create(f, TweenInfo.new(1.0, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+						{ Size = UDim2.fromOffset(2200, 2200) }):Play()
+					TweenService:Create(st, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+						{ Transparency = 1 }):Play()
+				end)
+			end
+
+			local function ease3(a) return 1 - (1 - a) ^ 3 end
+
+			local last = os.clock()
+			local function step()
+				local now = os.clock()
+				local dt = math.min(now - last, 0.1)
+				last = now
+				local t = now - t0
+
+				local ab = root.AbsoluteSize
+				uiScale.Scale = math.clamp(math.min(ab.X / 560, ab.Y / 560), 0.55, 1.35)
+
+				-- fin de chargement ?
+				local u = 0
+				if state == "run" then
+					local winOk = Library.Window ~= nil
+					local quiet = now - lastBuild
+					local done = winOk and quiet >= 0.7 and t >= (Library.IntroMinTime or 2.2) and not I.hold
+					if I.force and winOk then done = true end
+					if t > 60 or (not winOk and quiet > 12 and t > 6) then done = true end   -- sécurité : ne jamais rester bloqué
+					local target = 0.92 * (1 - math.exp(-2.6 * count / expected))
+					target = math.max(target, math.min(0.25, t * 0.06))
+					if winOk then target = math.max(target, 0.8) end
+					if done then target = 1 end
+					if target > disp then disp = disp + (target - disp) * math.min(1, dt * 5) end
+					if done and disp > 0.985 then
+						state = "outro"
+						outroT0 = now
+						disp = 1
+						saved.total = count
+						if count > 300 then writeIntro() end
+					end
+				else
+					u = now - outroT0
+				end
+
+				-- opacités globales
+				local textA, fxA = 1, math.min(t / 0.7, 1)
+				fxA = ease3(fxA)
+				local rootTr = 1 - ease3(math.min(t / 0.45, 1))
+				if state == "outro" then
+					textA = 1 - math.min(u / 0.3, 1)
+					fxA = 1 - ease3(math.clamp((u - 0.7) / 0.5, 0, 1))
+					rootTr = ease3(math.clamp((u - 0.55) / 0.6, 0, 1))
+					root.Active = u < 0.9
+				end
+				root.BackgroundTransparency = rootTr
+
+				-- anneaux
+				local sRing = 1
+				if state == "outro" then
+					local a = math.min(u / 0.55, 1)
+					sRing = 1 - a * a * a
+				end
+				for i, rg in ipairs(rings) do
+					rg.rot = (rg.rot + rg.def.spd * dt) % 360
+					rg.g.Rotation = rg.rot
+					local d = rg.def.d * sRing * (1 + 0.012 * math.sin(t * 2 + i))
+					rg.f.Size = UDim2.fromOffset(d, d)
+					rg.st.Transparency = 1 - fxA * rg.def.alpha
+				end
+
+				-- cœur
+				local coreS = 1
+				if state == "outro" then
+					if u < 0.55 then
+						local a = u / 0.55
+						coreS = 1 + 0.4 * a * a
+					else
+						coreS = 1.4 * (1 - ease3(math.min((u - 0.55) / 0.45, 1)))
+					end
+				end
+				local br = 1 + 0.035 * math.sin(t * 3.2)
+				local cd = 70 * coreS * br
+				core.Size = UDim2.fromOffset(cd, cd)
+				core.BackgroundTransparency = 1 - fxA
+				coreSt.Transparency = 1 - fxA
+				local hd = 94 * coreS * (1 + 0.06 * math.sin(t * 3.2 + 1))
+				halo.Size = UDim2.fromOffset(hd, hd)
+				haloSt.Transparency = 1 - fxA * (0.16 + 0.1 * math.sin(t * 3.2))
+
+				-- ondes de choc
+				if state == "outro" and not shockDone and u >= 0.55 then
+					shockDone = true
+					revealWindow()
+					spawnShock(0, 3)
+					spawnShock(0.16, 1.5)
+				end
+
+				-- étoiles
+				for _, p in ipairs(parts) do
+					local rn = math.clamp(p.r / R0, 0, 1)
+					local q = 1 - rn
+					local w = 0.45 + 3.0 * q ^ 1.7
+					if state == "outro" then
+						p.r = p.r * math.exp(-dt * (2.5 + u * 12))
+					else
+						p.r = p.r - (5 + p.v + 62 * q ^ 1.25) * dt
+						if p.r < RK then respawn(p, false) end
+					end
+					p.th = p.th + w * dt
+					local r = p.r
+					q = 1 - math.clamp(r / R0, 0, 1)
+					p.fade = math.min(p.fade + dt * 1.6, 1)
+					local a = p.fade * math.clamp((r - RK) / 22, 0, 1) * fxA * 0.9
+					p.f.BackgroundTransparency = 1 - a
+					p.f.Size = UDim2.fromOffset(2 + 10 * q ^ 1.4, 2)
+					p.f.Rotation = math.deg(p.th) + 90
+					p.f.Position = UDim2.fromOffset(CX + math.cos(p.th) * r, CY + math.sin(p.th) * r)
+				end
+
+				-- titre
+				for i, l in ipairs(letters) do
+					if l then
+						local a = math.clamp((t - 0.45 - i * 0.06) / 0.5, 0, 1)
+						local wave = 0.12 + 0.38 * (0.5 + 0.5 * math.sin(t * 2.6 - i * 0.6))
+						l.TextTransparency = 1 - a * (1 - wave) * textA
+					end
+				end
+
+				-- état + barre
+				local want = phaseText(disp, state == "outro")
+				if want ~= subBase then subBase = want subA = 0 end
+				subA = math.min(subA + dt * 3.5, 1)
+				sub.Text = subBase .. "…"
+				sub.TextTransparency = 1 - 0.75 * subA * textA * math.clamp((t - 0.6) / 0.4, 0, 1)
+				track.BackgroundTransparency = 1 - 0.14 * textA * math.clamp((t - 0.5) / 0.4, 0, 1)
+				fill.BackgroundTransparency = 1 - textA * math.clamp((t - 0.5) / 0.4, 0, 1)
+				fill.Size = UDim2.new(math.clamp(disp, 0, 1), 0, 1, 0)
+				fillGrad.Offset = Vector2.new((t * 0.9) % 2 - 1, 0)
+				local pc = math.floor(disp * 100 + 0.5)
+				if pc ~= lastPct then lastPct = pc pct.Text = pc .. " %" end
+				pct.TextTransparency = 1 - 0.6 * textA * math.clamp((t - 0.6) / 0.4, 0, 1)
+
+				if state == "outro" and u >= 1.9 then I.destroy() end
+			end
+
+			hb = RunService.Heartbeat:Connect(function()
+				local ok, err = pcall(step)
+				if not ok then
+					warn("[Ui-Lib] intro : " .. tostring(err))
+					I.destroy()
+				end
+			end)
+
+			-- on laisse l'intro s'afficher et se mettre en route AVANT le premier gros bloc de travail (création de la fenêtre) :
+			-- sans ça le script synchrone occuperait tout et le premier affichage arriverait en retard, sans fondu d'entrée
+			if Library.IntroYield ~= false and (not isY or isY()) then
+				local w0 = os.clock()
+				while state == "run" and os.clock() - w0 < 0.5 do task.wait() end
+				lastYield = os.clock()
+			end
+		end)
+		if not okIntro then
+			warn("[Ui-Lib] intro : " .. tostring(errIntro))
+			Library._intro = nil
+			Library.IntroActive = false
+			if gui then pcall(function() gui:Destroy() end) end
+		end
+	end
+end
+
+
 -- Relance du script : on détruit proprement l'ancienne instance (UI + connexions)
 do
 	local env = (getgenv and getgenv()) or _G
@@ -746,6 +1151,8 @@ local function sqUnder(parent)
 end
 
 local function new(class, props, parent)
+	local intro = Library._intro
+	if intro then intro.tick() end   -- intro de chargement : progression + respiration du rendu
 	local o = Instance.new(class)
 	for k, v in pairs(props or {}) do o[k] = v end
 	if class == "UICorner" and sqUnder(parent) then
@@ -14433,6 +14840,9 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Callback = function(v)
 			Library:SetTabTransition(v)
 		end })
+	B:CreateToggle({ Name = "Intro de chargement", Flag = "ui.intro", Default = Library.IntroEnabled ~= false,
+		Tooltip = "Petite animation « trou noir » pendant que l'interface se charge (au prochain lancement).",
+		Callback = function(v) Library:SetIntroEnabled(v) end })
 	B:CreateToggle({ Name = "Onde au clic", Flag = "ui.ripple", Default = Library.Ripple,
 		Tooltip = "Une onde part du point de clic sur les boutons, interrupteurs et onglets.", Callback = opt("Ripple") })
 	B:CreateToggle({ Name = "Indicateur FPS / ping", Flag = "ui.fps", Default = win.StatsVisible,
@@ -18833,6 +19243,14 @@ function Library:CreateWindow(cfg)
 			if Library.Window == win then Library:AutoLoad() end
 		end)
 	end
+	-- intro de chargement en cours : la fenêtre reste fermée (cachée derrière l'intro) et s'ouvre pour de bon, avec toute son
+	-- animation (zoom, fondu, flou, son), au moment où l'intro se dissipe
+	if Library._intro and Library.IntroActive then
+		win._introHidden = true
+		Library._quietWin = true
+		pcall(win.Toggle, win, false)
+		Library._quietWin = false
+	end
 	return win
 end
 
@@ -18861,6 +19279,7 @@ function Library:Destroy()
 		local CASd = game:GetService("ContextActionService")
 		for n = 1, (Library._ddNavId or 0) do pcall(function() CASd:UnbindAction("UiLibDDNav" .. n) end) end
 	end
+	if Library._intro then Library._intro.noReveal = true pcall(Library._intro.destroy) end
 	if Library.Window and Library.Window.Gui then Library.Window.Gui:Destroy() end
 	Library.Window = nil
 	if notifGui then notifGui:Destroy() notifGui = nil end
