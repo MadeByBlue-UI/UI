@@ -7,6 +7,25 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.2 — « HI. » DANS L'INTRO + SON
+		• Au tout début de l'intro : écran noir, interface Roblox masquée (chat, liste des joueurs, barre du haut...), puis « Hi. » apparaît en
+		  fondu au moment précis où le son démarre (Library.HiSoundId, 130780071265356 par défaut), puis l'intro « trou noir » continue.
+		  Tout est remis comme avant ensuite. Clic = passer. getgenv().UiLibIntroHi = false (ou Library.IntroHi = false) le coupe ·
+		  Library.IntroHiTime (durée, 2 s).
+		• Home > Mon personnage : le même son se joue quand l'avatar fait son animation de bienvenue / son petit saut à l'arrivée sur Home.
+		  Library.HiSound = false (ou Réglages > Animations & performances > « Son Hi. ») le coupe · Library.HiSoundVolume (1) ·
+		  Library.HiSoundOnHome = false : seulement dans l'intro · Library:PlayHiSound() le joue à la demande.
+
+	V9.2 — FLUIDITÉ : DÉFILEMENT, CHAMP DE TEXTE, FIN DES ANIMATIONS
+		• Défilement à la molette refait : la lib prend elle-même la molette (le défilement natif est coupé sur ces cadres), donc plus de
+		  « saut puis retour » qui faisait bugger. Un ressort amorti fait glisser le contenu, et la fin est nette (au moins ~1 px par image,
+		  puis arrêt) : plus de micro-décalages d'un pixel. Library.SmoothScrollStep (px par cran, 64) · Library.SmoothScrollSpeed (20) ·
+		  Library:SetSmoothScroll(false) = retour au défilement natif · Library.SmoothScrollLegacy = true = ancien mode.
+		• Champ de texte (CreateInput) : il grandit avec un ressort (la vitesse est conservée à chaque lettre au lieu de repartir de zéro)
+		  et garde de la marge d'avance, donc plus de clignotement du fondu pendant l'agrandissement.
+		• Ressorts : la queue de l'animation ne rampe plus pixel par pixel (arrêt net à moins de 1 px). Les tweens utilisent par défaut
+		  une courbe Cubic (Library.DefaultEase) au lieu de Quint, dont la fin traînait d'un pixel.
+
 	V9.1 — CHARGEMENT DE CONFIG SILENCIEUX + HOME EN R6
 		• Charger une config n'affiche plus des centaines de notifications (une par élément modifié) : les notifications émises par les
 		  callbacks pendant le chargement sont retenues, UNE SEULE notification « Config chargée » apparaît, et Réglages > « Raccourcis &
@@ -604,6 +623,81 @@ do
 			local outroT0, shockDone = 0, false
 			local hb
 
+			-- ===== moment « Hi. » : écran noir, interface Roblox masquée, « Hi. » + son au même instant =====
+			Library.HiSoundId = Library.HiSoundId or "130780071265356"
+			local HI_T = tonumber(Library.IntroHiTime) or 2.0
+			local hiOn = Library.IntroHi ~= false and genv.UiLibIntroHi ~= false and HI_T > 0
+			local hiDone, hiT0, hiTextT0 = not hiOn, os.clock(), nil
+			local hiLabel, hiScale, hiSnd, coreBackup
+			local StarterGui = game:GetService("StarterGui")
+			local function hideCore()
+				coreBackup = {}
+				for _, ty in ipairs(Enum.CoreGuiType:GetEnumItems()) do
+					if ty ~= Enum.CoreGuiType.All then
+						local okc, v = pcall(StarterGui.GetCoreGuiEnabled, StarterGui, ty)
+						if okc then coreBackup[ty] = v end
+					end
+				end
+				pcall(StarterGui.SetCoreGuiEnabled, StarterGui, Enum.CoreGuiType.All, false)
+			end
+			local function restoreCore()
+				if not coreBackup then return end
+				local b = coreBackup
+				coreBackup = nil
+				for ty, v in pairs(b) do pcall(StarterGui.SetCoreGuiEnabled, StarterGui, ty, v) end
+			end
+			if hiOn then
+				hiLabel = mk("TextLabel", { Name = "Hi", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+					Size = UDim2.fromOffset(400, 120), BackgroundTransparency = 1, Text = "Hi.", TextColor3 = WHITE,
+					TextTransparency = 1, Font = FBOLD, TextSize = 84, ZIndex = 10 }, root)
+				hiScale = mk("UIScale", { Scale = 0.9 }, hiLabel)
+				content.Visible = false
+				hideCore()
+				if Library.HiSound ~= false then
+					pcall(function()
+						hiSnd = Instance.new("Sound")
+						hiSnd.Name = "Hi"
+						hiSnd.SoundId = "rbxassetid://" .. tostring(Library.HiSoundId)
+						hiSnd.Volume = tonumber(Library.HiSoundVolume) or 1
+						hiSnd.Parent = gui
+						task.spawn(function() pcall(function() game:GetService("ContentProvider"):PreloadAsync({ hiSnd }) end) end)
+					end)
+				end
+			end
+			local function hiEase(a) return 1 - (1 - a) ^ 3 end
+			-- renvoie true tant que le « Hi. » est à l'écran (le reste de l'intro attend)
+			local function hiStep(now)
+				local ht = now - hiT0
+				root.Active = true
+				root.BackgroundTransparency = 1 - hiEase(math.min(ht / 0.35, 1))
+				if not hiTextT0 then
+					-- le texte et le son démarrent ensemble : dès que le son est chargé (ou après 1 s, au cas où il ne charge pas)
+					local ready = (not hiSnd) or hiSnd.IsLoaded or ht > 1.0
+					if ht >= 0.35 and ready then
+						hiTextT0 = now
+						if hiSnd then pcall(function() hiSnd:Play() end) end
+					end
+				end
+				local over = ht > 8 or (I.force and Library.Window ~= nil)
+				if hiTextT0 and not over then
+					local tt = now - hiTextT0
+					local a = hiEase(math.clamp(tt / 0.35, 0, 1))
+					local fo = 1 - math.clamp((tt - (HI_T - 0.4)) / 0.4, 0, 1)
+					hiLabel.TextTransparency = 1 - a * fo
+					hiScale.Scale = 0.9 + 0.1 * a + 0.04 * math.clamp(tt / HI_T, 0, 1)
+					over = tt >= HI_T
+				end
+				if over then
+					hiDone = true
+					restoreCore()
+					content.Visible = true
+					pcall(function() hiLabel:Destroy() end)
+					root.BackgroundTransparency = 0
+					return false
+				end
+				return true
+			end
+
 			Library._intro = I
 			Library.IntroActive = true
 
@@ -635,6 +729,7 @@ do
 
 			function I.destroy()
 				if hb then hb:Disconnect() hb = nil end
+				restoreCore()
 				state = "dead"
 				Library.IntroActive = false
 				if Library._intro == I then Library._intro = nil end
@@ -672,6 +767,10 @@ do
 				local now = os.clock()
 				local dt = math.min(now - last, 0.1)
 				last = now
+				if not hiDone then
+					if hiStep(now) then return end
+					t0 = now   -- la suite de l'intro repart de zéro après le « Hi. »
+				end
 				local t = now - t0
 
 				local ab = root.AbsoluteSize
@@ -682,7 +781,7 @@ do
 				if state == "run" then
 					local winOk = Library.Window ~= nil
 					local quiet = now - lastBuild
-					local done = winOk and quiet >= 0.7 and t >= (Library.IntroMinTime or 2.2) and not I.hold
+					local done = winOk and quiet >= 0.7 and t >= (hiOn and math.max(1.2, (Library.IntroMinTime or 2.2) - 1.0) or (Library.IntroMinTime or 2.2)) and not I.hold
 					if I.force and winOk then done = true end
 					if t > 60 or (not winOk and quiet > 12 and t > 6) then done = true end   -- sécurité : ne jamais rester bloqué
 					local target = 0.92 * (1 - math.exp(-2.6 * count / expected))
@@ -704,7 +803,7 @@ do
 				-- opacités globales
 				local textA, fxA = 1, math.min(t / 0.7, 1)
 				fxA = ease3(fxA)
-				local rootTr = 1 - ease3(math.min(t / 0.45, 1))
+				local rootTr = hiOn and 0 or (1 - ease3(math.min(t / 0.45, 1)))
 				if state == "outro" then
 					textA = 1 - math.min(u / 0.3, 1)
 					fxA = 1 - ease3(math.clamp((u - 0.7) / 0.5, 0, 1))
@@ -1191,6 +1290,7 @@ end
 
 -- TweenInfo mis en cache (évite d'en recréer des centaines) + multiplicateur de vitesse / mode sans animation
 local tweenInfoCache = {}
+Library.DefaultEase = Enum.EasingStyle.Cubic   -- Quint : la fin traînait d'un pixel (nil = ancien comportement)
 local function tween(o, props, t, style, dir)
 	t = t or 0.25
 	-- Back / Elastic dépassent la valeur cible : sur une COULEUR ou une TRANSPARENCE ça fait un flash (noir <-> blanc
@@ -1213,7 +1313,7 @@ local function tween(o, props, t, style, dir)
 			style = nil
 		end
 	end
-	style = style or QUINT
+	style = style or Library.DefaultEase or QUINT
 	dir = dir or OUT
 	if not Library.Animations then
 		t = 0
@@ -1260,10 +1360,10 @@ end
 
 local function springDecode(val)
 	local t = typeof(val)
-	if t == "number" then return { val }, { 0.001 }, t end
-	if t == "UDim2" then return { val.X.Scale, val.X.Offset, val.Y.Scale, val.Y.Offset }, { 0.0004, 0.03, 0.0004, 0.03 }, t end
-	if t == "Color3" then return { val.R, val.G, val.B }, { 0.002, 0.002, 0.002 }, t end
-	if t == "Vector2" then return { val.X, val.Y }, { 0.03, 0.03 }, t end
+	if t == "number" then return { val }, { 0.001 }, t, { false } end
+	if t == "UDim2" then return { val.X.Scale, val.X.Offset, val.Y.Scale, val.Y.Offset }, { 0.0012, 0.03, 0.0012, 0.03 }, t, { false, true, false, true } end
+	if t == "Color3" then return { val.R, val.G, val.B }, { 0.002, 0.002, 0.002 }, t, { false, false, false } end
+	if t == "Vector2" then return { val.X, val.Y }, { 0.03, 0.03 }, t, { true, true } end
 	return nil
 end
 local function springEncode(kind, x)
@@ -1283,6 +1383,22 @@ local function springLoop(dt)
 				local rest = true
 				for i = 1, #st.x do
 					local nx, nv = Library._springStep(st.x[i], st.v[i], st.t[i], st.w, st.z, dt)
+					if st.px and st.px[i] then
+						-- composante en PIXELS : l'écran arrondit au pixel, la queue d'un ressort « rampe » donc d'un pixel à la fois, par à-coups.
+						-- À moins d'1 px de la cible on termine net ; sans dépassement, on avance d'au moins ~1 px par image jusque-là.
+						local ox, tg = st.x[i], st.t[i]
+						if math.abs(tg - nx) < 1 and (st.z >= 0.999 or math.abs(nv) < 80) then
+							nx, nv = tg, 0
+						elseif st.z >= 0.999 then
+							local minStep = 75 * dt
+							local dir = (tg >= ox) and 1 or -1
+							if (nx - ox) * dir < minStep then
+								nx = ox + dir * minStep
+								if (tg - nx) * dir <= 0 then nx = tg end
+								nv = dir * 75
+							end
+						end
+					end
 					st.x[i], st.v[i] = nx, nv
 					if math.abs(nx - st.t[i]) > st.eps[i] or math.abs(nv) > st.eps[i] * 20 then rest = false end
 				end
@@ -1321,7 +1437,7 @@ function Library._spring(obj, props, preset)
 	local ps = springs[obj]
 	if not ps then ps = {} springs[obj] = ps end
 	for prop, target in pairs(props) do
-		local tx, eps, kind = springDecode(target)
+		local tx, eps, kind, pxf = springDecode(target)
 		if tx then
 			local st = ps[prop]
 			local cx = springDecode(obj[prop])
@@ -1336,7 +1452,7 @@ function Library._spring(obj, props, preset)
 			else
 				local vz = {}
 				for i = 1, #cx do vz[i] = 0 end
-				st = { kind = kind, x = cx, v = vz, eps = eps }
+				st = { kind = kind, x = cx, v = vz, eps = eps, px = pxf }
 				ps[prop] = st
 			end
 			st.t, st.w = tx, pr[1]
@@ -1416,7 +1532,7 @@ local function scrollChanged(sf, st)
 	end
 end
 
-function Library._regScroll(sf)
+function Library._regScrollLegacy(sf)
 	local st = { known = sf.CanvasPosition.Y, pos = 0, vel = 0, target = 0 }
 	local queued = false
 	sf:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
@@ -1677,10 +1793,181 @@ track(UIS.InputEnded:Connect(function(i)
 		or i.UserInputType == Enum.UserInputType.Touch) then
 		local e = activeEnd
 		activeDrag, activeEnd = nil, nil
-		if dragScroll then dragScroll.ScrollingEnabled = true dragScroll = nil end
+		if dragScroll then dragScroll.ScrollingEnabled = not (Library._ownsScroll and Library._ownsScroll(dragScroll)) dragScroll = nil end
 		if e then e() end
 	end
 end))
+
+-- ============================================================================
+-- DÉFILEMENT FLUIDE V2 (molette) : la lib prend elle-même la molette. Le défilement natif est coupé sur ces cadres
+-- (ScrollingEnabled = false), donc plus de « saut natif puis retour » : un ressort amorti fait glisser le contenu, et la fin est
+-- nette (au moins ~1 px par image puis arrêt, plus de micro-décalages d'un pixel). La barre de défilement reste affichée.
+-- Library.SmoothScroll = false / Library:SetSmoothScroll(false) : défilement natif · Library.SmoothScrollStep (px par cran, 64)
+-- Library.SmoothScrollSpeed (raideur, 20) · Library.SmoothScrollLegacy = true : ancien mode · tactile pur : ancien mode.
+-- Les cadres horizontaux (ScrollingDirection = X) ne sont pas touchés.
+-- ============================================================================
+Library.SmoothScrollStep  = 64
+Library.SmoothScrollSpeed = 20
+do -- (portée réduite : limite de 200 locals)
+local CAS = game:GetService("ContextActionService")
+local frames = setmetatable({}, { __mode = "k" })   -- cadre -> état { pos, vel, target, last }
+local active, cand = {}, {}                         -- cadres qui glissent / cadres sous la souris au dernier cran
+local loopConn, queued, wz = nil, false, 0
+local touchOnly = UIS.TouchEnabled and not UIS.MouseEnabled
+local SINK, PASS = Enum.ContextActionResult.Sink, Enum.ContextActionResult.Pass
+
+local function owns(sf) return frames[sf] ~= nil and Library.SmoothScroll ~= false end
+Library._ownsScroll = owns
+
+local function maxOf(sf)
+	return math.max(0, (sf.AbsoluteCanvasSize.Y - sf.AbsoluteWindowSize.Y) / pxScale())
+end
+local function canScroll(sf)
+	return owns(sf) and sf.Visible and sf.AbsoluteWindowSize.Y > 0 and sf.AbsoluteCanvasSize.Y > sf.AbsoluteWindowSize.Y + 1
+end
+
+local function loop(dt)
+	dt = math.min(dt, 1 / 20)
+	local w, px = Library.SmoothScrollSpeed or 20, pxScale()
+	for sf, st in pairs(active) do
+		if not sf.Parent then
+			active[sf] = nil
+		else
+			local ox = st.pos
+			local p, v = Library._springStep(ox, st.vel, st.target, w, 1, dt)
+			local dir = (st.target >= ox) and 1 or -1
+			if math.abs(st.target - p) * px < 1 then
+				p, v = st.target, 0                       -- à moins d'1 px : terminé, net
+			else
+				local minStep = 80 * dt / px              -- queue : au moins ~1 px écran par image
+				if (p - ox) * dir < minStep then
+					p = ox + dir * minStep
+					if (st.target - p) * dir <= 0 then p = st.target end
+					v = dir * 80 / px
+				end
+			end
+			st.pos, st.vel = p, v
+			local fin = (p == st.target)
+			local wp = fin and p or math.floor(p * px + 0.5) / px   -- position alignée sur un pixel écran
+			sf.CanvasPosition = Vector2.new(sf.CanvasPosition.X, wp)
+			local act = sf.CanvasPosition.Y
+			st.last = act
+			if math.abs(act - wp) > 1.5 then              -- haut / bas du contenu atteint
+				st.pos, st.target, st.vel = act, act, 0
+				active[sf] = nil
+			elseif fin then
+				active[sf] = nil
+			end
+		end
+	end
+	if next(active) == nil and loopConn then
+		loopConn:Disconnect()
+		loopConn = nil
+	end
+end
+
+local function overWindow()
+	local win = Library.Window
+	local m = win and win.Main
+	if not (m and m.Visible and m.AbsoluteSize.X > 0) then return false end
+	local g = win.Gui
+	if g and g.Enabled == false then return false end
+	local p = Library._pointerPos({ X = 0, Y = 0 })
+	local ap, as = m.AbsolutePosition, m.AbsoluteSize
+	return p.X >= ap.X and p.X <= ap.X + as.X and p.Y >= ap.Y and p.Y <= ap.Y + as.Y
+end
+
+-- la molette ne doit pas zoomer la caméra du jeu quand elle sert à défiler dans la fenêtre
+local function bindSink()
+	if Library._wheelSink then return end
+	Library._wheelSink = true
+	pcall(function()
+		CAS:BindActionAtPriority("UiLibWheelSink", function()
+			if overWindow() then return SINK end
+			return PASS
+		end, false, 2000, Enum.UserInputType.MouseWheel)
+	end)
+end
+
+local function resolve()
+	queued = false
+	local z = wz
+	wz = 0
+	local best
+	-- cadres qui ont reçu la molette (Roblox gère déjà ce qui est caché par un autre élément) : le plus profond gagne
+	for sf in pairs(cand) do
+		cand[sf] = nil
+		if canScroll(sf) and (not best or sf:IsDescendantOf(best)) then best = sf end
+	end
+	if not best and overWindow() then
+		-- aucun cadre n'a signalé la molette : repli par position du pointeur (le plus petit cadre qui le contient)
+		local m = Library._pointerPos({ X = 0, Y = 0 })
+		local bestA
+		for sf in pairs(frames) do
+			if canScroll(sf) and Ticker.shown(sf) then
+				local ap, as = sf.AbsolutePosition, sf.AbsoluteSize
+				if m.X >= ap.X and m.X <= ap.X + as.X and m.Y >= ap.Y and m.Y <= ap.Y + as.Y then
+					local a = as.X * as.Y
+					if not bestA or a < bestA then best, bestA = sf, a end
+				end
+			end
+		end
+	end
+	if not best or z == 0 then return end
+	local st = frames[best]
+	if not active[best] then
+		local y = best.CanvasPosition.Y
+		st.pos, st.vel, st.target = y, 0, y
+	end
+	st.target = math.clamp(st.target - z * (Library.SmoothScrollStep or 64), 0, maxOf(best))
+	if Library.Animations == false then
+		best.CanvasPosition = Vector2.new(best.CanvasPosition.X, st.target)
+		st.last = best.CanvasPosition.Y
+		st.pos, st.target, st.vel = st.last, st.last, 0
+		active[best] = nil
+		return
+	end
+	if math.abs(st.target - st.pos) < 0.01 then return end
+	active[best] = st
+	if not loopConn then loopConn = Ticker.connect(loop) end
+end
+
+track(UIS.InputChanged:Connect(function(i)
+	if touchOnly or i.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+	wz += i.Position.Z
+	if not queued then
+		queued = true
+		task.defer(resolve)
+	end
+end))
+
+function Library:SetSmoothScroll(on)
+	Library.SmoothScroll = on ~= false
+	table.clear(active)
+	for sf in pairs(frames) do
+		pcall(function() sf.ScrollingEnabled = not Library.SmoothScroll end)
+	end
+end
+
+function Library._regScroll(sf)
+	if touchOnly or Library.SmoothScrollLegacy then return Library._regScrollLegacy(sf) end
+	if sf.ScrollingDirection == Enum.ScrollingDirection.X then return end
+	local st = { pos = 0, vel = 0, target = 0, last = sf.CanvasPosition.Y }
+	frames[sf] = st
+	if Library.SmoothScroll ~= false then sf.ScrollingEnabled = false end
+	sf.InputChanged:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseWheel then cand[sf] = true end
+	end)
+	sf:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+		local y = sf.CanvasPosition.Y
+		if math.abs(y - st.last) < 0.75 then return end   -- notre propre écriture
+		-- changement venu d'ailleurs (code, défilement vers un élément...) : on repart de la vraie position
+		st.last, st.pos, st.target, st.vel = y, y, y, 0
+		active[sf] = nil
+	end)
+	bindSink()
+end
+end -- fin de la portée réduite
 
 -- Dégradés qui tournent (anneaux du trou noir, bordure de la fenêtre...)
 local spinners = {}
@@ -1837,6 +2124,33 @@ local function uiSnd(ev)
 end
 
 function Library:PlayUISound(ev) uiSnd(tostring(ev)) end
+
+-- Son « Hi. » : joué à l'intro (voir plus haut) et quand l'avatar de Home fait sa bienvenue / son saut.
+Library.HiSound       = true
+Library.HiSoundId     = Library.HiSoundId or "130780071265356"
+Library.HiSoundVolume = 1
+Library.HiSoundOnHome = true
+local hiSndObj, hiSndAt = nil, 0
+function Library:PlayHiSound(force)
+	if Library.HiSound == false then return end
+	if (Library._silentSound or 0) > 0 or (Library._restoring or 0) > 0 then return end
+	if not force and os.clock() - hiSndAt < 1.2 then return end
+	hiSndAt = os.clock()
+	pcall(function()
+		local s = hiSndObj
+		if not (s and s.Parent) then
+			s = Instance.new("Sound")
+			s.Name = "UI_Hi"
+			s.Parent = uiSndHost()
+			hiSndObj = s
+		end
+		local id = "rbxassetid://" .. tostring(Library.HiSoundId)
+		if s.SoundId ~= id then s.SoundId = id end
+		s.Volume = tonumber(Library.HiSoundVolume) or 1
+		s.TimePosition = 0
+		s:Play()
+	end)
+end
 function Library:SetUISoundEnabled(v) Library.UISound = v and true or false end
 function Library:SetUISoundVolume(v) Library.UISoundVolume = math.clamp(tonumber(v) or 0.5, 0, 1) end
 function Library:SetUISoundHover(v) Library.UISoundHover = v and true or false end
@@ -7956,7 +8270,7 @@ function Block:CreateInput(o)
 	-- dépasse encore, il défile pendant la saisie et se termine par « ... » seulement quand le champ n'est pas sélectionné.
 	-- ------------------------------------------------------------------------
 	local TextService = game:GetService("TextService")
-	local PADX, STEP = 22, 12          -- marges internes + curseur / pas d'agrandissement (évite un tween à chaque lettre)
+	local PADX, LEAD, STEP = 22, 14, 6          -- marges internes + curseur / pas d'agrandissement (évite un tween à chaque lettre)
 	local lastW, focused = nil, false
 	local function rowW() return f.AbsoluteSize.X / pxScale() end
 	local function fit(animate, force)
@@ -7966,7 +8280,7 @@ function Block:CreateInput(o)
 		local want = base
 		if tb.Text ~= "" then
 			local ok, b = pcall(TextService.GetTextSize, TextService, tb.Text, tb.TextSize, tb.Font, Vector2.new(10000, 100))
-			if ok then want = math.ceil((b.X + PADX) / STEP) * STEP end
+			if ok then want = math.ceil((b.X + PADX + LEAD) / STEP) * STEP end
 		end
 		local w = math.clamp(want, base, max)
 		tb.TextTruncate = (want > max and not focused) and Enum.TextTruncate.AtEnd or Enum.TextTruncate.None
@@ -7975,9 +8289,10 @@ function Block:CreateInput(o)
 		local size = UDim2.new(0, w, 0, 24)
 		local hide = (rw - 8 - w) < (12 + lbl.TextBounds.X + 10)   -- le champ recouvre le nom -> on l'efface
 		if animate then
-			tween(tb, { Size = size }, 0.32)
+			Library._spring(tb, { Size = size }, "smooth")   -- ressort : la vitesse est gardée quand une nouvelle lettre change la cible
 			tween(lbl, { TextTransparency = hide and 1 or 0 }, 0.22)
 		else
+			Library._springStop(tb, "Size")
 			tb.Size = size
 			lbl.TextTransparency = hide and 1 or 0
 		end
@@ -11413,10 +11728,12 @@ function Block:CreatePreview3D(o)
 		if not shown or Library._resizing then return end
 		if welcomePending and Library._fullyLoaded and fit then   -- l'avatar doit être affiché (sinon l'animation se jouerait dans le vide)
 			welcomePending, jumpPending, welcomeT0 = false, false, os.clock()
+			if Library.HiSoundOnHome ~= false then Library:PlayHiSound() end
 		end
 		if welcomeT0 then jumpPending = false end             -- pas de petit saut par-dessus la bienvenue
 		if jumpPending and Library._fullyLoaded and fit then
 			jumpPending, jumpT0 = false, os.clock()
+			if Library.HiSoundOnHome ~= false then Library:PlayHiSound() end
 		end
 		-- fenêtre Roblox en arrière-plan : on ne rend qu'à ~4 images/s (le temps écoulé est cumulé, l'animation reste juste)
 		if not pvFocused and not jumpT0 and not welcomeT0 then
@@ -15238,6 +15555,9 @@ function Window:CreateSettingsTab(name, icon, docked)
 	B:CreateToggle({ Name = "Intro de chargement", Flag = "ui.intro", Default = Library.IntroEnabled ~= false,
 		Tooltip = "Petite animation « trou noir » pendant que l'interface se charge (au prochain lancement).",
 		Callback = function(v) Library:SetIntroEnabled(v) end })
+	B:CreateToggle({ Name = "Son « Hi. »", Flag = "ui.hisound", Default = Library.HiSound ~= false,
+		Tooltip = "Le son du « Hi. » : au début de l'intro, et quand l'avatar de Home te salue.",
+		Callback = function(v) Library.HiSound = v and true or false end })
 	B:CreateToggle({ Name = "Onde au clic", Flag = "ui.ripple", Default = Library.Ripple,
 		Tooltip = "Une onde part du point de clic sur les boutons, interrupteurs et onglets.", Callback = opt("Ripple") })
 	B:CreateToggle({ Name = "Indicateur FPS / ping", Flag = "ui.fps", Default = win.StatsVisible,
@@ -19700,6 +20020,8 @@ function Library:Destroy()
 	Library._listening = false
 	Library._abortListen = nil
 	if Library._setCursorFree then pcall(Library._setCursorFree, false) end
+	pcall(function() game:GetService("ContextActionService"):UnbindAction("UiLibWheelSink") end)
+	Library._wheelSink = nil
 	pcall(function() RunService:UnbindFromRenderStep("UiLibWindowMouse") end)
 	Library._setCursorFree = nil
 	if Library._destroyCursor then pcall(Library._destroyCursor) end
