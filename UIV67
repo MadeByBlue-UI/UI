@@ -7,6 +7,20 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.1 — CHARGEMENT DE CONFIG SILENCIEUX + HOME EN R6
+		• Charger une config n'affiche plus des centaines de notifications (une par élément modifié) : les notifications émises par les
+		  callbacks pendant le chargement sont retenues, UNE SEULE notification « Config chargée » apparaît, et Réglages > « Raccourcis &
+		  configs » > « Changements de config » liste tout ce qui a changé (nom, ancienne valeur -> nouvelle valeur).
+		  Library.CfgQuiet = false (ou le toggle du panneau) pour revenir à l'ancien comportement · Library.CfgChanges = l'historique.
+		  Une notification Error ou { Force = true } passe toujours.
+		• Home > Mon personnage : avatar R6 automatiquement (Library.PreviewRigType = "R6" | "R15", ou RigType dans CreatePreview3D),
+		  animation de bienvenue à la première arrivée (2 sauts, bras levés) puis coucou en boucle, tout le temps.
+		  pv.Welcome() la rejoue · Library.HomeWelcome = false la coupe (il reste le petit saut à chaque arrivée).
+		• 15 emotes entre les coucous : coucou, pause, coucou, EMOTE, puis on recommence avec l'emote suivante (Joie, Disco, Révérence,
+		  Robot, Pirouette, Applaudir, Biceps, Salto, Non !, Jumping jacks, Marche, Zombie, Chercher, Super-héros, Coup de pied).
+		  Le nom de l'emote s'affiche en bas de l'aperçu. Library.HomeEmotes = false les coupe · pv:PlayEmote(n | "Nom") en lance une ·
+		  Library.PreviewEmotes (ta propre liste) · Library.PreviewEmoteWave (durée d'un coucou) · Library.PreviewEmoteRest (pause).
+
 	V9 — INTRO DE CHARGEMENT
 		• Animation « trou noir » dès le lancement : anneaux lumineux, étoiles qui spiralent vers le centre, titre lettre par lettre,
 		  barre de progression réelle et texte d'état. À la fin tout est aspiré, deux ondes de choc partent et le fond se dissipe
@@ -1543,8 +1557,22 @@ local function register(flag, item, value)
 			local v = copyVal(pend[flag])
 			task.defer(function()
 				Library._silentSound = (Library._silentSound or 0) + 1
+				Library._cfgCapture = (Library._cfgCapture or 0) + 1   -- notifications du callback retenues (voir Library:Notify)
+				local fmt = Library._cfgFmt
+				local old = Library.Flags[flag]
 				pcall(item.Set, item, v)
 				Library._silentSound = math.max((Library._silentSound or 1) - 1, 0)
+				task.delay(0.6, function() Library._cfgCapture = math.max((Library._cfgCapture or 1) - 1, 0) end)
+				-- on ajoute le changement à la liste du chargement en cours (Réglages > Changements de config)
+				local last = Library.CfgChanges and Library.CfgChanges[#Library.CfgChanges]
+				if last and fmt and fmt(old) ~= fmt(v) then
+					last.List[#last.List + 1] = { Flag = flag, Old = fmt(old), New = fmt(v) }
+					Library._cfgDirtyTok = (Library._cfgDirtyTok or 0) + 1
+					local tok = Library._cfgDirtyTok
+					task.delay(0.5, function()
+						if tok == Library._cfgDirtyTok and Library._onCfgChanges then pcall(Library._onCfgChanges) end
+					end)
+				end
 			end)
 		end
 	end
@@ -3569,6 +3597,12 @@ function Library:Notify(o)
 	local kind = NOTIF_ICON[o.Type] and o.Type or "Info"
 	if (o.Progress ~= nil or o.Loading) and not NOTIF_ICON[o.Type] then kind = "Loading" end
 
+	-- chargement de config en cours : les notifications des callbacks (« X activé »...) sont retenues, elles sont résumées
+	-- dans Réglages > Changements de config + une seule notification « Config chargée »
+	if (Library._cfgCapture or 0) > 0 and Library.CfgQuiet ~= false and not o.Force and not o._cfgSummary and kind ~= "Error" then
+		return noopHandle()
+	end
+
 	-- historique (même si « Ne pas déranger »)
 	local hist = Library.NotifHistory
 	hist[#hist + 1] = { Time = os.time(), Title = tostring(o.Title or "Notification"),
@@ -4620,7 +4654,7 @@ function Library:LoadConfig(name, keepPending)
 	if not isfile(path) then return false, "introuvable" end
 	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
 	if not ok or type(data) ~= "table" then return false, "fichier invalide" end
-	Library:_applyFlags(data)
+	Library:_applyFlags(data, name)
 	if keepPending then
 		-- garde les valeurs 15 s : les éléments que ton script crée plus tard les récupèrent (voir register)
 		Library._pendingFlags = data
@@ -4674,8 +4708,9 @@ function Library:AutoLoad()
 	if not n then return end
 	local ok, err = Library:LoadConfig(n, true)
 	if ok and Library.AutoSaveSettings ~= false then Library:LoadSettings() end   -- tes réglages gardent la priorité
-	Library:Notify({ Title = "Config",
-		Content = ok and ("Auto-chargée : " .. n) or ("Auto-load échoué : " .. tostring(err)),
+	Library:Notify({ Title = "Config", _cfgSummary = true,
+		Content = ok and ("Auto-chargée : " .. n .. " (détails dans Réglages > Changements de config)")
+			or ("Auto-load échoué : " .. tostring(err)),
 		Type = ok and "Success" or "Error", Duration = 3 })
 end
 
@@ -5322,8 +5357,35 @@ end
 -- ---------------------------------------------------------------------------
 -- Configs : export / import / reset / dupliquer / renommer
 -- ---------------------------------------------------------------------------
-function Library:_applyFlags(data)
+Library.CfgQuiet = true      -- false : les notifications des callbacks s'affichent pendant un chargement (ancien comportement)
+Library.CfgChanges = Library.CfgChanges or {}   -- { Time, Config, List = { { Flag, Old, New }, ... } }, les 10 derniers chargements
+Library._cfgFmt = function(v)
+	if type(v) == "boolean" then return v and "ON" or "OFF" end
+	if type(v) == "table" then
+		local ok, str = pcall(function() return HttpService:JSONEncode(v) end)
+		return ok and str or "{...}"
+	end
+	if v == nil then return "—" end
+	return tostring(v)
+end
+
+-- configName fourni (chargement / import d'une config) : capture des notifications + liste des changements.
+-- Sans nom (restauration des réglages au lancement) : comportement d'avant, rien n'est retenu.
+function Library:_applyFlags(data, configName)
+	local cfgFmt = Library._cfgFmt
+	local capture = configName ~= nil
+	if capture then Library._cfgCapture = (Library._cfgCapture or 0) + 1 end
 	Library._silentSound = (Library._silentSound or 0) + 1
+	local changes = {}
+	local function setFlag(flag, value)
+		local it = Library.Items[flag]
+		if not (it and it.Set) then return end
+		local old = Library.Flags[flag]
+		pcall(it.Set, it, value)
+		if capture and string.sub(flag, 1, 3) ~= "ui." and cfgFmt(old) ~= cfgFmt(value) then
+			changes[#changes + 1] = { Flag = flag, Old = cfgFmt(old), New = cfgFmt(value) }
+		end
+	end
 	-- les réglages d'interface d'abord, pour que le reste s'affiche déjà avec le bon thème
 	local later = {}
 	do
@@ -5339,17 +5401,25 @@ function Library:_applyFlags(data)
 		if flag == "ui.style" or flag == "ui.layoutstyle" then
 			-- déjà appliqué plus haut
 		elseif string.sub(flag, 1, 3) == "ui." then
-			local it = Library.Items[flag]
-			if it and it.Set then pcall(it.Set, it, value) end
+			setFlag(flag, value)
 		else
 			later[flag] = value
 		end
 	end
-	for flag, value in pairs(later) do
-		local it = Library.Items[flag]
-		if it and it.Set then pcall(it.Set, it, value) end
-	end
+	for flag, value in pairs(later) do setFlag(flag, value) end
 	Library._silentSound = math.max((Library._silentSound or 1) - 1, 0)
+
+	if capture then
+		-- les callbacks sont lancés par task.spawn : leurs notifications arrivent juste après, on garde la capture ouverte un instant
+		task.delay(0.6, function() Library._cfgCapture = math.max((Library._cfgCapture or 1) - 1, 0) end)
+		table.sort(changes, function(a, b) return a.Flag < b.Flag end)
+		local hist = Library.CfgChanges
+		hist[#hist + 1] = { Time = os.time(), Config = tostring(configName), List = changes }
+		while #hist > 10 do table.remove(hist, 1) end
+		Library._lastCfgCount = #changes
+		if Library._onCfgChanges then pcall(Library._onCfgChanges) end
+	end
+	return changes
 end
 
 function Library:ExportConfig()
@@ -5363,7 +5433,7 @@ function Library:ImportConfig(str)
 	str = string.gsub(str, "%s+$", "")
 	local ok, data = pcall(function() return HttpService:JSONDecode(str) end)
 	if not ok or type(data) ~= "table" then return false, "code invalide" end
-	Library:_applyFlags(data)
+	Library:_applyFlags(data, "import")
 	return true
 end
 
@@ -10233,6 +10303,7 @@ end
 -- mettent à jour ~4 fois par seconde au lieu de 60 (Library.PreviewIdleFPS, ou IdleFPS dans CreatePreview3D).
 -- Un aperçu caché (onglet / fenêtre fermés) ne se met déjà plus à jour du tout.
 Library.PreviewIdleFPS = Library.PreviewIdleFPS or 4
+Library.PreviewRigType = Library.PreviewRigType or "R6"   -- avatar de l'aperçu : "R6" (défaut) ou "R15" (RigType dans CreatePreview3D)
 local pvFocused = true
 pcall(function()
 	track(UIS.WindowFocused:Connect(function() pvFocused = true end))
@@ -10251,7 +10322,7 @@ local PV_DEFAULTS = {
 	Distance = true, DistanceText = "42 m", DistanceColor = Color3.fromRGB(190, 190, 198),
 	Tracer = false, TracerColor = PV_WHITE, TracerOrigin = "Bottom",
 	HeadDot = false, HeadDotColor = PV_WHITE,
-	AutoRotate = true, RotateSpeed = 30, Animate = true, Floor = true, Zoom = 1, Wave = false,
+	AutoRotate = true, RotateSpeed = 30, Animate = true, Floor = true, Zoom = 1, Wave = false, Emotes = false,
 }
 local PV_KEYS = {}
 for k in pairs(PV_DEFAULTS) do PV_KEYS[string.lower(k)] = k end
@@ -10278,6 +10349,170 @@ local function pvColor(v, fb)
 	end
 	return fb
 end
+
+-- ============================================================================
+-- EMOTES de l'aperçu 3D (avatar R6) : coucou · pause · coucou · EMOTE · coucou · pause · coucou · EMOTE...
+--   Option Emotes = true (Home l'active ; Library.HomeEmotes = false pour la couper). pv:PlayEmote(numéro | "Nom") en lance une tout de suite.
+--   Library.PreviewEmotes = liste { Name, Dur, Fn(u, T, P) } : P.rs / ls (épaules), rh / lh (hanches), nk (cou), rt (torse) = CFrame
+--   (rotations dans le repère du parent) ; Fn retourne : décalage vertical, tour sur soi (rad, axe Y), salto (rad, axe X).
+--   Library.PreviewEmoteWave = durée d'un coucou (2 s) · Library.PreviewEmoteRest = pause entre les deux coucous (0,35 s).
+-- ============================================================================
+Library._initEmotes = function()   -- dans une fonction : ses variables locales n'entrent pas dans celles du chunk principal
+	local A, sin, cos, pi, abs, floor, max, min = CFrame.Angles, math.sin, math.cos, math.pi, math.abs, math.floor, math.max, math.min
+	local E = {}
+	local function add(name, dur, fn) E[#E + 1] = { Name = name, Dur = dur, Fn = fn } end
+	local RB_R = { 1.57, 0, 1.57, 0 }
+	local RB_L = { 0, 1.57, 1.57, 0 }
+	local RB_H = { 0, 0.7, 0, -0.7 }
+
+	add("Joie", 2.6, function(u, T, P)
+		local f = sin(T * 14) * 0.15
+		P.rs, P.ls = A(0, 0, 2.8 + f), A(0, 0, -(2.8 - f))
+		P.rh, P.lh = A(0, 0, 0.25), A(0, 0, -0.25)
+		P.nk = A(0.15, 0, 0)
+		return abs(sin(T * 5.5)) * 0.9, 0, 0
+	end)
+	add("Disco", 3.2, function(u, T, P)
+		local s = sin(T * 5)
+		P.rs, P.ls = A(0, 0, 1.55 + 1.2 * s), A(0, 0, -(1.55 - 1.2 * s))
+		P.rt = A(0, s * 0.35, s * 0.12)
+		P.nk = A(0, -s * 0.3, 0)
+		return abs(sin(T * 5)) * 0.15, 0, 0
+	end)
+	add("Révérence", 2.4, function(u, T, P)
+		local k = min(1, sin(pi * u) * 1.6)
+		P.rt = A(-1.1 * k, 0, 0)
+		P.rs, P.ls = A(0.6 * k, 0, 0.1), A(-0.4 * k, 0, -0.1)
+		P.nk = A(-0.2 * k, 0, 0)
+		return 0, 0, 0
+	end)
+	add("Robot", 3.2, function(u, T, P)
+		local k = floor(T * 2.5) % 4 + 1
+		P.rs, P.ls = A(RB_R[k], 0, 0.08), A(RB_L[k], 0, -0.08)
+		P.nk = A(0, RB_H[k], 0)
+		P.rt = A(0, RB_H[k] * 0.4, 0)
+		return 0, 0, 0
+	end)
+	add("Pirouette", 1.6, function(u, T, P)
+		P.rs, P.ls = A(0, 0, 1.45), A(0, 0, -1.45)
+		return abs(sin(pi * u)) * 0.35, (u * u * (3 - 2 * u)) * 2 * pi, 0
+	end)
+	add("Applaudir", 2.6, function(u, T, P)
+		local s = 0.5 + 0.5 * sin(T * 18)
+		P.rs, P.ls = A(1.45, 0, -(0.05 + 0.25 * s)), A(1.45, 0, 0.05 + 0.25 * s)
+		P.nk = A(-0.1 * sin(T * 6), 0, 0)
+		return abs(sin(T * 4)) * 0.12, 0, 0
+	end)
+	add("Biceps", 2.6, function(u, T, P)
+		local th = 1.5 + 0.35 * sin(T * 9)
+		P.rs, P.ls = A(0, 0, th), A(0, 0, -(1.5 + 0.35 * sin(T * 9 + 1.2)))
+		P.rt = A(0, sin(T * 4.5) * 0.25, 0)
+		P.rh, P.lh = A(0, 0, 0.2), A(0, 0, -0.2)
+		return abs(sin(T * 4.5)) * 0.1, 0, 0
+	end)
+	add("Salto", 1.5, function(u, T, P)
+		P.rs, P.ls = A(2.6, 0, 0.1), A(2.6, 0, -0.1)
+		P.rh, P.lh = A(0.9, 0, 0), A(0.9, 0, 0)
+		return sin(pi * u) * 1.5, 0, -2 * pi * (u * u * (3 - 2 * u))
+	end)
+	add("Non !", 2.4, function(u, T, P)
+		P.rs = A(-0.3, 0, 2.6 + sin(T * 14) * 0.25)
+		P.ls = A(0, 0, -0.1)
+		P.nk = A(0, sin(T * 10) * 0.5, 0)
+		P.rt = A(0, sin(T * 10) * 0.1, 0)
+		return 0, 0, 0
+	end)
+	add("Jumping jacks", 3.0, function(u, T, P)
+		local s = 0.5 - 0.5 * cos(T * 9)
+		P.rs, P.ls = A(0, 0, 0.08 + 2.75 * s), A(0, 0, -(0.08 + 2.75 * s))
+		P.rh, P.lh = A(0, 0, 0.5 * s), A(0, 0, -0.5 * s)
+		return abs(sin(T * 4.5)) * 0.55, 0, 0
+	end)
+	add("Marche", 3.0, function(u, T, P)
+		local a = sin(T * 7) * 0.8
+		P.rh, P.lh = A(a, 0, 0), A(-a, 0, 0)
+		P.rs, P.ls = A(-a * 0.8, 0, 0.08), A(a * 0.8, 0, -0.08)
+		P.rt = A(0, a * 0.12, 0)
+		return abs(cos(T * 7)) * 0.08, 0, 0
+	end)
+	add("Zombie", 3.0, function(u, T, P)
+		local w = sin(T * 3) * 0.08
+		P.rs, P.ls = A(1.5 + w, 0, 0.05), A(1.5 - w, 0, -0.05)
+		P.nk = A(-0.35, sin(T * 2) * 0.25, 0)
+		P.rt = A(-0.25 + w * 0.6, sin(T * 2) * 0.15, 0)
+		local a = sin(T * 3.5) * 0.35
+		P.rh, P.lh = A(a, 0, 0), A(-a, 0, 0)
+		return abs(sin(T * 3.5)) * 0.06, 0, 0
+	end)
+	add("Chercher", 3.0, function(u, T, P)
+		P.rs = A(2.5, 0, -0.1)
+		P.ls = A(0, 0, -0.5)
+		P.nk = A(0, sin(T * 2.2) * 0.8, 0)
+		P.rt = A(0, sin(T * 2.2) * 0.2, 0)
+		return 0, 0, 0
+	end)
+	add("Super-héros", 2.4, function(u, T, P)
+		P.rs = A(2.9, 0, 0.05)
+		P.ls = A(0, 0, -0.45)
+		P.rh, P.lh = A(0, 0, 0.15), A(0, 0, -0.15)
+		P.rt = A(-0.25, 0, 0)
+		P.nk = A(0.2, 0, 0)
+		return 0.35 + sin(T * 3) * 0.12, 0, 0
+	end)
+	add("Coup de pied", 2.4, function(u, T, P)
+		local s = max(0, sin(T * 6))
+		P.rh = A(1.5 * s, 0, 0)
+		P.rs, P.ls = A(1.2, 0, 0.3), A(1.0, 0, -0.3)
+		P.rt = A(0.35 * s, 0, 0)
+		return s * 0.08, 0, 0
+	end)
+	Library.PreviewEmotes = E
+	Library.PreviewEmoteWave = Library.PreviewEmoteWave or 2.0
+	Library.PreviewEmoteRest = Library.PreviewEmoteRest or 0.35
+
+	-- séquenceur : étape 1 coucou · 2 pause · 3 coucou · 4 emote (puis on repart avec l'emote suivante)
+	local function stageDur(st)
+		if st.stage == 4 then
+			local em = Library.PreviewEmotes[st.idx]
+			return em and em.Dur or 2.5
+		end
+		return (st.stage == 2) and (Library.PreviewEmoteRest or 0.35) or (Library.PreviewEmoteWave or 2.0)
+	end
+	function Library._emoStep(st, dt)
+		local n = #Library.PreviewEmotes
+		if n == 0 then return end
+		if st.force then
+			st.stage, st.T, st.idx, st.force = 4, 0, st.force, nil
+		end
+		if st.idx > n then st.idx = 1 end
+		st.T += dt
+		local d, guard = stageDur(st), 0
+		while st.T >= d and guard < 8 do
+			guard += 1
+			st.T -= d
+			if st.stage == 4 then
+				st.stage = 1
+				st.idx = st.idx % n + 1
+			else
+				st.stage += 1
+			end
+			d = stageDur(st)
+		end
+		if guard >= 8 then st.T = 0 end
+	end
+	-- remplit P pour l'emote en cours ; retourne décalage vertical, tour (Y), salto (X) et l'enveloppe 0..1 (fondu entrée / sortie)
+	function Library._emoPose(st, P)
+		local em = Library.PreviewEmotes[st.idx]
+		if st.stage ~= 4 or not em then return 0, 0, 0, 0 end
+		local d, T = em.Dur, st.T
+		local env = max(0, min(1, T / 0.3, (d - T) / 0.3))
+		env = env * env * (3 - 2 * env)
+		local ok, dy, spin, flip = pcall(em.Fn, T / d, T, P)
+		if not ok then return 0, 0, 0, 0 end
+		return (dy or 0) * env, spin or 0, flip or 0, env
+	end
+end
+Library._initEmotes()
 
 function Block:CreatePreview3D(o)
 	if type(o) ~= "table" then o = { Name = o } end
@@ -10366,6 +10601,7 @@ function Block:CreatePreview3D(o)
 	end
 
 	local jumpPending, jumpT0, jumpApplied = false, nil, 0   -- saut (voir plus bas)
+	local welcomePending, welcomeT0 = false, nil              -- animation de bienvenue (2 sauts, bras levés)
 	local function finishModel()
 		-- état d'origine de chaque pièce (pour les chams) + sol + Highlight
 		bodyParts, decals, hides = {}, {}, {}
@@ -10559,18 +10795,32 @@ function Block:CreatePreview3D(o)
 	-- le faux rig R6 n'est plus qu'un dernier recours si Roblox ne répond pas.
 	local avatarTpl, avatarBusy
 	local world
-	local avJoints, avBase, avY = {}, nil, 0
+	local avJoints, avBase, avY, avSpin, avFlip = {}, nil, 0, 0, 0
 
 	local loadLum = typeof(o.Background) == "Color3" and (o.Background.R * 0.3 + o.Background.G * 0.59 + o.Background.B * 0.11) or 0
 	local loadLbl = new("TextLabel", { BackgroundTransparency = 1, Font = F_MED, TextSize = 12, Text = "Chargement de ton avatar…",
 		TextColor3 = loadLum > 0.5 and Color3.fromRGB(35, 55, 75) or Color3.fromRGB(220, 220, 226),
 		Size = UDim2.new(1, 0, 1, 0), Visible = false, ZIndex = 5 }, ov)
 
+	-- séquenceur d'emotes (voir Library._emoStep) : un seul local, tout le reste dans cette table
+	local EMO = { stage = 1, T = 0, idx = 1, wv = 1, y = 0, spin = 0, flip = 0, lbl = "", base = {}, em = {} }
+	EMO.label = new("TextLabel", { BackgroundTransparency = 1, Font = F_MED, TextSize = 11, Text = "", TextColor3 = loadLbl.TextColor3,
+		AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -6), Size = UDim2.new(1, -12, 0, 14),
+		Visible = false, ZIndex = 5 }, ov)
+
 	local function fetchAvatar()
 		if avatarTpl then return avatarTpl end
-		local rigType = Enum.HumanoidRigType.R15
+		-- R6 automatiquement (même si ton compte est en R15 : la tenue est convertie) ; RigType = "R15" pour garder le R15
+		local want = string.upper(tostring(o.RigType or Library.PreviewRigType or "R6"))
+		local rigType = (want == "R15") and Enum.HumanoidRigType.R15 or Enum.HumanoidRigType.R6
 		local function viaDescription()
 			local desc = Players:GetHumanoidDescriptionFromUserId(LP.UserId)
+			return Players:CreateHumanoidModelFromDescription(desc, rigType)
+		end
+		local function viaApplied()   -- tenue réellement portée en jeu (si l'avatar du compte ne répond pas)
+			local ch = LP.Character
+			local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+			local desc = hum and hum:GetAppliedDescription()
 			return Players:CreateHumanoidModelFromDescription(desc, rigType)
 		end
 		local function viaUserId()
@@ -10578,7 +10828,7 @@ function Block:CreatePreview3D(o)
 		end
 		local m
 		for attempt = 1, 3 do   -- les endpoints Roblox échouent souvent au 1er essai
-			for _, fn in ipairs({ viaDescription, viaUserId }) do
+			for _, fn in ipairs({ viaDescription, viaApplied, viaUserId }) do
 				local ok, res = pcall(fn)
 				if ok and typeof(res) == "Instance" and res:IsA("Model") then
 					m = res
@@ -10667,22 +10917,88 @@ function Block:CreatePreview3D(o)
 			local p = rig:FindFirstChild(n)
 			return (p and p:IsA("BasePart")) and p.Position or nil
 		end
-		J = { head = pos("Head"), neck = pos("UpperTorso"), pelvis = pos("LowerTorso"),
-			shL = pos("LeftUpperArm"), shR = pos("RightUpperArm"), handL = pos("LeftHand"), handR = pos("RightHand"),
-			hipL = pos("LeftUpperLeg"), hipR = pos("RightUpperLeg"), footL = pos("LeftFoot"), footR = pos("RightFoot") }
+		local isR6 = rig:FindFirstChild("Torso") ~= nil and rig:FindFirstChild("UpperTorso") == nil
+		if isR6 then
+			local function ends(n)   -- haut / bas d'une pièce (R6 : un seul bloc par membre)
+				local p = rig:FindFirstChild(n)
+				if p and p:IsA("BasePart") then
+					return p.CFrame:PointToWorldSpace(Vector3.new(0, p.Size.Y / 2, 0)), p.CFrame:PointToWorldSpace(Vector3.new(0, -p.Size.Y / 2, 0))
+				end
+			end
+			local nk, pl = ends("Torso")
+			local sL, hL = ends("Left Arm")
+			local sR, hR = ends("Right Arm")
+			local hpL, fL = ends("Left Leg")
+			local hpR, fR = ends("Right Leg")
+			J = { head = pos("Head"), neck = nk, pelvis = pl, shL = sL, handL = hL, shR = sR, handR = hR,
+				hipL = hpL, footL = fL, hipR = hpR, footR = fR }
+		else
+			J = { head = pos("Head"), neck = pos("UpperTorso"), pelvis = pos("LowerTorso"),
+				shL = pos("LeftUpperArm"), shR = pos("RightUpperArm"), handL = pos("LeftHand"), handR = pos("RightHand"),
+				hipL = pos("LeftUpperLeg"), hipR = pos("RightUpperLeg"), footL = pos("LeftFoot"), footR = pos("RightFoot") }
+		end
 		poseFn = function() end
 		local zero = Vector3.new(0, 0, 0)
+		local kd = isR6 and (opt.Wave and 2.5 or 2.05) or (opt.Wave and 2.35 or 1.95)   -- R6 : un peu plus de recul pour les sauts
 		fit = { focus = zero, size = bsize, corners = cornersFor(bsize, zero),
-			dist = (opt.Wave and 2.35 or 1.95) * math.max(bsize.Y, bsize.X * 0.9), animated = false, avatar = true }
+			dist = kd * math.max(bsize.Y, bsize.X * 0.9), animated = false, avatar = true }
 		finishModel()
 		return true
 	end
 
-	-- Poses faites à la main (R15) : coucou si Wave, sinon petit balancement si Animate
+	-- Poses faites à la main : coucou en boucle si Wave, sinon petit balancement si Animate ; wCrouch / wAir viennent de l'animation de
+	-- bienvenue (accroupi avant le saut, bras levés en l'air). R6 : une rotation est exprimée dans le repère du PARENT puis convertie
+	-- avec le C0 de l'articulation, donc la convention (très différente) des Motor6D R6 / R15 n'a plus d'importance.
+	local wCrouch, wAir = 0, 0
 	local function avatarPose(t)
 		local A = CFrame.Angles
 		for _, j in pairs(avJoints) do j.Transform = CFrame.identity end
-		local function set(n, cf)
+		if avJoints["Right Shoulder"] then   -- ---- R6
+			local function rot(n, R)
+				local j = avJoints[n]
+				if j then
+					local c0 = j.C0 - j.C0.Position
+					j.Transform = c0:Inverse() * R * c0
+				end
+			end
+			local c, air = wCrouch, wAir
+			local B, Pm, ID = EMO.base, EMO.em, CFrame.identity
+			-- pose de base : coucou en continu (pondéré par EMO.wv : 0 pendant la pause et l'emote) + bras levés / accroupi de la bienvenue
+			local wv = opt.Emotes and EMO.wv or 1
+			if opt.Wave then
+				local thR = 0.08 + ((2.55 + math.sin(t * 8) * 0.3) - 0.08) * wv
+				B.rs = A(-0.2 * wv * (1 - air), 0, thR + (2.85 - thR) * air)
+			else
+				B.rs = A(0, 0, 0.08 + 2.77 * air)
+			end
+			B.ls = A(0, 0, -(0.08 + 2.77 * air))
+			B.rt = A(-0.2 * c + math.sin(t * 2) * 0.01, 0, 0)
+			B.nk = A(math.sin(t * 2) * 0.04, 0, math.sin(t * 3.5) * 0.04)
+			if opt.Animate and not opt.Wave and air < 0.01 then
+				local a = math.sin(t * 3) * 0.5
+				B.rh, B.lh = A(a, 0, 0), A(-a, 0, 0)
+			else
+				B.rh, B.lh = A(0, 0, 0.25 * air), A(0, 0, -0.25 * air)
+			end
+			-- emote en cours : on fond la pose de base vers celle de l'emote
+			if opt.Emotes and EMO.stage == 4 then
+				Pm.rs, Pm.ls, Pm.rh, Pm.lh, Pm.nk, Pm.rt = A(0, 0, 0.08), A(0, 0, -0.08), ID, ID, ID, ID
+				local dy, spin, flip, env = Library._emoPose(EMO, Pm)
+				EMO.y, EMO.spin, EMO.flip = dy, spin, flip
+				for k, cf in pairs(Pm) do B[k] = B[k]:Lerp(cf, env) end
+			else
+				EMO.y, EMO.spin, EMO.flip = 0, 0, 0
+			end
+			local inv = B.rt:Inverse()   -- les jambes compensent l'inclinaison / la torsion du torse : elles restent d'aplomb
+			rot("RootJoint", B.rt)
+			rot("Neck", B.nk)
+			rot("Right Shoulder", B.rs)
+			rot("Left Shoulder", B.ls)
+			rot("Right Hip", inv * B.rh)
+			rot("Left Hip", inv * B.lh)
+			return
+		end
+		local function set(n, cf)   -- ---- R15
 			local j = avJoints[n]
 			if j then j.Transform = cf end
 		end
@@ -10703,6 +11019,10 @@ function Block:CreatePreview3D(o)
 		else
 			set("RightShoulder", A(0, 0, 0.12))
 			set("LeftShoulder", A(0, 0, -0.12))
+		end
+		if wAir > 0.01 then   -- bienvenue : bras levés en l'air
+			set("RightShoulder", A(0, 0, 0.1 + 2.7 * wAir))
+			set("LeftShoulder", A(0, 0, -(0.1 + 2.7 * wAir)))
 		end
 	end
 
@@ -10880,6 +11200,37 @@ function Block:CreatePreview3D(o)
 		local a = (u - 0.4) / 0.6
 		return JUMP_H * (1 - a * a)                       -- descente plus flottante
 	end
+	-- animation de bienvenue (item.Welcome) : s'accroupit, saut, réception, s'accroupit, 2e saut plus haut, réception.
+	-- Retourne : décalage vertical, accroupi (0..1), en l'air (0..1), terminée ?
+	local WEL = { { 0.22, "crouch" }, { 0.62, "jump", 1.5 }, { 0.30, "land" }, { 0.20, "crouch" }, { 0.70, "jump", 1.9 }, { 0.38, "land" } }
+	local WEL_TOTAL = 0
+	for _, seg in ipairs(WEL) do WEL_TOTAL += seg[1] end
+	local function welcomeState()
+		if not welcomeT0 then return 0, 0, 0, false end
+		local el = (os.clock() - welcomeT0) * math.max(Library.AnimSpeed or 1, 0.05)
+		if el >= WEL_TOTAL then return 0, 0, 0, true end
+		for _, seg in ipairs(WEL) do
+			if el < seg[1] then
+				local u = el / seg[1]
+				if seg[2] == "crouch" then
+					return -0.18 * u, u, 0, false
+				elseif seg[2] == "land" then
+					return -0.18 * (1 - u), 1 - u, 0, false
+				end
+				local H, y = seg[3], 0
+				if u < 0.4 then
+					local a = u / 0.4
+					y = H * (1 - (1 - a) * (1 - a))      -- montée rapide
+				else
+					local a = (u - 0.4) / 0.6
+					y = H * (1 - a * a)                  -- descente plus flottante
+				end
+				return y, 0, 1, false
+			end
+			el -= seg[1]
+		end
+		return 0, 0, 0, true
+	end
 	local function isShown()
 		local p = vp
 		while p and p:IsA("GuiObject") do
@@ -10908,18 +11259,36 @@ function Block:CreatePreview3D(o)
 			poseFn(opt.Animate and math.sin(t * 3) * 0.55 or 0, t)
 			jumpApplied = 0   -- le rig factice est reposé en absolu à chaque image
 		end
+		local wy, wc, wa, wdone = welcomeState()
+		if wdone then welcomeT0 = nil end
+		wCrouch = wc
+		wAir = wAir + (wa - wAir) * math.min(dt * 14, 1)   -- les bras montent / descendent en douceur
+		if wa == 0 and wAir < 0.005 then wAir = 0 end
 		if fit.avatar then
+			-- emotes : on n'avance la séquence qu'une fois la bienvenue terminée
+			if opt.Emotes and not welcomeT0 and not welcomePending then Library._emoStep(EMO, dt) end
+			local waving = (not opt.Emotes) or EMO.stage == 1 or EMO.stage == 3
+			EMO.wv = EMO.wv + ((waving and 1 or 0) - EMO.wv) * math.min(dt * 9, 1)
 			avatarPose(t)   -- avatar réel : poses des articulations + saut en bougeant tout le modèle
 			local y, finished = jumpOffset()
 			if finished then jumpT0, y = nil, 0 end
-			if rig and avBase and y ~= avY then
-				avY = y
-				rig:PivotTo(avBase * CFrame.new(0, y, 0))
+			y = y + wy + EMO.y
+			if rig and avBase and (y ~= avY or EMO.spin ~= avSpin or EMO.flip ~= avFlip) then
+				avY, avSpin, avFlip = y, EMO.spin, EMO.flip
+				rig:PivotTo(avBase * CFrame.new(0, y, 0) * CFrame.Angles(EMO.flip, EMO.spin, 0))
+			end
+			local em = (opt.Emotes and EMO.stage == 4) and Library.PreviewEmotes[EMO.idx] or nil
+			local lblTxt = em and ("Emote " .. EMO.idx .. "/" .. #Library.PreviewEmotes .. "  ·  " .. em.Name) or ""
+			if lblTxt ~= EMO.lbl then
+				EMO.lbl = lblTxt
+				EMO.label.Text = lblTxt
+				EMO.label.Visible = lblTxt ~= ""
 			end
 		else
 		do   -- saut : on décale toutes les pièces de la différence avec l'image précédente
 			local y, finished = jumpOffset()
 			if finished then jumpT0, y = nil, 0 end
+			y = y + wy
 			local dy = y - jumpApplied
 			if dy ~= 0 then
 				jumpApplied = y
@@ -11042,11 +11411,15 @@ function Block:CreatePreview3D(o)
 			shown = isShown()
 		end
 		if not shown or Library._resizing then return end
-		if jumpPending and Library._fullyLoaded then
+		if welcomePending and Library._fullyLoaded and fit then   -- l'avatar doit être affiché (sinon l'animation se jouerait dans le vide)
+			welcomePending, jumpPending, welcomeT0 = false, false, os.clock()
+		end
+		if welcomeT0 then jumpPending = false end             -- pas de petit saut par-dessus la bienvenue
+		if jumpPending and Library._fullyLoaded and fit then
 			jumpPending, jumpT0 = false, os.clock()
 		end
 		-- fenêtre Roblox en arrière-plan : on ne rend qu'à ~4 images/s (le temps écoulé est cumulé, l'animation reste juste)
-		if not pvFocused and not jumpT0 then
+		if not pvFocused and not jumpT0 and not welcomeT0 then
 			idleAcc += dt
 			if idleAcc < 1 / math.max(tonumber(o.IdleFPS) or tonumber(Library.PreviewIdleFPS) or 4, 1) then return end
 			dt, idleAcc = idleAcc, 0
@@ -11147,6 +11520,17 @@ function Block:CreatePreview3D(o)
 		if titleLbl then titleLbl.Text = s end
 	end
 	item.Refresh = function() return refresh(true) end
+	item.PlayEmote = function(...)   -- pv:PlayEmote(numéro | "Nom") : lance une emote tout de suite (puis la séquence continue)
+		local which = unself(item, ...)
+		local list, n = Library.PreviewEmotes, tonumber(which)
+		if not n then
+			for i, e in ipairs(list) do
+				if string.lower(e.Name) == string.lower(tostring(which)) then n = i break end
+			end
+		end
+		if n and list[n] then EMO.force = n end
+	end
+	item.Welcome = function() welcomePending = true end   -- animation de bienvenue (2 sauts, bras levés), puis le coucou continue
 	item.Jump = function() jumpPending = true end   -- saut à la Mario (attend que la lib soit chargée et l'aperçu visible)
 	item.SetTarget = function(...)
 		local v = unself(item, ...)
@@ -12351,17 +12735,27 @@ function Window:CreateHomeTab(name, icon, cfg)
 	-- ----- mon personnage : aperçu 3D + identité
 	local prof = subInfo:CreateBlock({ Name = "Mon personnage", Side = "Left" })
 	local pv = prof:CreatePreview3D({ Name = false, Character = true, Height = 260,
-		Background = Color3.fromRGB(135, 206, 235), FloorColor = Color3.fromRGB(240, 248, 255), Yaw = 180, Pitch = -0.04,
-		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = true, AutoRotate = false, Wave = true, Animate = true } })
-	-- le bonhomme fait un petit saut à chaque arrivée sur Home > Info (une fois la lib entièrement chargée)
+		Background = Color3.fromRGB(135, 206, 235), FloorColor = Color3.fromRGB(240, 248, 255), Yaw = 180, Pitch = -0.04, RigType = "R6",
+		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = true, AutoRotate = false, Wave = true, Animate = true, Emotes = Library.HomeEmotes ~= false } })
+	-- première arrivée : animation de bienvenue (2 sauts, bras levés) ; ensuite un petit saut à chaque retour sur Home > Info.
+	-- Dans les deux cas le coucou continue en boucle (une fois la lib entièrement chargée). Library.HomeWelcome = false : sauts seuls.
 	do
+		local welcomed = false
+		local function greet()
+			if not welcomed and Library.HomeWelcome ~= false then
+				welcomed = true
+				pv.Welcome()
+			else
+				pv.Jump()
+			end
+		end
 		local prevSel = tab.OnSelect
 		tab.OnSelect = function(...)
 			if prevSel then prevSel(...) end
-			if tab.CurrentSub == subInfo or tab.CurrentSub == nil then pv.Jump() end
+			if tab.CurrentSub == subInfo or tab.CurrentSub == nil then greet() end
 		end
-		subInfo.OnShow = function() pv.Jump() end
-		pv.Jump()
+		subInfo.OnShow = function() greet() end
+		greet()
 	end
 	prof:CreateButton({ Name = "Actualiser l'aperçu", Favorite = false, Callback = function() pv:Refresh() end })
 	prof:CreateStats({ Columns = 2, CellHeight = 46, Items = {
@@ -14074,7 +14468,7 @@ end
 -- Interface de gestion des configs (utilisée par l'onglet Config et par l'onglet Paramètres)
 local function buildConfigUI(blk)
 	local function toast(ok, okMsg, errMsg)
-		Library:Notify({ Title = "Config", Content = ok and okMsg or errMsg,
+		Library:Notify({ Title = "Config", Content = ok and okMsg or errMsg, _cfgSummary = true,
 			Type = ok and "Success" or "Error", Duration = 3 })
 	end
 	blk:CreateSection("Fichier")
@@ -14095,7 +14489,8 @@ local function buildConfigUI(blk)
 	blk:CreateButton({ Name = "Charger", Favorite = false, Callback = function()
 		local n = currentName()
 		local ok, err = Library:LoadConfig(n)
-		toast(ok, "Chargée : " .. tostring(n), "Échec : " .. tostring(err))
+		toast(ok, "Chargée : " .. tostring(n) .. " (" .. tostring(Library._lastCfgCount or 0) .. " changement(s), détails dans Réglages)",
+			"Échec : " .. tostring(err))
 	end })
 	local target = blk:CreateInput({ Name = "Vers (nouveau nom)", Placeholder = "autre-nom", Favorite = false })
 	blk:CreateButton({ Name = "Dupliquer vers ce nom", Favorite = false, Callback = function()
@@ -15487,6 +15882,40 @@ function Window:CreateSettingsTab(name, icon, docked)
 	-- ───────────── Configurations ─────────────
 	local CF = BK("Raccourcis & configs", { Name = "Configurations", Side = "Left", Collapsed = true })
 	buildConfigUI(CF)
+
+	-- ───────────── Changements de config ─────────────
+	-- Au chargement d'une config : une seule notification, et tout ce qui a changé est listé ici.
+	local CH = BK("Raccourcis & configs", { Name = "Changements de config", Side = "Right", Collapsed = true })
+	CH._noFav = true
+	CH:CreateToggle({ Name = "Une seule notification au chargement", Flag = "ui.cfgquiet", Default = true, Favorite = false,
+		Tooltip = "Activé : charger une config n'affiche qu'une notification, le détail est ci-dessous. Désactivé : une notification par élément (ancien comportement).",
+		Callback = function(v) Library.CfgQuiet = v and true or false end })
+	local chInfo = CH:CreateParagraph({ Title = "Aucun chargement", Content = "Charge une config : tout ce qui change apparaîtra ici." })
+	local function chRefresh()
+		local last = Library.CfgChanges[#Library.CfgChanges]
+		if not last then
+			chInfo.Set({ Title = "Aucun chargement", Content = "Charge une config : tout ce qui change apparaîtra ici." })
+			return
+		end
+		local lines, total = {}, #last.List
+		for i, c in ipairs(last.List) do
+			if i > 150 then
+				lines[#lines + 1] = "… et " .. (total - 150) .. " autre(s)"
+				break
+			end
+			lines[#lines + 1] = c.Flag .. " : " .. c.Old .. "  →  " .. c.New
+		end
+		chInfo.Set({
+			Title = os.date("%H:%M:%S", last.Time) .. "  ·  " .. last.Config .. "  ·  " .. total .. " changement(s)",
+			Content = (total > 0) and table.concat(lines, "\n") or "Aucun changement : la config est identique à l'état actuel.",
+		})
+	end
+	Library._onCfgChanges = function() task.defer(chRefresh) end
+	CH:CreateButton({ Name = "Vider la liste", Favorite = false, Callback = function()
+		table.clear(Library.CfgChanges)
+		chRefresh()
+	end })
+	chRefresh()
 
 	-- Docké en bas de la barre latérale, avec une petite icône
 	if docked and self.Footer then
