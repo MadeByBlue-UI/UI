@@ -8,6 +8,7 @@
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
 	V9.2 — « HI. » DANS L'INTRO + SON
+		• Home > Serveur : l'icône du jeu dans lequel tu es s'affiche en haut du bloc (Library.HomeGameImage = false la retire). Si l'exécuteur autorise HTTP + fichiers, c'est la miniature 16:9 du jeu (Library.HomeGameThumb = false : icône seulement).
 		• Au tout début de l'intro : écran noir, interface Roblox masquée (chat, liste des joueurs, barre du haut...), puis « Hi. » apparaît en
 		  fondu au moment précis où le son démarre (Library.HiSoundId, 130780071265356 par défaut), puis l'intro « trou noir » continue.
 		  Tout est remis comme avant ensuite. Clic = passer. getgenv().UiLibIntroHi = false (ou Library.IntroHi = false) le coupe ·
@@ -13346,6 +13347,39 @@ function Window:CreateHomeTab(name, icon, cfg)
 		exName = tostring(n) .. (v and (" " .. tostring(v)) or "")
 	end)
 	local jid = tostring(game.JobId)
+	-- icône du jeu dans lequel tu es (Library.HomeGameImage = false pour la retirer)
+	if Library.HomeGameImage ~= false and game.GameId and game.GameId ~= 0 then
+		pcall(function()
+			local gimg = srv:CreateImage({ Image = "rbxthumb://type=GameIcon&id=" .. tostring(game.GameId) .. "&w=256&h=256", Height = 130, ScaleType = "Fit" })
+			-- si l'exécuteur autorise les requêtes HTTP + fichiers : on remplace l'icône par la vraie miniature du jeu (16:9).
+			-- Sinon l'icône reste. Library.HomeGameThumb = false : icône seulement.
+			if Library.HomeGameThumb == false then return end
+			task.spawn(function()
+				local req = (syn and syn.request) or http_request or request or (fluxus and fluxus.request)
+				if not (req and writefile and isfile and getcustomasset) then return end
+				local path = Library.ConfigFolder .. "/_game_" .. tostring(game.GameId) .. ".png"
+				local function show()
+					local okA, asset = pcall(getcustomasset, path)
+					if okA and asset and gimg.Instance and gimg.Instance.Parent then
+						gimg.SetImage(asset)
+						gimg.SetHeight(140)
+						return true
+					end
+				end
+				if isfile(path) and show() then return end
+				local okR, res = pcall(req, { Url = "https://thumbnails.roblox.com/v1/games/multiget/thumbnails?universeIds="
+					.. tostring(game.GameId) .. "&countPerUniverse=1&defaults=true&size=768x432&format=Png&isCircular=false", Method = "GET" })
+				if not (okR and type(res) == "table") then return end
+				local okJ, data = pcall(function() return HttpService:JSONDecode(res.Body or res.body or "") end)
+				local th = okJ and type(data) == "table" and data.data and data.data[1] and data.data[1].thumbnails and data.data[1].thumbnails[1]
+				if not (th and th.imageUrl) then return end
+				local okI, img = pcall(req, { Url = th.imageUrl, Method = "GET" })
+				local bytes = okI and type(img) == "table" and (img.Body or img.body)
+				if not bytes or #bytes < 200 then return end
+				if writefile and pcall(writefile, path, bytes) then show() end
+			end)
+		end)
+	end
 	local sv = srv:CreateStats({ Columns = 1, CellHeight = 44, Items = {
 		{ Id = "place", Name = "Jeu", Value = "…" },
 		{ Id = "placeid", Name = "Place ID", Value = tostring(game.PlaceId) },
