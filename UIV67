@@ -1824,6 +1824,7 @@ function Library:SetStyle(name)
 	if it and it.Set then pcall(it.Set, it, Sty.BlurSize) else Library:SetBlur(Sty.BlurSize) end
 	local w = Library.Window
 	if w and w.ApplyStyle then w:ApplyStyle() end
+	if Library.RefreshNotifStyle then Library.RefreshNotifStyle() end   -- les notifications suivent le style
 	return true
 end
 
@@ -1850,6 +1851,15 @@ end
 --   Réglages : Library.NotifColored / NotifPauseOnHover / NotifStack / NotifMax / NotifWidth / NotifColors
 -- ============================================================================
 local notifGui, notifHolder, notifList
+Library._notifRestyle = Library._notifRestyle or {}
+function Library.RefreshNotifStyle()
+	local keep = {}
+	for _, fn in ipairs(Library._notifRestyle) do
+		local ok, alive = pcall(fn)
+		if ok and alive then keep[#keep + 1] = fn end
+	end
+	Library._notifRestyle = keep
+end
 local notifCount = 0
 local activeNotifs = {}
 local notifEntries = {}
@@ -2691,7 +2701,7 @@ do
 		if canvasSupported then
 			tween(card, { GroupTransparency = to }, t, style, dir)
 		else
-			tween(card, { BackgroundTransparency = (to >= 1) and 1 or 0.03 }, t, style, dir)
+			tween(card, { BackgroundTransparency = (to >= 1) and 1 or (Sty.NotifTr or 0.03) }, t, style, dir)
 		end
 	end
 	-- la place de la notification se referme (les autres remontent / descendent en douceur)
@@ -3202,7 +3212,7 @@ function Library:Notify(o)
 	}, notifHolder)
 	local card = new(canvasSupported and "CanvasGroup" or "Frame", {
 		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, Position = farOffset(),
-		BackgroundColor3 = T.Main, BackgroundTransparency = 0.03, BorderSizePixel = 0,
+		BackgroundColor3 = T.Main, BackgroundTransparency = Sty.NotifTr or 0.03, BorderSizePixel = 0,
 		ClipsDescendants = not canvasSupported,
 	}, slot)
 	if canvasSupported then card.GroupTransparency = 1 end
@@ -3212,7 +3222,7 @@ function Library:Notify(o)
 	local sheen = new("Frame", { Name = "Sheen", Size = UDim2.new(1, 0, 0.6, 0), BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0, ZIndex = 2 }, card)
 	new("UICorner", { CornerRadius = UDim.new(0, 22) }, sheen)
-	new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({
+	local sheenGrad = new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({
 		NumberSequenceKeypoint.new(0, 0.93), NumberSequenceKeypoint.new(1, 1) }) }, sheen)
 
 	local inner = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
@@ -3322,7 +3332,7 @@ function Library:Notify(o)
 	local count = 1
 	local baseTr = 0.82
 	local hov = 0
-	local dismiss, runTimer
+	local dismiss, runTimer, styleCard
 
 	local function stopBar()
 		if barTw then barTw:Cancel() barTw = nil end
@@ -3339,6 +3349,67 @@ function Library:Notify(o)
 		task.delay(t + 0.1, function()
 			if shine:GetAttribute("S") == my then shine.Visible = false end
 		end)
+	end
+
+	-- ─── STYLE DE LA CARTE : suit Library:SetStyle (Standard / Verre / Givré / Mat / Néon), en direct ───
+	styleCard = function()
+		if dead then return end
+		local sn = Library.StyleName
+		local c = notifKindColor(kind)
+		local colored = c ~= nil
+		local ac = c or T.Accent
+		-- fond : transparence du style (verre = translucide, mat = plein) ; léger éclaircissement en verre
+		card.BackgroundColor3 = Sty.Glass and lighten(T.Main, 0.07) or T.Main
+		if canvasSupported then
+			tween(card, { BackgroundTransparency = Sty.NotifTr or 0.03 }, 0.25)
+		else
+			card.BackgroundTransparency = Sty.NotifTr or 0.03
+		end
+		-- reflet : vitre entière en verre, bandeau en haut sinon, aucun en Mat
+		if Sty.Glass then
+			sheen.Size = UDim2.new(1, 0, 1, 0)
+			sheenGrad.Rotation = 35
+			sheenGrad.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0.74), NumberSequenceKeypoint.new(0.4, 0.92),
+				NumberSequenceKeypoint.new(0.7, 1), NumberSequenceKeypoint.new(1, 0.93) })
+		else
+			sheen.Size = UDim2.new(1, 0, 0.6, 0)
+			sheenGrad.Rotation = 90
+			sheenGrad.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0.93), NumberSequenceKeypoint.new(1, 1) })
+		end
+		sheen.Visible = sn ~= "Mat"
+		-- bordure : reflet de verre (vive en haut à gauche, s'éteint en bas à droite), néon lumineux, mat sans contour
+		local g = outSt:FindFirstChild("GlassGrad")
+		if Sty.Glass then
+			if not g then
+				g = Instance.new("UIGradient")
+				g.Name = "GlassGrad"
+				g.Rotation = 40
+				g.Transparency = GLASS_EDGE
+				g.Parent = outSt
+			end
+			g.Enabled = true
+		elseif g then
+			g.Enabled = false
+		end
+		if sn == "Verre" then baseTr = colored and 0.2 or 0.3
+		elseif sn == "Givré" then baseTr = colored and 0.35 or 0.5
+		elseif sn == "Mat" then baseTr = colored and 0.7 or 1
+		elseif sn == "Néon" then baseTr = colored and 0.02 or 0.1
+		else baseTr = colored and 0.55 or 0.8 end
+		outSt.Color = ac
+		outSt.Thickness = (sn == "Néon") and 2.2 or ((sn == "Verre" or sn == "Givré") and 1.2 or 1)
+		outSt.Transparency = (hov > 0) and math.max(baseTr - 0.3, 0.05) or baseTr
+		-- texte : fin liseré sombre en verre pour rester lisible sur un fond clair
+		local ts = Sty.Glass and 0.8 or 1
+		titleL.TextStrokeTransparency = ts
+		contentL.TextStrokeTransparency = ts
+	end
+	Library._notifRestyle[#Library._notifRestyle + 1] = function()
+		if dead then return false end
+		styleCard()
+		return true
 	end
 
 	local function applyKind(k)
@@ -3365,8 +3436,7 @@ function Library:Notify(o)
 		strip.BackgroundColor3 = ac
 		strip.Visible = false                -- plus de liseré : la carte est une pilule
 		outSt.Color = ac
-		baseTr = c and 0.55 or 0.8
-		outSt.Transparency = baseTr
+		styleCard()   -- fond / bordure / reflet selon le style de l'UI (Verre, Givré, Mat, Néon...)
 		fill.BackgroundColor3 = ac
 		pulseSt.Color = ac
 		spinSt.Color = Color3.fromRGB(10, 10, 12)
