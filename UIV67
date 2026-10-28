@@ -12036,9 +12036,14 @@ end
 -- ============================================================================
 -- V5 : HISTORIQUE DES VERSIONS (affiché dans l'onglet Home depuis la V5.3)
 -- ============================================================================
-Library.Version = "5.9.0"
-Library.AppName = "Ui-Lib"
+Library.Version = "5.10.0"
+Library.AppName = "Invincible"
 Library.Changelog = {
+	{ Version = "5.10.0", Date = "2026-10-28", Title = "Serveurs", Notes = {
+		"+ Home > Serveurs : changer de serveur (aléatoire, le plus vide, le plus rempli) avec un filtre de joueurs, borné par le maximum du jeu.",
+		"+ Re-rejoindre le même serveur, ou rejoindre un serveur public à partir de son ID.",
+		"+ Historique des 5 derniers serveurs rejoints (les plus anciens disparaissent), sauvegardé pour le prochain lancement.",
+	} },
 	{ Version = "5.9.0", Date = "2026-10-27", Title = "Fluidité", Notes = {
 		"+ Favoris : la ligne s'agrandit à l'ajout et se réduit avant de disparaître au retrait.",
 		"+ Bouton « = » et CollapseAll / ExpandAll : les blocs se replient / se déplient en cascade, avec un petit décalage.",
@@ -12892,6 +12897,221 @@ function Library:StartUpdateWatcher()
 	end)
 end
 
+-- ============================================================================
+-- HOME > « Serveurs » : changer de serveur, rejoindre par ID, revenir sur le même, historique des 5 derniers serveurs
+--   • Historique : Library.ServerHistoryMax (5 par défaut) ; les plus anciens sont supprimés. Sauvegardé avec les réglages
+--     (clé « ui.home.servers »), donc retrouvé au prochain lancement du script.
+--   • Le filtre de joueurs (clé « ui.home.servers.range ») est borné par Players.MaxPlayers du jeu.
+--   • Un serveur est identifié par son JobId (ID de serveur public) ; on le rejoint avec TeleportToPlaceInstance.
+-- ============================================================================
+function Library._buildHomeServers(sub)
+	local TeleportService = game:GetService("TeleportService")
+	local MAX = math.max(1, math.floor(tonumber(Library.ServerHistoryMax) or 5))
+	local history = {}      -- { { id = "GUID", t = os.time() }, ... } du plus récent au plus ancien
+	local slots = {}        -- boutons du panneau
+	local busy = false
+	local curPara
+
+	local function placeMax()
+		local m = 0
+		pcall(function() m = Players.MaxPlayers end)
+		return math.max(tonumber(m) or 0, 2)
+	end
+	local function isId(s)
+		return type(s) == "string" and string.match(s, "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") ~= nil
+	end
+	local function short(id) return string.sub(id, 1, 8) .. "…" .. string.sub(id, -4) end
+	local function ago(t)
+		local d = math.max(os.time() - (tonumber(t) or 0), 0)
+		if d < 60 then return "à l'instant" end
+		if d < 3600 then return "il y a " .. math.floor(d / 60) .. " min" end
+		if d < 86400 then return "il y a " .. math.floor(d / 3600) .. " h" end
+		return "il y a " .. math.floor(d / 86400) .. " j"
+	end
+	local function say(title, text, kind)
+		Library:Notify({ Title = title, Content = text, Type = kind or "Info", Duration = 4 })
+	end
+
+	local function refresh()
+		for i, s in ipairs(slots) do
+			local h = history[i]
+			if h then
+				s.Instance.Visible = true
+				s.SetText(s, i .. " · " .. short(h.id) .. "  (" .. ago(h.t) .. ")" .. (h.id == game.JobId and "  · actuel" or ""))
+			else
+				s.Instance.Visible = i == 1
+				if i == 1 then s.SetText(s, "Aucun serveur enregistré pour l'instant") end
+			end
+		end
+		if curPara then
+			local id = game.JobId
+			curPara.Set(curPara, { Content = (id ~= "" and id or "(inconnu : Studio / serveur privé)")
+				.. "\nPlace " .. tostring(game.PlaceId) .. "  ·  max " .. placeMax() .. " joueurs" })
+		end
+	end
+	local function save()
+		local out = {}
+		for i, h in ipairs(history) do out[i] = { id = h.id, t = h.t } end
+		Library.Flags["ui.home.servers"] = out
+	end
+	local function record(id)
+		if not isId(id) then return end
+		for i = #history, 1, -1 do
+			if history[i].id == id then table.remove(history, i) end
+		end
+		table.insert(history, 1, { id = id, t = os.time() })
+		while #history > MAX do table.remove(history) end
+		save()
+		refresh()
+	end
+	Library.Flags["ui.home.servers"] = {}
+	Library.Defaults["ui.home.servers"] = {}
+	Library.Items["ui.home.servers"] = {
+		Get = function()
+			local out = {}
+			for i, h in ipairs(history) do out[i] = { id = h.id, t = h.t } end
+			return out
+		end,
+		Set = function(_, list)
+			table.clear(history)
+			if type(list) == "table" then
+				for _, h in ipairs(list) do
+					if type(h) == "table" and isId(h.id) and #history < MAX then
+						history[#history + 1] = { id = h.id, t = tonumber(h.t) or 0 }
+					end
+				end
+			end
+			save()
+			refresh()
+			if Library._serverEnsureCurrent then Library._serverEnsureCurrent() end
+		end,
+	}
+	-- le serveur où l'on se trouve est le dernier serveur rejoint
+	Library._serverEnsureCurrent = function()
+		if game.JobId ~= "" and not (history[1] and history[1].id == game.JobId) then record(game.JobId) end
+	end
+
+	local function joinId(id, why)
+		id = string.gsub(tostring(id or ""), "%s", "")
+		if not isId(id) then
+			say("Serveurs", "ID de serveur invalide (format : xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).", "Error")
+			return
+		end
+		if busy then return end
+		busy = true
+		task.delay(8, function() busy = false end)
+		record(id)
+		say("Serveurs", (why or "Connexion") .. " : " .. short(id) .. "…", "Info")
+		local ok, err = pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, id, LP) end)
+		if not ok then
+			busy = false
+			say("Serveurs", "Téléportation impossible : " .. tostring(err), "Error")
+		end
+	end
+	pcall(function()
+		TeleportService.TeleportInitFailed:Connect(function(_, result, msg)
+			busy = false
+			say("Serveurs", "Échec : " .. tostring(msg ~= "" and msg or result), "Error")
+		end)
+	end)
+
+	-- ----- cherche un serveur public dont le nombre de joueurs est dans la plage demandée
+	local rangeItem
+	local function findServer(mode)
+		if busy then return end
+		busy = true
+		task.delay(25, function() busy = false end)
+		task.spawn(function()
+			local r = rangeItem and rangeItem.Get(rangeItem) or { Low = 5, High = 18 }
+			local lo, hi = r.Low or 1, r.High or placeMax()
+			say("Serveurs", "Recherche d'un serveur avec " .. lo .. " à " .. hi .. " joueurs…", "Info")
+			local cands, cursor = {}, nil
+			for _ = 1, 6 do
+				local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
+					.. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100"
+					.. (cursor and ("&cursor=" .. HttpService:UrlEncode(cursor)) or "")
+				local d = homeJson(url)
+				if not (d and type(d.data) == "table") then break end
+				for _, s in ipairs(d.data) do
+					local pl, mx = tonumber(s.playing), tonumber(s.maxPlayers)
+					if isId(s.id) and pl and pl >= lo and pl <= hi and s.id ~= game.JobId and (not mx or pl < mx) then
+						cands[#cands + 1] = { id = s.id, playing = pl }
+					end
+				end
+				cursor = d.nextPageCursor
+				if not cursor or #cands >= 30 then break end
+			end
+			busy = false
+			if #cands == 0 then
+				say("Serveurs", "Aucun serveur trouvé dans cette plage (ou l'API Roblox ne répond pas).", "Warning")
+				return
+			end
+			local pick
+			if mode == "small" then
+				table.sort(cands, function(a, b) return a.playing < b.playing end)
+				pick = cands[1]
+			elseif mode == "full" then
+				table.sort(cands, function(a, b) return a.playing > b.playing end)
+				pick = cands[1]
+			else
+				pick = cands[math.random(#cands)]
+			end
+			joinId(pick.id, "Serveur de " .. pick.playing .. " joueurs")
+		end)
+	end
+
+	-- ===================== COLONNE GAUCHE =====================
+	local cur = sub:CreateBlock({ Name = "Serveur actuel", Side = "Left" })
+	curPara = cur:CreateParagraph({ Title = "ID du serveur", Content = "…" })
+	cur:CreateButton({ Name = "Copier l'ID du serveur", Favorite = false, Callback = function()
+		if game.JobId == "" then say("Serveurs", "Pas d'ID de serveur ici (Studio).", "Warning") return end
+		if setclipboard then
+			setclipboard(game.JobId)
+			say("Serveurs", "ID copié.", "Success")
+		else
+			say("Serveurs", "setclipboard indisponible : " .. game.JobId, "Warning")
+		end
+	end })
+	cur:CreateButton({ Name = "Re-rejoindre ce serveur", Favorite = false, Callback = function()
+		if game.JobId == "" then say("Serveurs", "Pas d'ID de serveur ici (Studio).", "Warning") return end
+		joinId(game.JobId, "Retour sur ce serveur")
+	end })
+
+	local chg = sub:CreateBlock({ Name = "Changer de serveur", Side = "Left" })
+	local pm = placeMax()
+	rangeItem = chg:CreateRangeSlider({ Name = "Joueurs dans le serveur", Flag = "ui.home.servers.range",
+		Min = 1, Max = pm, Step = 1, DefaultLow = math.min(5, pm), DefaultHigh = math.min(18, pm) })
+	chg:CreateButton({ Name = "Serveur aléatoire", Favorite = false, Callback = function() findServer("random") end })
+	chg:CreateButton({ Name = "Serveur le plus vide", Favorite = false, Callback = function() findServer("small") end })
+	chg:CreateButton({ Name = "Serveur le plus rempli", Favorite = false, Callback = function() findServer("full") end })
+
+	-- ===================== COLONNE DROITE =====================
+	local byid = sub:CreateBlock({ Name = "Rejoindre par ID", Side = "Right" })
+	local typed = ""
+	byid:CreateInput({ Name = "ID du serveur", Placeholder = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+		Callback = function(t) typed = t end })
+	byid:CreateButton({ Name = "Rejoindre ce serveur", Favorite = false, Callback = function() joinId(typed, "Connexion") end })
+
+	local hb = sub:CreateBlock({ Name = "Derniers serveurs (" .. MAX .. ")", Side = "Right" })
+	for i = 1, MAX do
+		slots[i] = hb:CreateButton({ Name = "—", Favorite = false, Callback = function()
+			local h = history[i]
+			if h then joinId(h.id, "Retour sur le serveur " .. i) end
+		end })
+	end
+	hb:CreateButton({ Name = "Vider l'historique", Favorite = false, Confirm = true, ConfirmText = "Vider ?", Callback = function()
+		table.clear(history)
+		save()
+		refresh()
+	end })
+
+	task.defer(function()
+		Library._serverEnsureCurrent()
+		refresh()
+	end)
+	refresh()
+end
+
 -- ---------------------------------------------------------------------------
 -- Onglet Home
 -- ---------------------------------------------------------------------------
@@ -13044,8 +13264,8 @@ function Window:CreateHomeTab(name, icon, cfg)
 	local lp = LP
 	local started = os.clock()
 	-- sous-onglets : Info (page de départ) · Explication · Mises à jour
-	local subs = tab:CreateSubTabs({ "Info", "Explication", "Mises à jour" })
-	local subInfo, subExplain, subUpdates = subs[1], subs[2], subs[3]
+	local subs = tab:CreateSubTabs({ "Info", "Serveurs", "Explication", "Mises à jour" })
+	local subInfo, subServers, subExplain, subUpdates = subs[1], subs[2], subs[3], subs[4]
 	tab._changelogSub = subUpdates
 	local function shown() return win.Open and tab.Page.Visible and tab.CurrentSub == subInfo end
 
@@ -13439,6 +13659,12 @@ function Window:CreateHomeTab(name, icon, cfg)
 		local up = subUpdates:CreateBlock({ Name = "Mises à jour", Side = "Left" })
 		up:CreateParagraph({ Title = "Version v" .. tostring(Library.Version),
 			Content = "Les mises à jour automatiques sont désactivées. Pour les activer, donne le lien raw GitHub de ton script : CreateWindow({ UpdateURL = \"TON_LIEN_RAW\" }). L'UI lira alors toute seule les commits et les affichera ici." })
+	end
+
+	-- ----- Serveurs : changer de serveur / rejoindre par ID / historique persistant
+	do
+		local oks, errs = pcall(Library._buildHomeServers, subServers)
+		if not oks then warn("[Ui-Lib] Home > Serveurs : " .. tostring(errs)) end
 	end
 
 	-- ----- Explication : présentation de l'UI + démos en direct
@@ -19984,7 +20210,7 @@ function Library:CreateWindow(cfg)
 		Set = function(_, d) Library:_setBlockLayout(d) end,
 	}
 
-	Library.AppName = tostring(cfg.Title or "Ui-Lib")
+	Library.AppName = tostring(cfg.Title or "Invincible")
 	if cfg.Version then Library.Version = tostring(cfg.Version) end
 	Library.Items["ui.gradient"] = {
 		Get = function() return Library:_gradientData() end,
