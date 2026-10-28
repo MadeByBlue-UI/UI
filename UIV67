@@ -6385,7 +6385,7 @@ Library._drawer = function(holder, order, gap)
 	local gen = 0
 	function d:Resize(h)
 		d.Height = h
-		if d.Open then tween(wrap, { Size = UDim2.new(1, 0, 0, h + gap) }, 0.28) end
+		if d.Open then tween(wrap, { Size = UDim2.new(1, 0, 0, h + gap) }, 0.28, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out) end
 	end
 	function d:Set(v)
 		v = v and true or false
@@ -6395,7 +6395,7 @@ Library._drawer = function(holder, order, gap)
 		local my = gen
 		if v then
 			wrap.Visible = true
-			tween(wrap, { Size = UDim2.new(1, 0, 0, d.Height + gap) }, 0.34)
+			tween(wrap, { Size = UDim2.new(1, 0, 0, d.Height + gap) }, 0.34, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
 		else
 			-- InOut : plus de ralentissement final suivi d'une disparition brusque
 			local tw = tween(wrap, { Size = UDim2.new(1, 0, 0, 0) }, 0.3, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
@@ -12567,14 +12567,14 @@ function Library:_dragBlock(blk, startPos)
 		return f
 	end
 	local function growSlot(f)
-		tween(f, { Size = UDim2.new(1, 0, 0, slotH), BackgroundTransparency = 0.9 }, SLIDE)
+		tween(f, { Size = UDim2.new(1, 0, 0, slotH), BackgroundTransparency = 0.9 }, SLIDE, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
 		local st = f:FindFirstChildOfClass("UIStroke")
 		if st then tween(st, { Transparency = 0.45 }, SLIDE) end
 	end
 	local function shrinkSlot(f)
 		if not f then return end
 		dying[f] = true
-		tween(f, { Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1 }, 0.22)
+		tween(f, { Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1 }, 0.22, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
 		local st = f:FindFirstChildOfClass("UIStroke")
 		if st then tween(st, { Transparency = 1 }, 0.18) end
 		task.delay(0.4, function()
@@ -13017,10 +13017,16 @@ function Tab:CreateBlock(o)
 		foldConn = Ticker.connect(function()
 			if gen ~= foldGen or not clip.Parent then stopFold() return end
 			local a = math.clamp((os.clock() - t0) / dur, 0, 1)
-			local e = TweenService:GetValue(a, QUINT, OUT)
+			-- Cubic InOut : Quint OUT traînait sur le dernier pixel (1 px visible pendant ~0.1 s puis disparition brusque)
+			local e = TweenService:GetValue(a, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
 			local goal = c and 0 or contentH()
-			clip.Size = UDim2.new(1, 0, 0, snapH(startH + (goal - startH) * e))
-			if a >= 1 then finish() end
+			if a >= 1 then
+				-- dernière image : valeur EXACTE (sans arrondi) = celle qu'AutomaticSize prendra juste après -> aucun saut
+				clip.Size = UDim2.new(1, 0, 0, goal)
+				finish()
+			else
+				clip.Size = UDim2.new(1, 0, 0, snapH(startH + (goal - startH) * e))
+			end
 		end)
 	end
 	head.MouseButton1Click:Connect(function()
@@ -13600,10 +13606,16 @@ function Tab:SetExpanded(on, instant)
 			if self._expTok ~= my then return end
 			self._animating = false
 			local ch = list.AbsoluteContentSize.Y
-			holder.Size = UDim2.new(1, 0, 0, ch > 0 and ch or H)
+			local fin = ch > 0 and ch or H
+			-- si la hauteur réelle diffère de l'estimation : on glisse jusqu'à elle au lieu de sauter d'un coup
+			if math.abs(fin - H) >= 1 and not instant then
+				tween(holder, { Size = UDim2.new(1, 0, 0, fin) }, 0.15)
+			else
+				holder.Size = UDim2.new(1, 0, 0, fin)
+			end
 		end)
 	else
-		local tw = tween(holder, { Size = UDim2.new(1, 0, 0, 0) }, d(0.38))
+		local tw = tween(holder, { Size = UDim2.new(1, 0, 0, 0) }, d(0.38), Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
 		fadeChildren(self, 1, d(0.24))
 		tween(inner, { Position = UDim2.new(0, -10, 0, 0) }, d(0.38))
 		tween(arrow, { Rotation = 0, TextColor3 = T.ElementAccent }, d(0.32))
