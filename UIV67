@@ -819,6 +819,7 @@ Library.Springs = true
 Library.SpringPresets = {   -- { raideur (rad/s), amortissement }  (amortissement < 1 = léger rebond, 1 = sans dépassement)
 	snappy = { 26, 0.84 }, bouncy = { 22, 0.6 }, smooth = { 24, 1 }, soft = { 16, 1 },
 }
+do -- (portée réduite : limite de 200 locals)
 local springs, springConn = {}, nil
 
 -- ressort amorti, solution exacte (stable quel que soit dt)
@@ -922,6 +923,7 @@ function Library._spring(obj, props, preset)
 	end
 	if not springConn then springConn = Ticker.connect(springLoop) end
 end
+end -- fin de la portée réduite
 
 -- ============================================================================
 -- DÉFILEMENT FLUIDE (molette) : au lieu de sauter de quelques lignes, le contenu glisse vers sa position avec un ressort
@@ -931,6 +933,7 @@ end
 Library.SmoothScroll      = true
 Library.SmoothScrollSpeed = 16
 Library.SmoothScrollGain  = 1
+do -- (portée réduite : limite de 200 locals)
 local scrollActive, scrollConn, wheelAt = {}, nil, 0
 track(UIS.InputChanged:Connect(function(i)
 	if i.UserInputType == Enum.UserInputType.MouseWheel then wheelAt = os.clock() end
@@ -1003,6 +1006,7 @@ function Library._regScroll(sf)
 		end)
 	end)
 end
+end -- fin de la portée réduite
 
 local function corner(parent, base)
 	local c = Instance.new("UICorner")
@@ -4309,6 +4313,8 @@ function Library:SetFontScale(m)
 	end
 end
 
+local snapshotColors, toColor3
+do -- (portée réduite : limite de 200 locals)
 local ACC_PROPS = {
 	Frame = { "BackgroundColor3" }, CanvasGroup = { "BackgroundColor3" },
 	TextButton = { "BackgroundColor3", "TextColor3" }, TextLabel = { "BackgroundColor3", "TextColor3" },
@@ -4329,7 +4335,7 @@ end
 -- Couleurs réellement appliquées sur les instances (permet de les remplacer en direct, une seule passe)
 local COLOR_KEYS = { "Main", "Second", "Accent", "Text", "ElementAccent", "Element", "Off", "Panel" }
 local appliedC = {}
-local function snapshotColors()
+function snapshotColors()
 	for _, k in ipairs(COLOR_KEYS) do appliedC[k] = T[k] end
 end
 snapshotColors()
@@ -4478,7 +4484,7 @@ local function scheduleColors(immediate)
 	end)
 end
 
-local function toColor3(v)
+function toColor3(v)
 	if typeof(v) == "Color3" then return v end
 	if type(v) == "string" then
 		local ok, c = pcall(Color3.fromHex, (string.gsub(v, "#", "")))
@@ -4500,6 +4506,7 @@ function Library:SetColors(tbl, immediate)
 	scheduleColors(immediate)
 	if Library._onColors then pcall(Library._onColors) end
 end
+end -- fin de la portée réduite
 function Library:SetColor(k, c) Library:SetColors({ [k] = c }) end
 function Library:SetAccent(c) Library:SetColor("Accent", c) end
 
@@ -9097,6 +9104,7 @@ end
 --   Toggle { HUD = false } : caché du panneau.  Réglages : Paramètres > HUD des actifs.
 --   Library:SetHud(v) / SetHudKeys(v) / SetHudScale(0.6..1.6) / SetHudOnlyClosed(v) / ResetHudPosition()
 -- ============================================================================
+do -- (portée réduite : limite de 200 locals)
 local hud = { rows = {} }
 
 local function hudShown()
@@ -9389,6 +9397,7 @@ Library._destroyHud = function()
 	if hud.gui then pcall(function() hud.gui:Destroy() end) end
 	hud = { rows = {} }
 end
+end -- fin de la portée réduite
 
 -- Bouton à double confirmation : CreateButton({ Confirm = true }) ou CreateConfirmButton(...)
 function Block:CreateConfirmButton(o)
@@ -11450,6 +11459,7 @@ end
 -- ---------------------------------------------------------------------------
 -- Outils de Home
 -- ---------------------------------------------------------------------------
+do -- (portée réduite : limite de 200 locals)
 local function fmtDur(s)
 	s = math.max(0, math.floor(s))
 	local h, m, sec = math.floor(s / 3600), math.floor((s % 3600) / 60), s % 60
@@ -12264,6 +12274,7 @@ function Window:CreateHomeTab(name, icon, cfg)
 	end, { rate = 2 }))
 	return tab
 end
+end -- fin de la portée réduite
 
 -- sous-titre affiché dans l'en-tête du type d'interface « Éclipse »
 function Tab:SetSubtitle(text)
