@@ -1163,8 +1163,9 @@ local function guiInset()
 end
 
 -- Position du pointeur dans le MÊME repère que AbsolutePosition (les ScreenGui sont en IgnoreGuiInset = true).
--- Souris : GetMouseLocation (fiable, même en vue 1re personne / souris verrouillée puis libérée).
--- Tactile : InputObject.Position décalé de l'inset. Remplace l'ancien « p.Y + GetGuiInset().Y » qui décalait le curseur.
+-- Souris : GetMouseLocation, moins le réglage manuel (Library.PointerOffset) et moins la correction APPRISE toute seule
+-- (Library._ptrLearn, voir Library._ptrCheck). Tactile : InputObject.Position décalé de l'inset.
+Library._ptrLearn = Library._ptrLearn or 0
 Library._pointerPos = function(p)
 	local okT, last = pcall(function() return UIS:GetLastInputType() end)
 	if okT and last == Enum.UserInputType.Touch then
@@ -1182,29 +1183,35 @@ local function viewport()
 end
 
 -- Correction du décalage entre GetMouseLocation et le repère réel des ScreenGui de l'UI.
--- Auto : on compare la hauteur d'un ScreenGui (IgnoreGuiInset = true) à celle de l'écran ; s'il est plus court, la barre du haut
--- décale quand même le repère de cette différence. Manuel : Library.PointerOffset (Paramètres > Fenêtre), ajouté à l'auto.
+-- Manuel : Library.PointerOffset (Paramètres > Fenêtre). Auto : Library._ptrLearn, appris à l'appui sur le carré / la barre
+-- de teinte / la barre d'opacité du color picker (voir Library._ptrCheck). Les deux s'additionnent.
 Library.PointerOffset = Library.PointerOffset or Vector2.new(0, 0)
-local ptrProbe
 Library._ptrCorrect = function()
-	local auto = 0
-	-- La correction auto décalait la poignée du color picker par rapport au curseur (le curseur dessiné et les clics
-	-- utilisent la position brute de la souris). Désactivée par défaut : Library.AutoPointerFix = true pour la réactiver.
-	if Library.AutoPointerFix == true then pcall(function()
-		if not (ptrProbe and ptrProbe.Parent) then
-			ptrProbe = Instance.new("ScreenGui")
-			ptrProbe.Name = "SolarisPointerProbe"
-			ptrProbe.ResetOnSpawn = false
-			ptrProbe.IgnoreGuiInset = true
-			ptrProbe.DisplayOrder = -1000
-			mount(ptrProbe)
-		end
-		local d = viewport().Y - ptrProbe.AbsoluteSize.Y
-		if d >= 8 and d <= 120 then auto = d end
-	end) end
 	local man = Library.PointerOffset
-	return Vector2.new(man and man.X or 0, auto + (man and man.Y or 0))
+	return Vector2.new(man and man.X or 0, (man and man.Y or 0) + (Library._ptrLearn or 0))
 end
+
+-- Auto-calibrage : un événement d'appui n'arrive QUE si le vrai pointeur est dans la zone cliquée. Si, avec la correction
+-- actuelle, le pointeur calculé tombe hors de cette zone, le repère est décalé : on cherche la correction qui le remet
+-- dedans (décalages connus : barre du haut 36 / 58 px, GetGuiInset), sinon on recale sur le centre de la zone.
+-- Aucun effet tant que le pointeur calculé est bien dans la zone : un réglage qui marche déjà n'est jamais touché.
+Library._ptrCheck = function(gui)
+	local okT, last = pcall(function() return UIS:GetLastInputType() end)
+	if okT and last == Enum.UserInputType.Touch then return end
+	if not (gui and gui.Parent) then return end
+	local raw = UIS:GetMouseLocation()
+	local man = Library.PointerOffset
+	local base = raw.Y - (man and man.Y or 0)
+	local ap, as = gui.AbsolutePosition, gui.AbsoluteSize
+	local function inside(c) local y = base - c return y >= ap.Y - 1 and y <= ap.Y + as.Y + 1 end
+	if inside(Library._ptrLearn or 0) then return end
+	local ins = guiInset().Y
+	for _, c in ipairs({ 0, ins, 58, 36, -ins, -36, -58 }) do
+		if inside(c) then Library._ptrLearn = c return end
+	end
+	Library._ptrLearn = base - (ap.Y + as.Y / 2)
+end
+function Library:ResetPointerCalibration() Library._ptrLearn = 0 end
 
 -- Échelle réelle de la fenêtre (UIScale + animation), pour convertir pixels écran <-> pixels UI
 local function pxScale()
@@ -7924,6 +7931,7 @@ function Block:CreateColorPicker(o)
 			BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, abar)
 		aHit.InputBegan:Connect(function(i)
 			if isPress(i) then
+				Library._ptrCheck(aHit)
 				startDrag(function(p)
 					alpha = (norm(abar, p))
 					commit()
@@ -8030,6 +8038,7 @@ function Block:CreateColorPicker(o)
 
 	svHit.InputBegan:Connect(function(i)
 		if isPress(i) then
+			Library._ptrCheck(svHit)
 			startDrag(function(p)
 				local nx, ny = norm(sv, p)
 				s, v = nx, 1 - ny
@@ -8039,6 +8048,7 @@ function Block:CreateColorPicker(o)
 	end)
 	hueHit.InputBegan:Connect(function(i)
 		if isPress(i) then
+			Library._ptrCheck(hueHit)
 			startDrag(function(p)
 				local nx = norm(hue, p)
 				h = math.min(nx, 0.999)
@@ -12960,7 +12970,13 @@ function Tab:CreateBlock(o)
 	local flagKey = "__block:" .. tostring(self.Name or "Tab") .. "/" .. tostring(o.Name or "Block")
 	local collapsed = false
 	local foldGen, foldConn = 0, nil   -- jeton + animation en cours : évite les animations qui se battent quand on spamme
-	local function contentH() return lay.AbsoluteContentSize.Y / math.max(pxScale(), 0.05) + 14 end
+	-- hauteur réelle du corps (même valeur que celle que prendra clip en AutomaticSize) : plus d'écart d'un pixel à la fin
+	local function contentH() return body.AbsoluteSize.Y / math.max(pxScale(), 0.05) end
+	-- hauteur arrondie au pixel écran (évite un reste fractionnaire qui « saute » à la fin de l'animation)
+	local function snapH(h)
+		local sc = math.max(pxScale(), 0.05)
+		return math.max(math.floor(h * sc + 0.5) / sc, 0)
+	end
 	local function stopFold() if foldConn then foldConn:Disconnect() foldConn = nil end end
 	local function setCollapsed(c)
 		if c == collapsed then return end
@@ -12973,13 +12989,15 @@ function Tab:CreateBlock(o)
 		-- on part de la hauteur RÉELLEMENT affichée ; la cible est relue à chaque image (le texte à retour à la ligne,
 		-- les tiroirs, etc. changent de hauteur) : plus d'arrêt à mi-course suivi d'un saut à la fin.
 		local startH = clip.AbsoluteSize.Y / math.max(pxScale(), 0.05)
+		clip.Visible = true
 		clip.AutomaticSize = AN
-		clip.Size = UDim2.new(1, 0, 0, math.max(startH, 0))
+		clip.Size = UDim2.new(1, 0, 0, snapH(startH))
 		local dur = Library.Animations and (0.36 / math.max(Library.AnimSpeed or 1, 0.05)) or 0
 		local function finish()
 			stopFold()
 			if c then
 				clip.Size = UDim2.new(1, 0, 0, 0)
+				clip.Visible = false   -- replié : plus rien d'affiché (un cadre de hauteur 0 laissait parfois dépasser 1 px)
 			else
 				clip.AutomaticSize = AY
 				clip.Size = UDim2.new(1, 0, 0, 0)
@@ -12993,7 +13011,7 @@ function Tab:CreateBlock(o)
 			local a = math.clamp((os.clock() - t0) / dur, 0, 1)
 			local e = TweenService:GetValue(a, QUINT, OUT)
 			local goal = c and 0 or contentH()
-			clip.Size = UDim2.new(1, 0, 0, math.max(startH + (goal - startH) * e, 0))
+			clip.Size = UDim2.new(1, 0, 0, snapH(startH + (goal - startH) * e))
 			if a >= 1 then finish() end
 		end)
 	end
@@ -13005,6 +13023,7 @@ function Tab:CreateBlock(o)
 		collapsed = true
 		clip.AutomaticSize = AN
 		clip.Size = UDim2.new(1, 0, 0, 0)
+		clip.Visible = false
 		arrow.Rotation = 0
 	end
 
@@ -14868,8 +14887,8 @@ function Window:CreateSettingsTab(name, icon, docked)
 	D:CreateToggle({ Name = "Bloquer les touches du jeu", Flag = "ui.blockkeys", Default = Library.BlockGameKeys == true,
 		Tooltip = "Tant que l'interface est ouverte, W A S D et Espace n'agissent plus sur ton personnage (Library.BlockedKeys pour changer la liste). Rien n'est bloqué pendant la saisie de texte ou l'assignation d'une touche.",
 		Callback = function(v) Library:SetBlockGameKeys(v) end })
-	D:CreateSlider({ Name = "Décalage vertical du curseur", Flag = "ui.ptroffy", Min = -80, Max = 80, Default = 0, Step = 1, Suffix = " px",
-		Tooltip = "À régler seulement si, en glissant dans le color picker, la poignée n'est pas pile sous ton curseur : positif = la poignée monte, négatif = elle descend.",
+	D:CreateSlider({ Name = "Décalage vertical du curseur", Flag = "ui.ptroffset", Min = -80, Max = 80, Default = 0, Step = 1, Suffix = " px",
+		Tooltip = "Le color picker se recale tout seul au premier clic. À régler seulement si, malgré ça, la poignée n'est pas pile sous ton curseur : positif = la poignée monte, négatif = elle descend. Laisse 0 sinon.",
 		Callback = function(v) Library.PointerOffset = Vector2.new(0, tonumber(v) or 0) end })
 	D:CreateToggle({ Name = "Verrouiller la position", Flag = "ui.lockpos", Default = Library.LockPosition == true,
 		Tooltip = "La fenêtre ne peut plus être déplacée ni redimensionnée à la souris (le double-clic pour réduire et Ctrl+R restent possibles).",
