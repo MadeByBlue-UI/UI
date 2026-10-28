@@ -1872,7 +1872,7 @@ local activeNotifs = {}
 local notifEntries = {}
 local NOTIF_ICON = { Info = "i", Success = "+", Warning = "!", Error = "x", Loading = "" }
 local NOTIF_LOGO = "rbxassetid://5436396975"   -- logo affiché à la place de la pastille blanche (Library.NotifLogo pour le changer)
-local NOTIF_LOGO_SIZE = 40                      -- taille du logo en pixels (Library.NotifLogoSize pour changer ; ~44 max avant d'être rogné)
+local NOTIF_LOGO_SIZE = 46                      -- taille du logo en pixels (Library.NotifLogoSize pour changer ; ~44 max avant d'être rogné)
 local NOTIF_POS = { TopLeft = true, TopRight = true, TopCenter = true,
 	BottomLeft = true, BottomRight = true, BottomCenter = true, Custom = true }
 
@@ -1894,7 +1894,7 @@ Library.NotifColored      = false  -- false = tout en noir & blanc (défaut) ; t
 Library.NotifPauseOnHover = true   -- le minuteur se met en pause quand la souris est sur la notification
 Library.NotifStack        = true   -- les doublons s'empilent en « x2, x3... » au lieu de se répéter
 Library.NotifMax          = 5      -- nombre maximum affiché en même temps
-Library.NotifWidth        = 300
+Library.NotifWidth        = 340
 Library.NotifMuted        = false  -- « Ne pas déranger » : seules les erreurs passent
 Library.NotifHistory      = Library.NotifHistory or {}
 
@@ -3234,13 +3234,13 @@ function Library:Notify(o)
 
 	local inner = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
 		ZIndex = 6 }, card)
-	new("UIPadding", { PaddingTop = UDim.new(0, 13), PaddingBottom = UDim.new(0, 17),
-		PaddingLeft = UDim.new(0, 56), PaddingRight = UDim.new(0, 16) }, inner)
+	new("UIPadding", { PaddingTop = UDim.new(0, 16), PaddingBottom = UDim.new(0, 22),
+		PaddingLeft = UDim.new(0, 70), PaddingRight = UDim.new(0, 18) }, inner)
 	new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = BYORDER }, inner)
 	local CT = 0.2   -- transparence finale du texte secondaire (blanc légèrement adouci, pas de gris terne)
-	local titleL = label(inner, o.Title or "Notification", 14, { Font = F_BOLD, Size = UDim2.new(1, -34, 0, 18),
+	local titleL = label(inner, o.Title or "Notification", 16, { Font = F_BOLD, Size = UDim2.new(1, -40, 0, 22),
 		LayoutOrder = 1, TextTransparency = 1, ZIndex = 6 })
-	local contentL = label(inner, o.Content or "", 12, { TextColor3 = T.Text, TextWrapped = true,
+	local contentL = label(inner, o.Content or "", 14, { TextColor3 = T.Text, TextWrapped = true,
 		TextTruncate = Enum.TextTruncate.None, AutomaticSize = AY, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = 2,
 		TextTransparency = 1, ZIndex = 6 })
 	contentL.Visible = contentL.Text ~= ""
@@ -3257,10 +3257,10 @@ function Library:Notify(o)
 		ZIndex = 6 }, card)
 
 	-- pastille d'icône (+ onde, + spinner)
-	local icoHold = new("Frame", { Position = UDim2.new(0, 14, 0, 13), Size = UDim2.new(0, 28, 0, 28),
+	local icoHold = new("Frame", { Position = UDim2.new(0, 18, 0, 16), Size = UDim2.new(0, 36, 0, 36),
 		BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 6 }, card)
 	local pulse = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(28, 28), BackgroundTransparency = 1, BorderSizePixel = 0 }, icoHold)
+		Size = UDim2.fromOffset(36, 36), BackgroundTransparency = 1, BorderSizePixel = 0 }, icoHold)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, pulse)
 	local pulseSt = new("UIStroke", { Color = T.Accent, Thickness = 2, Transparency = 1 }, pulse)
 	local ico = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
@@ -3275,7 +3275,7 @@ function Library:Notify(o)
 		ScaleType = Enum.ScaleType.Fit, Visible = false }, ico)
 	local icoImgCorner = new("UICorner", { CornerRadius = UDim.new(0, 0) }, icoImg)   -- rond quand on affiche un avatar (o.Icon)
 	local spinRing = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(18, 18), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, ico)
+		Size = UDim2.fromOffset(22, 22), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, ico)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, spinRing)
 	local spinSt = new("UIStroke", { Color = T.Accent, Thickness = 2, Transparency = 0 }, spinRing)
 	local spinGrad = new("UIGradient", { Transparency = NumberSequence.new({
@@ -3284,8 +3284,8 @@ function Library:Notify(o)
 	local spinTw
 
 	-- badge « x2 » (doublons)
-	local badge = new("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 12),
-		Size = UDim2.new(0, 26, 0, 16), BackgroundColor3 = T.Accent, BackgroundTransparency = 0,
+	local badge = new("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -16, 0, 14),
+		Size = UDim2.new(0, 30, 0, 18), BackgroundColor3 = T.Accent, BackgroundTransparency = 0,
 		BorderSizePixel = 0, Visible = false, ZIndex = 6 }, card)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, badge)
 	local badgeScale = new("UIScale", { Scale = 1 }, badge)
@@ -3428,7 +3428,7 @@ function Library:Notify(o)
 		icoText.Visible = false              -- plus de lettre : le logo prend la place
 		if o.Icon and o.Icon ~= "" then   -- image perso (ex. avatar d'un joueur) : petit rond à la place du logo
 			icoImg.Image = tostring(o.Icon)
-			icoImg.Size = UDim2.fromOffset(32, 32)
+			icoImg.Size = UDim2.fromOffset(40, 40)
 			icoImg.ScaleType = Enum.ScaleType.Crop
 			icoImgCorner.CornerRadius = UDim.new(1, 0)
 		else
@@ -3460,9 +3460,9 @@ function Library:Notify(o)
 		ico.Rotation = (kind == "Success") and -90 or 0
 		tween(icoScale, { Scale = 1 }, 0.5, BACK)
 		if kind == "Success" then tween(ico, { Rotation = 0 }, 0.5) end
-		pulse.Size = UDim2.fromOffset(28, 28)
+		pulse.Size = UDim2.fromOffset(36, 36)
 		pulseSt.Transparency = 0.15
-		tween(pulse, { Size = UDim2.fromOffset(62, 62) }, 0.75)
+		tween(pulse, { Size = UDim2.fromOffset(78, 78) }, 0.75)
 		tween(pulseSt, { Transparency = 1 }, 0.75)
 		if not Library.Animations then return end
 		if kind == "Error" then
@@ -3470,7 +3470,7 @@ function Library:Notify(o)
 				task.wait(0.2)
 				for _, dx in ipairs({ -4, 4, -3, 3, -2, 2, 0 }) do
 					if dead then return end
-					tween(icoHold, { Position = UDim2.new(0, 14 + dx, 0, 13) }, 0.05, LINEAR)
+					tween(icoHold, { Position = UDim2.new(0, 18 + dx, 0, 16) }, 0.05, LINEAR)
 					task.wait(0.05)
 				end
 			end)
@@ -3840,12 +3840,18 @@ function Library:Notify(o)
 
 	-- ---------------------------------------------------------------- animation d'entrée
 	task.spawn(function()
-		Ticker.wait()
-		if dead then return end
-		local h = card.AbsoluteSize.Y / math.max(cardScale.Scale, 0.01)
-		if h < 4 then
+		-- V5.8 : avant, la hauteur était lue après UNE seule image : le texte n'avait pas fini de se mettre en page
+		-- (retour à la ligne, police), la carte s'ouvrait à ~75 % puis sautait à 100 à la fin. On attend maintenant
+		-- que la hauteur reste identique sur 2 images d'affilée (carte encore invisible, donc rien ne se voit).
+		local function measure() return card.AbsoluteSize.Y / math.max(cardScale.Scale, 0.01) end
+		local h, last, same = 0, -1, 0
+		for _ = 1, 12 do
 			Ticker.wait()
-			h = card.AbsoluteSize.Y / math.max(cardScale.Scale, 0.01)
+			if dead then return end
+			h = measure()
+			if h >= 4 and math.abs(h - last) < 0.5 then same += 1 else same = 0 end
+			last = h
+			if same >= 2 then break end
 		end
 		local estyle = Library.Animations and V6.resolveEntry(o.Entry, kind) or nil
 		local grow = tween(slot, { Size = UDim2.new(1, 0, 0, h) }, 0.38)
@@ -3871,22 +3877,22 @@ function Library:Notify(o)
 			task.delay(dur / math.max(Library.AnimSpeed or 1, 0.05), function()
 				if dead or not entryCleanup then return end
 				entryCleanup()
-				pulse.Size = UDim2.fromOffset(28, 28)
+				pulse.Size = UDim2.fromOffset(36, 36)
 				pulseSt.Transparency = 0.15
-				tween(pulse, { Size = UDim2.fromOffset(62, 62) }, 0.75)
+				tween(pulse, { Size = UDim2.fromOffset(78, 78) }, 0.75)
 				tween(pulseSt, { Transparency = 1 }, 0.75)
 				shinePlay()
 				applyMode()
 			end)
 			return
 		end
-		tween(card, { Position = ZERO }, 0.6)
-		tween(cardScale, { Scale = 1 }, 0.55, BACK)
-		if canvasSupported then tween(card, { GroupTransparency = 0 }, 0.35) end
+		tween(card, { Position = ZERO }, 0.45)
+		tween(cardScale, { Scale = 1 }, 0.45)
+		if canvasSupported then tween(card, { GroupTransparency = 0 }, 0.3) end
 		if strip.Visible then tween(strip, { Size = UDim2.new(0, 3, 1, 0) }, 0.55) end
 		task.delay(0.12, function() if not dead then playIcon() end end)
-		task.delay(0.15, function() if not dead then tween(titleL, { TextTransparency = 0 }, 0.3) end end)
-		task.delay(0.25, function() if not dead then tween(contentL, { TextTransparency = CT }, 0.3) end end)
+		task.delay(0.08, function() if not dead then tween(titleL, { TextTransparency = 0 }, 0.25) end end)
+		task.delay(0.14, function() if not dead then tween(contentL, { TextTransparency = CT }, 0.25) end end)
 		task.delay(0.2, function() if not dead then shinePlay() end end)
 		task.delay(0.3, function() if not dead then applyMode() end end)
 	end)
@@ -8172,10 +8178,11 @@ do
 		local st = Library._tipStroke
 		local sq = Library.SquareMode == true
 		local neon = Library.StyleName == "Néon"
-		tipLabel.BackgroundColor3 = T.Second
-		tipLabel.TextColor3 = T.Text
-		tipLabel.Font = (Library.Fonts and Library.Fonts[1]) or F_REG
-		tipLabel.TextSize = math.max(8, math.floor(12 * (Library.FontScale or 1) + 0.5))
+		-- V5.8 : tooltip lisible -> fond éclairci (teinte du thème) presque opaque, texte blanc, un peu plus gros
+		tipLabel.BackgroundColor3 = lighten(T.Second, 0.16)
+		tipLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+		tipLabel.Font = Enum.Font.GothamMedium
+		tipLabel.TextSize = math.max(10, math.floor(14 * (Library.FontScale or 1) + 0.5))
 		local cr = Library._tipCorner
 		if cr then cr.CornerRadius = UDim.new(0, sq and 0 or math.floor(7 * (Library.GlobalCornerValue or 10) / 10)) end
 		-- reflet de verre sur le fond
@@ -8187,14 +8194,14 @@ do
 				fill.Rotation = 40
 				fill.Parent = tipLabel
 			end
-			fill.Color = ColorSequence.new(lighten(T.Second, 0.22), T.Second)
+			fill.Color = ColorSequence.new(lighten(T.Second, 0.30), lighten(T.Second, 0.12))
 			fill.Enabled = true
 		elseif fill then
 			fill.Enabled = false
 		end
 		if st then
 			st.Color = T.Accent
-			st.Thickness = neon and 1.6 or 1
+			st.Thickness = neon and 2 or 1.5
 			local g = st:FindFirstChild("GlassGrad")
 			if Sty.Glass then
 				if not g then
@@ -8212,10 +8219,8 @@ do
 	end
 
 	local function targets()
-		local bg = (Sty.PanelTr or 0.1) * 0.6
-		local stroke = Sty.PanelStroke or 0.9
-		stroke = stroke >= 1 and 1 or math.min(stroke, 0.8)
-		return math.clamp(bg, 0, 0.4), stroke
+		-- quasi opaque pour rester lisible sur n'importe quel fond (même en style Verre / Givré), contour bien visible
+		return 0.04, 0.15
 	end
 
 	function Library._tipShow(text, anchor)
@@ -11920,7 +11925,9 @@ end
 function Window:CreateHomeTab(name, icon, cfg)
 	cfg = cfg or {}
 	local win = self
+	win._iconSize = 22   -- icône de Home plus grande que les autres onglets
 	local tab = self:CreateTab(name or "Home", nil, (icon and icon ~= "") and icon or "rbxassetid://13060262529")   -- icône maison par défaut
+	win._iconSize = nil
 	tab.Button.LayoutOrder = 0   -- toujours en premier
 	self._homeTab = tab
 	Library.ShowChangelog = cfg.ChangeLog ~= false
@@ -13177,14 +13184,15 @@ function Window:CreateTab(name, _, icon, parentTab)
 	local x0 = 12 + depth * 10        -- retrait des onglets enfants
 	local x = x0
 	if icon and icon ~= "" then
+		local isz = win._iconSize or 16   -- V5.8 : l'icône de Home est plus grande (22)
 		if string.sub(icon, 1, 6) == "glyph:" then   -- icône dessinée par un caractère (ex. "glyph:⌂")
-			label(btn, string.sub(icon, 7), 17, { Font = Enum.Font.GothamBold, TextXAlignment = CENTER, TextTruncate = Enum.TextTruncate.None,
-				Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, x0, 0.5, -8) })
+			label(btn, string.sub(icon, 7), isz + 1, { Font = Enum.Font.GothamBold, TextXAlignment = CENTER, TextTruncate = Enum.TextTruncate.None,
+				Size = UDim2.new(0, isz, 0, isz), Position = UDim2.new(0, x0, 0.5, -isz / 2) })
 		else
 			new("ImageLabel", { BackgroundTransparency = 1, Image = icon, ImageColor3 = T.Text,
-				Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, x0, 0.5, -8) }, btn)
+				Size = UDim2.new(0, isz, 0, isz), Position = UDim2.new(0, x0, 0.5, -isz / 2) }, btn)
 		end
-		x = x0 + 22
+		x = x0 + isz + 6
 	end
 	local txt = label(btn, name or "Tab", parentTab and 12 or 13, { Position = UDim2.new(0, x, 0, 0), Size = UDim2.new(1, -x - 14, 1, 0),
 		TextColor3 = T.ElementAccent })
@@ -17189,9 +17197,9 @@ function Library:CreateWindow(cfg)
 	tipShown = false
 	Library._tipCorner = corner(tipLabel, 7)
 	Library._tipStroke = stroke(tipLabel, 1)
-	new("UIPadding", { PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5),
-		PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 9) }, tipLabel)
-	new("UISizeConstraint", { MaxSize = Vector2.new(260, 400) }, tipLabel)
+	new("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
+		PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, tipLabel)
+	new("UISizeConstraint", { MaxSize = Vector2.new(300, 400) }, tipLabel)
 
 	-- ------------------------------------------------------------------
 	-- Recherche + barre latérale + contenu
@@ -18469,6 +18477,11 @@ function Library:CreateWindow(cfg)
 	--   fond (anneaux + étoiles) : ~30 Hz (~15 Hz pendant un geste), endormi si fenêtre cachée / fond coupé
 	--   FPS / ping : 2 fois par seconde, endormi si l'indicateur est coupé
 	-- ------------------------------------------------------------------
+	-- V5.8 : redimensionnement allégé. Avant, la fenêtre changeait de taille à CHAQUE image (60+ fois/s) et tout le contenu
+	-- (colonnes, blocs, textes, listes) était recalculé à chaque fois -> gros chutes de FPS. Maintenant, pendant le geste,
+	-- la taille n'est appliquée qu'à ~Library.ResizeRate fois/s (30 par défaut) ; le calcul du curseur reste fluide et la
+	-- taille finale est toujours appliquée exactement au relâchement.
+	local applyT, sizeDirty = 0, false
 	track(Ticker.connect(function(dt)
 		dt = math.min(dt, 0.1)
 		local dirty = false
@@ -18485,7 +18498,16 @@ function Library:CreateWindow(cfg)
 				curSize = tgtSize
 				tgtSize = nil
 			end
-			if applySize(curSize) then dirty = true end
+			sizeDirty = true
+		end
+		if sizeDirty then
+			local now = os.clock()
+			local rate = math.clamp(tonumber(Library.ResizeRate) or 30, 10, 120)
+			if not Library._resizing or now - applyT >= 1 / rate then
+				applyT = now
+				sizeDirty = false
+				if applySize(curSize) then dirty = true end
+			end
 		end
 		if tgtPos then
 			local d = tgtPos - curPos
@@ -18635,7 +18657,7 @@ function Library:CreateWindow(cfg)
 			st.f.BackgroundTransparency = 1 - alpha
 			if st.halo then st.halo.BackgroundTransparency = 1 - alpha * 0.18 end
 		end
-	end, { deco = true, gate = function() return skyLim > 0 and (skyTarget > 0 or skyFade > 0.01 or sky.Visible) end }))
+	end, { deco = true, gate = function() return skyLim > 0 and not Library._resizing and (skyTarget > 0 or skyFade > 0.01 or sky.Visible) end }))
 	refreshSky()
 
 	-- Animation d'apparition
