@@ -18903,26 +18903,32 @@ function Library:CreateWindow(cfg)
 					ns = Vector2.new(math.floor(ns.X / 2 + 0.5) * 2, math.floor(ns.Y / 2 + 0.5) * 2)
 					final = ns
 					local c = startPos + (ns - Vector2.new(sw, sh)) * scaleBase * rsDir / 2
-					outline.Position = UDim2.fromOffset(math.floor(c.X + 0.5), math.floor(c.Y + 0.5))
+					local cxp, cyp = math.floor(c.X + 0.5), math.floor(c.Y + 0.5)
+					outline.Position = UDim2.fromOffset(cxp, cyp)
 					outline.Size = UDim2.fromOffset(ns.X * scaleBase, ns.Y * scaleBase)
+					-- la poignée en arc suit le coin du contour (au lieu de rester à l'ancien emplacement jusqu'au relâchement)
+					ec.gripRect = { Vector2.new(cxp - ns.X * scaleBase / 2, cyp - ns.Y * scaleBase / 2), Vector2.new(ns.X * scaleBase, ns.Y * scaleBase) }
+					if ec.updateGrip then ec.updateGrip() end
 				end
 				startDrag(place, nil, i.Position, function()
-					-- relâchement : la fenêtre GLISSE vers la nouvelle taille (lissage de la boucle) pendant que le contour s'efface
-					local tok = Library._rsTok
+					-- relâchement : la taille réelle est appliquée UNE seule fois, tout de suite (un seul recalcul de la mise en page,
+					-- plus d'animation lissée à 30 Hz qui refaisait toutes les colonnes / textes pendant ~0,5 s = chutes de FPS)
+					ec.gripRect = nil
+					rsSmooth = false
+					tgtSize = nil
+					Library._rsTok = (Library._rsTok or 0) + 1
+					Library._resizing = false
 					if final and final ~= Vector2.new(sw, sh) then
-						rsSmooth = Library.Animations and true or false
-						curSize, tgtSize = Vector2.new(sw, sh), final
-						tween(outline, { BackgroundTransparency = 1 }, 0.3)
-						tween(outStroke, { Transparency = 1 }, 0.3)
-						task.delay(0.35, function() outline:Destroy() end)
-						-- _resizing reste vrai pendant la transition : le fond animé est en pause et la mise en page est limitée à ~30 Hz
-						task.delay(0.7, function()
-							if Library._rsTok == tok then Library._resizing = false end
-						end)
+						applySize(final)
+						curSize = lastSize
+						setMainPos()
+						tween(outline, { BackgroundTransparency = 1 }, 0.2)
+						tween(outStroke, { Transparency = 1 }, 0.2)
+						task.delay(0.25, function() outline:Destroy() end)
 					else
 						outline:Destroy()
-						Library._resizing = false
 					end
+					if ec.updateGrip then ec.updateGrip() end
 					saveWinLater()
 				end)
 				return
@@ -18972,23 +18978,37 @@ function Library:CreateWindow(cfg)
 	-- zone cliquable invisible autour de l'arc (dans l'écran, donc utilisable même à l'extérieur de la fenêtre)
 	local grip = new("TextButton", { Name = "GripHit", AnchorPoint = Vector2.new(1, 1), BackgroundTransparency = 1,
 		Text = "", AutoButtonColor = false, ZIndex = 6, Visible = false }, gui)
+	local gripLast = {}
 	local function updateGrip()
 		local vis = main.Visible and not collapsed
-		gripClip.Visible, grip.Visible = vis, vis
-		if not vis then return end
-		local sc = scaleBase
-		local R = math.max(mainCorner.CornerRadius.Offset, 12) * sc   -- rayon réel du coin (petit minimum en type « Carré »)
+		if not vis then
+			if gripLast.vis ~= false then gripClip.Visible, grip.Visible = false, false gripLast.vis = false end
+			return
+		end
+		local ap, as
+		if ec.gripRect then ap, as = ec.gripRect[1], ec.gripRect[2] else ap, as = main.AbsolutePosition, main.AbsoluteSize end
+		-- échelle réelle de la fenêtre (UIScale + animation d'ouverture) : l'arc reste collé au coin même pendant le zoom
+		local sc = (main.Size.X.Offset > 0 and main.AbsoluteSize.X > 0) and (main.AbsoluteSize.X / main.Size.X.Offset) or scaleBase
+		local R = math.max(mainCorner.CornerRadius.Offset, 12) * sc
+		if gripLast.vis == true and gripLast.apx == ap.X and gripLast.apy == ap.Y and gripLast.asx == as.X
+			and gripLast.asy == as.Y and gripLast.R == R then return end
+		gripLast.vis, gripLast.apx, gripLast.apy, gripLast.asx, gripLast.asy, gripLast.R = true, ap.X, ap.Y, as.X, as.Y, R
+		gripClip.Visible, grip.Visible = true, true
 		local gap, m = GRIP_GAP * sc, 5 * sc
 		local rc = R + gap                                            -- rayon de l'arc : même centre que le coin de la fenêtre
-		local ap, as = main.AbsolutePosition, main.AbsoluteSize
 		local cx, cy = ap.X + as.X - R, ap.Y + as.Y - R               -- centre du coin arrondi
 		gripClip.Position = UDim2.fromOffset(cx, cy)
 		gripClip.Size = UDim2.fromOffset(rc + m, rc + m)              -- seul le quart bas-droit du cercle est gardé
 		gripArc.Size = UDim2.fromOffset(rc * 2, rc * 2)
 		gripCorner.CornerRadius = UDim.new(0, rc)
-		grip.Position = UDim2.fromOffset(ap.X + as.X + gap + m, ap.Y + as.Y + gap + m)
-		grip.Size = UDim2.fromOffset(36 * sc, 36 * sc)
+		-- zone cliquable centrée sur le milieu de l'arc (diagonale du coin), surtout À L'EXTÉRIEUR de la fenêtre : elle ne
+		-- recouvre plus le pied de page / la barre de défilement
+		local mid = Vector2.new(cx, cy) + Vector2.new(0.7071, 0.7071) * (rc + 2 * sc)
+		local hs = 30 * sc
+		grip.Position = UDim2.fromOffset(math.floor(mid.X + hs / 2 + 0.5), math.floor(mid.Y + hs / 2 + 0.5))
+		grip.Size = UDim2.fromOffset(hs, hs)
 	end
+	ec.updateGrip = updateGrip
 	updateGrip()
 	main:GetPropertyChangedSignal("AbsolutePosition"):Connect(updateGrip)
 	main:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateGrip)
