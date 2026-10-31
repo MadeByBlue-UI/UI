@@ -7,6 +7,13 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.3 — CHAMPS DE TEXTE QUI GRANDISSENT VERS LE BAS
+		• CreateInput : quand le texte est trop long, il passe à la ligne et le champ (ainsi que sa ligne dans le bloc) s'agrandit vers le bas
+		  avec une transition (ressort), au lieu de s'étirer sur une seule longue ligne. Il se rétracte quand le texte raccourcit.
+		  Entrée = valider (pas de nouvelle ligne) · un texte collé est mis sur une seule ligne · o.MaxHeight (200) = hauteur maximale.
+		• CreateTextArea : la zone grandit aussi vers le bas avec le texte (Height = minimum, o.MaxHeight = 400) · o.AutoGrow = false = hauteur fixe.
+		• Library.AutoGrow = false : retour à des hauteurs fixes. Champ multi-ligne en interne : la sélection native de Roblox est utilisée.
+
 	V9.2 — « HI. » DANS L'INTRO + SON
 		• Home > Serveur : l'icône du jeu dans lequel tu es s'affiche en haut du bloc (Library.HomeGameImage = false la retire). Si l'exécuteur autorise HTTP + fichiers, c'est la miniature 16:9 du jeu (Library.HomeGameThumb = false : icône seulement).
 		• Au tout début de l'intro : écran noir, interface Roblox masquée (chat, liste des joueurs, barre du haut...), puis « Hi. » apparaît en
@@ -8247,75 +8254,107 @@ function Library._attachSelection(tb)
 	end
 end
 
+-- ============================================================================
+-- CHAMP QUI GRANDIT VERS LE BAS : quand le texte est trop long, il passe à la ligne et la boîte s'agrandit (ressort) vers le bas,
+-- la ligne du bloc suit. Se rétracte quand le texte raccourcit. Library.AutoGrow = false : retour à une hauteur fixe.
+-- cfg : MinH / MaxH (hauteur de la boîte), PadV (marges haut + bas), TbSize(h) / RowSize(h) (tailles à appliquer).
+-- ============================================================================
+Library.AutoGrow = true
+function Library._autoGrow(tb, row, cfg)
+	if Library.AutoGrow == false then return end
+	local minH, maxH, padV = cfg.MinH, cfg.MaxH, cfg.PadV
+	local fade = tb:FindFirstChild("FadeText")   -- calque du fondu : sa hauteur suit la cible (sinon il se coupe pendant l'animation)
+	local lastH, lastX = nil, nil
+	local function target()
+		if tb.Text == "" then return minH end
+		return math.clamp(math.ceil(tb.TextBounds.Y) + padV, minH, maxH)   -- TextBounds : déjà en unités d'interface
+	end
+	local function apply(h, animate)
+		local tbSize, rowSize = cfg.TbSize(h), cfg.RowSize(h)
+		if fade then fade.Size = UDim2.new(1, 0, 0, math.max(h - padV, 1)) end
+		if animate then
+			Library._spring(tb, { Size = tbSize }, "smooth")
+			Library._spring(row, { Size = rowSize }, "smooth")
+		else
+			Library._springStop(tb, "Size")
+			Library._springStop(row, "Size")
+			tb.Size, row.Size = tbSize, rowSize
+		end
+	end
+	local function fit()
+		if row.AbsoluteSize.X / pxScale() < 60 then return end   -- ligne pas encore mise en page (ou bloc replié)
+		local h = target()
+		if h == lastH then return end
+		local animate = lastH ~= nil and not Library._resizing   -- 1re mesure / redimensionnement de la fenêtre : sans animation
+		lastH = h
+		apply(h, animate)
+	end
+	tb:GetPropertyChangedSignal("TextBounds"):Connect(fit)
+	tb:GetPropertyChangedSignal("Text"):Connect(fit)
+	row:GetPropertyChangedSignal("AbsoluteSize"):Connect(Library._lazy(function()
+		local x = row.AbsoluteSize.X
+		if lastX and math.abs(x - lastX) < 0.5 then return end   -- seule la LARGEUR compte (la hauteur change pendant l'animation)
+		lastX = x
+		fit()
+	end))
+	fit()
+	task.defer(fit)
+end
+
 function Block:CreateInput(o)
 	o = o or {}
 	local f, st = makeRow(self, 34, o.Name)
-	local lbl = label(f, o.Name or "Input", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0.4, -12, 1, 0) })
+	label(f, o.Name or "Input", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0.4, -12, 0, 34) })
 	local tb = new("TextBox", {
-		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.new(0.6, -14, 0, 24),
+		AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -8, 0, 5), Size = UDim2.new(0.6, -14, 0, 24),
 		BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0,
-		Text = o.Default and tostring(o.Default) or "", PlaceholderText = o.Placeholder or o.PlaceholderText or "",
+		Text = o.Default and (string.gsub(tostring(o.Default), "[\r\n]+", " ")) or "",
+		PlaceholderText = o.Placeholder or o.PlaceholderText or "",
 		PlaceholderColor3 = Color3.fromRGB(125, 125, 132), TextColor3 = T.Text, TextSize = 12,
-		Font = F_REG, ClearTextOnFocus = o.ClearOnFocus == true, TextTruncate = Enum.TextTruncate.None,
-		TextXAlignment = LEFT, ClipsDescendants = true, ZIndex = 2,
+		Font = F_REG, ClearTextOnFocus = o.ClearOnFocus == true,
+		MultiLine = true, TextWrapped = true, TextXAlignment = LEFT, TextYAlignment = Enum.TextYAlignment.Top,
+		ClipsDescendants = true, ZIndex = 2,
 	}, f)
 	corner(tb, 6)
 	local tst = stroke(tb, 0.9)
 	trackStyled(tb, tst, "input")
-	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, tb)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 5),
+		PaddingBottom = UDim.new(0, 5) }, tb)
 	Library._attachTextFade(tb)
 	hover(f, st)
 
 	-- ------------------------------------------------------------------------
-	-- Le champ s'AGRANDIT (vers la gauche, avec une transition) quand le texte est trop long, au lieu d'afficher « ... ».
-	-- Il grandit jusqu'à la largeur de la ligne (le nom du champ s'efface en fondu quand il passe dessous) ; si le texte
-	-- dépasse encore, il défile pendant la saisie et se termine par « ... » seulement quand le champ n'est pas sélectionné.
+	-- Le champ garde sa largeur : quand le texte est trop long il PASSE À LA LIGNE et la boîte (ainsi que la ligne du bloc)
+	-- s'agrandit vers le bas avec une transition, au lieu de faire une seule très longue ligne. Hauteur max : o.MaxHeight (200).
+	-- Le champ est multi-ligne en interne : la touche Entrée valide (elle ne crée pas de nouvelle ligne) et un texte collé
+	-- avec des retours à la ligne est mis sur une seule ligne.
 	-- ------------------------------------------------------------------------
-	local TextService = game:GetService("TextService")
-	local PADX, LEAD, STEP = 22, 14, 6          -- marges internes + curseur / pas d'agrandissement (évite un tween à chaque lettre)
-	local lastW, focused = nil, false
-	local function rowW() return f.AbsoluteSize.X / pxScale() end
-	local function fit(animate, force)
-		local rw = rowW()
-		if rw < 60 then return end   -- ligne pas encore mise en page (ou bloc replié)
-		local base, max = rw * 0.6 - 14, rw - 16
-		local want = base
-		if tb.Text ~= "" then
-			local ok, b = pcall(TextService.GetTextSize, TextService, tb.Text, tb.TextSize, tb.Font, Vector2.new(10000, 100))
-			if ok then want = math.ceil((b.X + PADX + LEAD) / STEP) * STEP end
-		end
-		local w = math.clamp(want, base, max)
-		tb.TextTruncate = (want > max and not focused) and Enum.TextTruncate.AtEnd or Enum.TextTruncate.None
-		if not force and lastW and math.abs(w - lastW) < 0.5 then return end
-		lastW = w
-		local size = UDim2.new(0, w, 0, 24)
-		local hide = (rw - 8 - w) < (12 + lbl.TextBounds.X + 10)   -- le champ recouvre le nom -> on l'efface
-		if animate then
-			Library._spring(tb, { Size = size }, "smooth")   -- ressort : la vitesse est gardée quand une nouvelle lettre change la cible
-			tween(lbl, { TextTransparency = hide and 1 or 0 }, 0.22)
-		else
-			Library._springStop(tb, "Size")
-			tb.Size = size
-			lbl.TextTransparency = hide and 1 or 0
-		end
-	end
-	f:GetPropertyChangedSignal("AbsoluteSize"):Connect(Library._lazy(function() fit(false, true) end))
-	fit(false, true)
-	task.defer(fit, false, true)
+	Library._autoGrow(tb, f, {
+		MinH = 24, MaxH = math.max(24, tonumber(o.MaxHeight) or 200), PadV = 10,
+		TbSize = function(h) return UDim2.new(0.6, -14, 0, h) end,
+		RowSize = function(h) return UDim2.new(1, 0, 0, math.max(34, h + 10)) end,
+	})
 
 	tb.Focused:Connect(function()
-		focused = true
 		uiSnd("focus")
 		tween(tst, { Transparency = 0.35 }, 0.2)
-		fit(true)
 	end)
 	tb.FocusLost:Connect(function()
-		focused = false
 		tween(tst, { Transparency = Sty.InputStroke }, 0.3)
-		fit(true)
 		fire(o.Callback, tb.Text)
 	end)
+	local lastText = tb.Text
 	tb:GetPropertyChangedSignal("Text"):Connect(function()
+		local txt = tb.Text
+		if string.find(txt, "[\r\n]") then
+			local flat = (string.gsub(txt, "[\r\n]", ""))
+			local enter = (flat == lastText)   -- une seule touche Entrée -> on valide ; sinon c'est un collage -> une seule ligne
+			if not enter then flat = (string.gsub(txt, "[\r\n]+", " ")) end
+			tb.Text = flat
+			if enter and tb:IsFocused() then task.defer(function() tb:ReleaseFocus(true) end) end
+			return
+		end
+		lastText = txt
 		if o.Numeric then
 			local clean = string.gsub(tb.Text, "[^%d%.%-]", "")
 			local neg = string.sub(clean, 1, 1) == "-"
@@ -8326,7 +8365,6 @@ function Block:CreateInput(o)
 			if clean ~= tb.Text then tb.Text = clean return end
 		end
 		if o.Flag then Library.Flags[o.Flag] = tb.Text end
-		fit(true)
 		if o.LiveUpdate then fire(o.Callback, tb.Text) end
 	end)
 
@@ -10352,6 +10390,13 @@ function Block:CreateTextArea(o)
 		PaddingBottom = UDim.new(0, 6) }, tb)
 	Library._attachTextFade(tb)
 	hover(f, st)
+	if o.AutoGrow ~= false then   -- la zone grandit vers le bas avec le texte (hauteur donnée = minimum, o.MaxHeight = 400 par défaut)
+		Library._autoGrow(tb, f, {
+			MinH = h, MaxH = math.max(h, tonumber(o.MaxHeight) or 400), PadV = 12,
+			TbSize = function(nh) return UDim2.new(1, -16, 0, nh) end,
+			RowSize = function(nh) return UDim2.new(1, 0, 0, nh + 34) end,
+		})
+	end
 	tb.Focused:Connect(function() uiSnd("focus") tween(tst, { Transparency = 0.35 }, 0.2) end)
 	tb.FocusLost:Connect(function()
 		tween(tst, { Transparency = Sty.InputStroke }, 0.3)
