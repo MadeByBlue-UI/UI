@@ -36,8 +36,9 @@
 		• Home > Mon personnage : avatar R6 automatiquement (Library.PreviewRigType = "R6" | "R15", ou RigType dans CreatePreview3D),
 		  animation de bienvenue à la première arrivée (2 sauts, bras levés) puis coucou en boucle, tout le temps.
 		  pv.Welcome() la rejoue · Library.HomeWelcome = false la coupe (il reste le petit saut à chaque arrivée).
-		• 15 emotes entre les coucous : coucou, pause, coucou, EMOTE, puis on recommence avec l'emote suivante (Joie, Disco, Révérence,
-		  Robot, Pirouette, Applaudir, Biceps, Salto, Non !, Jumping jacks, Marche, Zombie, Chercher, Super-héros, Coup de pied).
+		• 17 emotes entre les coucous (refaites) : coucou, pause, coucou, EMOTE, puis on recommence avec l'emote suivante (Saut de joie,
+		  Disco, Floss, Dab, Robot, Glissade, Karaté, Kamehameha, Salto arrière, Pirouette, Révérence, Applaudir, Champion, Zombie,
+		  Bof, Jumping jacks, Chercher).
 		  Le nom de l'emote s'affiche en bas de l'aperçu. Library.HomeEmotes = false les coupe · pv:PlayEmote(n | "Nom") en lance une ·
 		  Library.PreviewEmotes (ta propre liste) · Library.PreviewEmoteWave (durée d'un coucou) · Library.PreviewEmoteRest (pause).
 
@@ -10670,118 +10671,254 @@ end
 -- EMOTES de l'aperçu 3D (avatar R6) : coucou · pause · coucou · EMOTE · coucou · pause · coucou · EMOTE...
 --   Option Emotes = true (Home l'active ; Library.HomeEmotes = false pour la couper). pv:PlayEmote(numéro | "Nom") en lance une tout de suite.
 --   Library.PreviewEmotes = liste { Name, Dur, Fn(u, T, P) } : P.rs / ls (épaules), rh / lh (hanches), nk (cou), rt (torse) = CFrame
---   (rotations dans le repère du parent) ; Fn retourne : décalage vertical, tour sur soi (rad, axe Y), salto (rad, axe X).
+--   (rotations dans le repère du parent) ; Fn retourne : décalage vertical, tour sur soi (rad, axe Y), salto (rad, axe X),
+--   glissement latéral (studs), inclinaison de côté (rad, axe Z) — les deux derniers sont facultatifs.
+--   17 emotes refaites : courbes douces (anticipation, dépassement, tenue), corps entier (hanches, torse, tête, glissement).
 --   Library.PreviewEmoteWave = durée d'un coucou (2 s) · Library.PreviewEmoteRest = pause entre les deux coucous (0,35 s).
 -- ============================================================================
 Library._initEmotes = function()   -- dans une fonction : ses variables locales n'entrent pas dans celles du chunk principal
 	local A, sin, cos, pi, abs, floor, max, min = CFrame.Angles, math.sin, math.cos, math.pi, math.abs, math.floor, math.max, math.min
 	local E = {}
 	local function add(name, dur, fn) E[#E + 1] = { Name = name, Dur = dur, Fn = fn } end
-	local RB_R = { 1.57, 0, 1.57, 0 }
-	local RB_L = { 0, 1.57, 1.57, 0 }
-	local RB_H = { 0, 0.7, 0, -0.7 }
 
-	add("Joie", 2.6, function(u, T, P)
-		local f = sin(T * 14) * 0.15
-		P.rs, P.ls = A(0, 0, 2.8 + f), A(0, 0, -(2.8 - f))
-		P.rh, P.lh = A(0, 0, 0.25), A(0, 0, -0.25)
-		P.nk = A(0.15, 0, 0)
-		return abs(sin(T * 5.5)) * 0.9, 0, 0
+	-- ---- outils d'animation (courbes douces, anticipation, rebond) ----
+	local function sm(x)                       -- 0..1 doux (démarre et finit en douceur)
+		if x < 0 then x = 0 elseif x > 1 then x = 1 end
+		return x * x * (3 - 2 * x)
+	end
+	local function seg(u, a, b) return sm((u - a) / (b - a)) end                         -- 0 avant a, 1 après b
+	local function pulse(u, a, b, c, d) return seg(u, a, b) * (1 - seg(u, c, d)) end     -- monte a→b, tient, redescend c→d
+	local function back(x)                     -- arrive avec un petit dépassement (effet « pop »)
+		if x <= 0 then return 0 elseif x >= 1 then return 1 end
+		local c1 = 1.70158
+		local c3 = c1 + 1
+		return 1 + c3 * (x - 1) ^ 3 + c1 * (x - 1) ^ 2
+	end
+	local function lerp(a, b, k) return a + (b - a) * k end
+	local function hop(u, a, b, h)             -- saut parabolique entre a et b (hauteur h)
+		if u <= a or u >= b then return 0 end
+		local v = (u - a) / (b - a)
+		return 4 * v * (1 - v) * h
+	end
+
+	-- Chaque Fn(u, T, P) remplit P (rs / ls = épaules, rh / lh = hanches, nk = cou, rt = torse) et retourne :
+	--   décalage vertical, tour sur soi (Y), salto (X), glissement latéral (dx), inclinaison de côté (roll)
+
+	add("Saut de joie", 2.4, function(u, T, P)
+		local wind = pulse(u, 0.0, 0.16, 0.16, 0.24)                                      -- élan : bras en arrière
+		local up = pulse(u, 0.2, 0.3, 0.6, 0.7) + pulse(u, 0.64, 0.72, 0.84, 0.92) * 0.9   -- bras en V pendant les sauts
+		local fl = sin(T * 22) * 0.07 * up
+		P.rs = A(-0.9 * wind, 0, 0.12 + 2.65 * up + fl)
+		P.ls = A(-0.9 * wind, 0, -(0.12 + 2.65 * up - fl))
+		P.rh, P.lh = A(0, 0, 0.32 * up), A(0, 0, -0.32 * up)
+		P.rt = A(-0.28 * wind + 0.12 * up, 0, 0)
+		P.nk = A(0.28 * up - 0.15 * wind, 0, 0)
+		return hop(u, 0.22, 0.6, 1.25) + hop(u, 0.64, 0.86, 0.5), 0, 0, 0, 0
 	end)
-	add("Disco", 3.2, function(u, T, P)
-		local s = sin(T * 5)
-		P.rs, P.ls = A(0, 0, 1.55 + 1.2 * s), A(0, 0, -(1.55 - 1.2 * s))
-		P.rt = A(0, s * 0.35, s * 0.12)
-		P.nk = A(0, -s * 0.3, 0)
-		return abs(sin(T * 5)) * 0.15, 0, 0
+
+	add("Disco", 3.4, function(u, T, P)
+		local s = sin(T * 5.2)
+		local k, m = sm(0.5 + 0.5 * s), sm(0.5 - 0.5 * s)   -- k : bras droit vers le ciel · m : bras gauche
+		P.rs = A(0.3 * k, 0, lerp(0.15, 2.55, k))
+		P.ls = A(0.3 * m, 0, -lerp(0.15, 2.55, m))
+		P.rt = A(0, 0.32 * s, 0.1 * s)
+		P.nk = A(0, -0.28 * s, 0)
+		P.rh, P.lh = A(0, 0, 0.24 + 0.08 * s), A(0, 0, -(0.24 - 0.08 * s))
+		return abs(s) * 0.12, 0, 0, 0.14 * s, -0.05 * s
 	end)
-	add("Révérence", 2.4, function(u, T, P)
-		local k = min(1, sin(pi * u) * 1.6)
-		P.rt = A(-1.1 * k, 0, 0)
-		P.rs, P.ls = A(0.6 * k, 0, 0.1), A(-0.4 * k, 0, -0.1)
-		P.nk = A(-0.2 * k, 0, 0)
-		return 0, 0, 0
+
+	add("Floss", 3.6, function(u, T, P)
+		local s = sin(T * 8.4)
+		local psi = 0.95 * s                       -- les deux bras balayent le devant du corps, les hanches vont à l'opposé
+		P.rs = A(0.85, 0, 0.12 - psi)
+		P.ls = A(0.85, 0, -(0.12 + psi))
+		P.rt = A(0, 0.28 * s, 0)
+		P.nk = A(0, -0.22 * s, 0)
+		P.rh, P.lh = A(0, 0, 0.12), A(0, 0, -0.12)
+		return abs(s) * 0.06, 0, 0, 0.3 * s, 0
 	end)
-	add("Robot", 3.2, function(u, T, P)
-		local k = floor(T * 2.5) % 4 + 1
-		P.rs, P.ls = A(RB_R[k], 0, 0.08), A(RB_L[k], 0, -0.08)
-		P.nk = A(0, RB_H[k], 0)
-		P.rt = A(0, RB_H[k] * 0.4, 0)
-		return 0, 0, 0
+
+	add("Dab", 2.8, function(u, T, P)
+		local k = back(seg(u, 0.1, 0.28)) * (1 - seg(u, 0.78, 0.94))   -- arrive d'un coup (pop), tient, relâche
+		P.rs = A(0.1 * k, 0, 0.08 + 2.32 * k)                          -- bras droit tendu en diagonale
+		P.ls = A(2.25 * k, 0, -0.08 + 0.63 * k)                        -- bras gauche replié devant le visage
+		P.nk = A(-0.5 * k, 0.75 * k, -0.15 * k)                        -- tête plongée dans le bras
+		P.rt = A(-0.18 * k, -0.2 * k, 0)
+		P.rh, P.lh = A(0, 0, 0.15 * k), A(0, 0, -0.15 * k)
+		return 0, 0, 0, 0, 0
 	end)
-	add("Pirouette", 1.6, function(u, T, P)
-		P.rs, P.ls = A(0, 0, 1.45), A(0, 0, -1.45)
-		return abs(sin(pi * u)) * 0.35, (u * u * (3 - 2 * u)) * 2 * pi, 0
+
+	-- poses figées du robot : { bras D (avant, côté), bras G (avant, côté), tête (Y), torse (Y) }
+	local RB = {
+		{ 1.57, 0, 0, 1.57, 0.7, 0.25 },
+		{ 0, 1.57, 1.57, 0, -0.7, -0.25 },
+		{ 1.57, 0, 1.57, 0, 0, 0 },
+		{ 3.0, 0.05, 0, 0.35, 0.5, 0.15 },
+		{ 0, 1.57, 0, 1.57, 0, 0 },
+		{ 2.3, 0, 2.3, 0, -0.5, 0 },
+		{ 1.4, -0.3, 0.6, 0.9, 0.7, 0.3 },
+		{ 0, 0.08, 0, 0.08, 0, 0 },
+	}
+	add("Robot", 3.6, function(u, T, P)
+		local n = #RB
+		local step = floor(T / 0.45)
+		local p = T / 0.45 - step
+		local a = RB[(step - 1) % n + 1]
+		local b = RB[step % n + 1]
+		local k = sm(p / 0.2)                      -- transition vive puis immobile : mouvement saccadé
+		local function v(i) return lerp(a[i], b[i], k) end
+		P.rs = A(v(1), 0, v(2))
+		P.ls = A(v(3), 0, -v(4))
+		P.nk = A(0, v(5), 0)
+		P.rt = A(0, v(6), 0)
+		P.rh, P.lh = A(0, 0, 0.1), A(0, 0, -0.1)
+		return 0, 0, 0, 0, 0
 	end)
-	add("Applaudir", 2.6, function(u, T, P)
-		local s = 0.5 + 0.5 * sin(T * 18)
-		P.rs, P.ls = A(1.45, 0, -(0.05 + 0.25 * s)), A(1.45, 0, 0.05 + 0.25 * s)
-		P.nk = A(-0.1 * sin(T * 6), 0, 0)
-		return abs(sin(T * 4)) * 0.12, 0, 0
+
+	add("Glissade", 3.6, function(u, T, P)
+		local ph = 2 * pi * u
+		local vel = cos(ph)                        -- vitesse latérale : le corps glisse, les jambes font semblant de marcher
+		local a = sin(T * 9) * (0.12 + 0.4 * abs(vel))
+		P.rh, P.lh = A(a, 0, 0.05), A(-a, 0, -0.05)
+		P.rs = A(0.2, 0, 1.2 + 0.15 * sin(T * 3))
+		P.ls = A(0.9, 0, -0.2)
+		P.nk = A(0.1, 0.25 * vel, 0.1 * sin(T * 3))
+		P.rt = A(0.12, 0, 0)
+		return 0.02, 0, 0, 0.42 * sin(ph), -0.07 * vel
 	end)
-	add("Biceps", 2.6, function(u, T, P)
-		local th = 1.5 + 0.35 * sin(T * 9)
-		P.rs, P.ls = A(0, 0, th), A(0, 0, -(1.5 + 0.35 * sin(T * 9 + 1.2)))
-		P.rt = A(0, sin(T * 4.5) * 0.25, 0)
-		P.rh, P.lh = A(0, 0, 0.2), A(0, 0, -0.2)
-		return abs(sin(T * 4.5)) * 0.1, 0, 0
+
+	add("Karaté", 3.4, function(u, T, P)
+		local st = seg(u, 0.0, 0.12) * (1 - seg(u, 0.88, 1.0))   -- posture de combat
+		local pr = pulse(u, 0.14, 0.2, 0.26, 0.34)               -- direct du droit
+		local pl = pulse(u, 0.34, 0.4, 0.46, 0.54)               -- direct du gauche
+		local kk = pulse(u, 0.58, 0.66, 0.74, 0.84)              -- coup de pied
+		local rx, rz = 1.0 + 0.57 * pr - 1.3 * pl, 0.4 - 0.37 * pr + 0.25 * pl
+		local lx, lz = 1.0 + 0.57 * pl - 1.3 * pr, 0.4 - 0.37 * pl + 0.25 * pr
+		P.rs = A(rx * st, 0, 0.08 + (rz - 0.08) * st)
+		P.ls = A(lx * st, 0, -(0.08 + (lz - 0.08) * st))
+		P.rt = A(0.35 * kk - 0.1 * st, 0.5 * (pr - pl), 0)
+		P.nk = A(0, -0.5 * (pr - pl), 0)
+		P.rh = A(1.55 * kk, 0, 0.38 * st * (1 - kk))
+		P.lh = A(0, 0, -0.38 * st)
+		return 0.15 * kk, 0, 0, 0, 0
 	end)
-	add("Salto", 1.5, function(u, T, P)
-		P.rs, P.ls = A(2.6, 0, 0.1), A(2.6, 0, -0.1)
-		P.rh, P.lh = A(0.9, 0, 0), A(0.9, 0, 0)
-		return sin(pi * u) * 1.5, 0, -2 * pi * (u * u * (3 - 2 * u))
+
+	add("Kamehameha", 4.0, function(u, T, P)
+		local ch = seg(u, 0.05, 0.4) * (1 - seg(u, 0.52, 0.58))   -- charge : les mains reviennent sur la hanche
+		local fi = seg(u, 0.52, 0.6) * (1 - seg(u, 0.86, 0.97))   -- tir : bras tendus
+		local c = ch * (1 - fi)
+		local shake = sin(T * 55) * 0.025 * ch                    -- tremblement qui monte avec la charge
+		P.rs = A(-0.6 * c + 1.57 * fi, 0, 0.08 + 0.22 * c + 0.02 * fi)
+		P.ls = A(-0.5 * c + 1.57 * fi, 0, -0.08 + 0.63 * c - 0.02 * fi)
+		P.rt = A(0.12 * ch - 0.3 * fi, -0.4 * c, 0)
+		P.nk = A(0.1 * fi, -0.3 * c, 0)
+		local legs = max(ch, fi)
+		P.rh, P.lh = A(0, 0, 0.4 * legs), A(0, 0, -0.4 * legs)
+		return abs(shake) * 2, 0, 0, shake + 0.02 * sin(T * 70) * fi, 0
 	end)
-	add("Non !", 2.4, function(u, T, P)
-		P.rs = A(-0.3, 0, 2.6 + sin(T * 14) * 0.25)
-		P.ls = A(0, 0, -0.1)
-		P.nk = A(0, sin(T * 10) * 0.5, 0)
-		P.rt = A(0, sin(T * 10) * 0.1, 0)
-		return 0, 0, 0
+
+	add("Salto arrière", 2.2, function(u, T, P)
+		local w = pulse(u, 0.0, 0.14, 0.14, 0.24)                  -- élan : bras en arrière, buste penché
+		local air = (u > 0.24 and u < 0.76)
+		local v = max(0, min(1, (u - 0.24) / 0.52))                -- avancement du salto 0..1
+		local tuck = sm(min(1, sin(pi * v) * 1.5))                 -- groupé au sommet
+		local up = pulse(u, 0.2, 0.3, 0.7, 0.78)                   -- bras au-dessus de la tête à l'impulsion
+		local land = seg(u, 0.76, 0.84) * (1 - seg(u, 0.92, 1.0))  -- réception bras écartés
+		local ax = -1.0 * w + (2.7 - 1.0 * tuck) * up
+		P.rs = A(ax, 0, 0.1 + 0.3 * land)
+		P.ls = A(ax, 0, -(0.1 + 0.3 * land))
+		P.rh, P.lh = A(1.5 * tuck, 0, 0), A(1.5 * tuck, 0, 0)
+		P.rt = A(-0.3 * w, 0, 0)
+		local dy = air and (4 * v * (1 - v) * 1.4) or 0
+		return dy, 0, 2 * pi * sm(v), 0, 0
 	end)
-	add("Jumping jacks", 3.0, function(u, T, P)
-		local s = 0.5 - 0.5 * cos(T * 9)
-		P.rs, P.ls = A(0, 0, 0.08 + 2.75 * s), A(0, 0, -(0.08 + 2.75 * s))
-		P.rh, P.lh = A(0, 0, 0.5 * s), A(0, 0, -0.5 * s)
-		return abs(sin(T * 4.5)) * 0.55, 0, 0
+
+	add("Pirouette", 2.4, function(u, T, P)
+		local w = pulse(u, 0.0, 0.18, 0.18, 0.3)                   -- élan : bras ouverts
+		local sp = seg(u, 0.2, 0.8)                                -- deux tours, départ et arrêt en douceur
+		local pose = pulse(u, 0.12, 0.28, 0.72, 0.88)              -- bras arrondis au-dessus de la tête
+		P.rs = A(0.5 * pose, 0, 0.1 + 0.8 * w * (1 - pose) + 2.5 * pose)
+		P.ls = A(0.5 * pose, 0, -(0.1 + 0.8 * w * (1 - pose) + 2.5 * pose))
+		P.rh = A(0.9 * pose, 0, 0.55 * pose)                       -- jambe levée
+		P.lh = A(0, 0, -0.05)
+		return 0.3 * pose, 4 * pi * sp, 0, 0, 0
 	end)
-	add("Marche", 3.0, function(u, T, P)
-		local a = sin(T * 7) * 0.8
-		P.rh, P.lh = A(a, 0, 0), A(-a, 0, 0)
-		P.rs, P.ls = A(-a * 0.8, 0, 0.08), A(a * 0.8, 0, -0.08)
-		P.rt = A(0, a * 0.12, 0)
-		return abs(cos(T * 7)) * 0.08, 0, 0
+
+	add("Révérence", 3.4, function(u, T, P)
+		local fl = pulse(u, 0.0, 0.12, 0.12, 0.3)                  -- le bras droit s'ouvre largement
+		local bow = seg(u, 0.14, 0.4) * (1 - seg(u, 0.6, 0.86))    -- inclinaison, tenue, redressement
+		P.rt = A(-1.15 * bow, 0, 0)
+		P.rs = A(0.4 * fl + 1.0 * bow, 0, 0.08 + 1.25 * fl - 0.18 * bow)
+		P.ls = A(-0.6 * bow, 0, -0.08 - 0.05 * bow)                -- main gauche dans le dos
+		P.nk = A(0.3 * bow, 0, 0)
+		P.rh, P.lh = A(-0.25 * bow, 0, 0.1 * bow), A(0.05 * bow, 0, -0.05 * bow)
+		return 0, 0, 0, 0, 0
 	end)
-	add("Zombie", 3.0, function(u, T, P)
-		local w = sin(T * 3) * 0.08
-		P.rs, P.ls = A(1.5 + w, 0, 0.05), A(1.5 - w, 0, -0.05)
-		P.nk = A(-0.35, sin(T * 2) * 0.25, 0)
-		P.rt = A(-0.25 + w * 0.6, sin(T * 2) * 0.15, 0)
-		local a = sin(T * 3.5) * 0.35
-		P.rh, P.lh = A(a, 0, 0), A(-a, 0, 0)
-		return abs(sin(T * 3.5)) * 0.06, 0, 0
+
+	add("Applaudir", 3.2, function(u, T, P)
+		local ph = T * 17
+		local open = 0.5 + 0.5 * cos(ph)           -- 1 = mains ouvertes · 0 = elles se touchent
+		P.rs = A(1.45, 0, -0.05 + 0.45 * open)
+		P.ls = A(1.45, 0, 0.05 - 0.45 * open)
+		P.nk = A(0.12 * sin(ph * 0.5), 0, 0)
+		P.rt = A(-0.12 + 0.05 * open, 0, 0)
+		return 0.07 * (1 - open) * (1 - open), 0, 0, 0, 0
 	end)
-	add("Chercher", 3.0, function(u, T, P)
-		P.rs = A(2.5, 0, -0.1)
-		P.ls = A(0, 0, -0.5)
-		P.nk = A(0, sin(T * 2.2) * 0.8, 0)
-		P.rt = A(0, sin(T * 2.2) * 0.2, 0)
-		return 0, 0, 0
+
+	add("Champion", 3.2, function(u, T, P)
+		local p1 = pulse(u, 0.05, 0.14, 0.2, 0.28)   -- poing droit vers le ciel (1)
+		local p2 = pulse(u, 0.3, 0.38, 0.44, 0.52)   -- (2)
+		local both = pulse(u, 0.56, 0.66, 0.9, 0.98) -- les deux bras en V
+		local r = max(p1, p2, both)
+		P.rs = A(0.25 * r, 0, 0.08 + 2.4 * r + sin(T * 18) * 0.07 * both)
+		P.ls = A(0, 0, -(0.08 + 2.55 * both))
+		P.nk = A(0.25 * both - 0.12 * max(p1, p2), 0, 0)
+		P.rt = A(0.15 * both, 0, 0.04 * sin(T * 4) * both)
+		P.rh, P.lh = A(0, 0, 0.2 * both), A(0, 0, -0.2 * both)
+		return hop(u, 0.6, 0.8, 0.7), 0, 0, 0, 0
 	end)
-	add("Super-héros", 2.4, function(u, T, P)
-		P.rs = A(2.9, 0, 0.05)
-		P.ls = A(0, 0, -0.45)
-		P.rh, P.lh = A(0, 0, 0.15), A(0, 0, -0.15)
-		P.rt = A(-0.25, 0, 0)
-		P.nk = A(0.2, 0, 0)
-		return 0.35 + sin(T * 3) * 0.12, 0, 0
+
+	add("Zombie", 3.4, function(u, T, P)
+		local w = sin(T * 3) * 0.07
+		local sway = sin(T * 1.6)
+		P.rs, P.ls = A(1.5 + w, 0, 0.06), A(1.5 - w, 0, -0.06)
+		P.nk = A(-0.35, sway * 0.28, sin(T * 1.1) * 0.22)
+		P.rt = A(-0.28 + w * 0.5, sway * 0.16, 0)
+		local a = sin(T * 3.2) * 0.38
+		P.rh, P.lh = A(a, 0, 0.05), A(-a, 0, -0.05)
+		return abs(sin(T * 3.2)) * 0.05, 0, 0, 0.1 * sway, 0.07 * sway
 	end)
-	add("Coup de pied", 2.4, function(u, T, P)
-		local s = max(0, sin(T * 6))
-		P.rh = A(1.5 * s, 0, 0)
-		P.rs, P.ls = A(1.2, 0, 0.3), A(1.0, 0, -0.3)
-		P.rt = A(0.35 * s, 0, 0)
-		return s * 0.08, 0, 0
+
+	add("Bof", 2.6, function(u, T, P)
+		local s1 = pulse(u, 0.08, 0.2, 0.4, 0.5)
+		local s2 = pulse(u, 0.52, 0.62, 0.82, 0.92)
+		local k = max(s1, s2 * 0.85)
+		local tilt = 0.26 * (s1 - s2 * 0.85)       -- la tête penche d'un côté, puis de l'autre
+		P.rs = A(0.35 * k, 0, 0.08 + 0.75 * k)     -- bras ouverts, paumes vers le haut
+		P.ls = A(0.35 * k, 0, -(0.08 + 0.75 * k))
+		P.nk = A(0.05 * k, sin(T * 6) * 0.2 * k, tilt)
+		P.rt = A(0, 0, -tilt * 0.3)
+		return 0.03 * k, 0, 0, 0, 0
 	end)
+
+	add("Jumping jacks", 3.2, function(u, T, P)
+		local w = T * 9
+		local s = 0.5 - 0.5 * cos(w)               -- 0 = fermé · 1 = ouvert
+		local e = s * s * (3 - 2 * s)
+		P.rs, P.ls = A(0, 0, 0.08 + 2.85 * e), A(0, 0, -(0.08 + 2.85 * e))
+		P.rh, P.lh = A(0, 0, 0.5 * e), A(0, 0, -0.5 * e)
+		P.nk = A(0.12 * e, 0, 0)
+		return 0.5 * abs(sin(w)), 0, 0, 0, 0
+	end)
+
+	add("Chercher", 3.4, function(u, T, P)
+		local look = sin(pi * 0.5 * sin(T * 1.9))  -- la tête s'attarde aux extrémités
+		P.rs = A(2.55, 0, -0.12)                   -- main en visière
+		P.nk = A(0.05, 0.85 * look, 0)
+		P.rt = A(0, 0.25 * look, 0)
+		return 0, 0, 0, 0.05 * look, 0
+	end)
+
 	Library.PreviewEmotes = E
 	Library.PreviewEmoteWave = Library.PreviewEmoteWave or 2.0
 	Library.PreviewEmoteRest = Library.PreviewEmoteRest or 0.35
@@ -10816,16 +10953,17 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 		end
 		if guard >= 8 then st.T = 0 end
 	end
-	-- remplit P pour l'emote en cours ; retourne décalage vertical, tour (Y), salto (X) et l'enveloppe 0..1 (fondu entrée / sortie)
+	-- remplit P pour l'emote en cours ; retourne : décalage vertical, tour (Y), salto (X), enveloppe 0..1 (fondu entrée / sortie),
+	-- glissement latéral, inclinaison de côté
 	function Library._emoPose(st, P)
 		local em = Library.PreviewEmotes[st.idx]
-		if st.stage ~= 4 or not em then return 0, 0, 0, 0 end
+		if st.stage ~= 4 or not em then return 0, 0, 0, 0, 0, 0 end
 		local d, T = em.Dur, st.T
 		local env = max(0, min(1, T / 0.3, (d - T) / 0.3))
 		env = env * env * (3 - 2 * env)
-		local ok, dy, spin, flip = pcall(em.Fn, T / d, T, P)
-		if not ok then return 0, 0, 0, 0 end
-		return (dy or 0) * env, spin or 0, flip or 0, env
+		local ok, dy, spin, flip, dx, roll = pcall(em.Fn, T / d, T, P)
+		if not ok then return 0, 0, 0, 0, 0, 0 end
+		return (dy or 0) * env, spin or 0, flip or 0, env, (dx or 0) * env, (roll or 0) * env
 	end
 end
 Library._initEmotes()
@@ -11119,7 +11257,7 @@ function Block:CreatePreview3D(o)
 		Size = UDim2.new(1, 0, 1, 0), Visible = false, ZIndex = 5 }, ov)
 
 	-- séquenceur d'emotes (voir Library._emoStep) : un seul local, tout le reste dans cette table
-	local EMO = { stage = 1, T = 0, idx = 1, wv = 1, y = 0, spin = 0, flip = 0, lbl = "", base = {}, em = {} }
+	local EMO = { stage = 1, T = 0, idx = 1, wv = 1, y = 0, spin = 0, flip = 0, x = 0, roll = 0, ax = 0, ar = 0, lbl = "", base = {}, em = {} }
 	EMO.label = new("TextLabel", { BackgroundTransparency = 1, Font = F_MED, TextSize = 11, Text = "", TextColor3 = loadLbl.TextColor3,
 		AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -6), Size = UDim2.new(1, -12, 0, 14),
 		Visible = false, ZIndex = 5 }, ov)
@@ -11299,11 +11437,11 @@ function Block:CreatePreview3D(o)
 			-- emote en cours : on fond la pose de base vers celle de l'emote
 			if opt.Emotes and EMO.stage == 4 then
 				Pm.rs, Pm.ls, Pm.rh, Pm.lh, Pm.nk, Pm.rt = A(0, 0, 0.08), A(0, 0, -0.08), ID, ID, ID, ID
-				local dy, spin, flip, env = Library._emoPose(EMO, Pm)
-				EMO.y, EMO.spin, EMO.flip = dy, spin, flip
+				local dy, spin, flip, env, dx, roll = Library._emoPose(EMO, Pm)
+				EMO.y, EMO.spin, EMO.flip, EMO.x, EMO.roll = dy, spin, flip, dx or 0, roll or 0
 				for k, cf in pairs(Pm) do B[k] = B[k]:Lerp(cf, env) end
 			else
-				EMO.y, EMO.spin, EMO.flip = 0, 0, 0
+				EMO.y, EMO.spin, EMO.flip, EMO.x, EMO.roll = 0, 0, 0, 0, 0
 			end
 			local inv = B.rt:Inverse()   -- les jambes compensent l'inclinaison / la torsion du torse : elles restent d'aplomb
 			rot("RootJoint", B.rt)
@@ -11589,9 +11727,10 @@ function Block:CreatePreview3D(o)
 			local y, finished = jumpOffset()
 			if finished then jumpT0, y = nil, 0 end
 			y = y + wy + EMO.y
-			if rig and avBase and (y ~= avY or EMO.spin ~= avSpin or EMO.flip ~= avFlip) then
-				avY, avSpin, avFlip = y, EMO.spin, EMO.flip
-				rig:PivotTo(avBase * CFrame.new(0, y, 0) * CFrame.Angles(EMO.flip, EMO.spin, 0))
+			local ex, er = EMO.x or 0, EMO.roll or 0
+			if rig and avBase and (y ~= avY or EMO.spin ~= avSpin or EMO.flip ~= avFlip or ex ~= EMO.ax or er ~= EMO.ar) then
+				avY, avSpin, avFlip, EMO.ax, EMO.ar = y, EMO.spin, EMO.flip, ex, er
+				rig:PivotTo(avBase * CFrame.new(ex, y, 0) * CFrame.Angles(EMO.flip, EMO.spin, er))
 			end
 			local em = (opt.Emotes and EMO.stage == 4) and Library.PreviewEmotes[EMO.idx] or nil
 			local lblTxt = em and ("Emote " .. EMO.idx .. "/" .. #Library.PreviewEmotes .. "  ·  " .. em.Name) or ""
