@@ -10674,6 +10674,7 @@ end
 --   (rotations dans le repère du parent) ; Fn retourne : décalage vertical, tour sur soi (rad, axe Y), salto (rad, axe X),
 --   glissement latéral (studs), inclinaison de côté (rad, axe Z) — les deux derniers sont facultatifs.
 --   17 emotes refaites : courbes douces (anticipation, dépassement, tenue), corps entier (hanches, torse, tête, glissement).
+--   Bras : ils montent par l'AVANT puis s'écartent en V (outils RAISE / fwdR / fwdL) : plus aucun bras ne traverse la tête ou le torse.
 --   Library.PreviewEmoteWave = durée d'un coucou (2 s) · Library.PreviewEmoteRest = pause entre les deux coucous (0,35 s).
 -- ============================================================================
 Library._initEmotes = function()   -- dans une fonction : ses variables locales n'entrent pas dans celles du chunk principal
@@ -10701,15 +10702,48 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 		return 4 * v * (1 - v) * h
 	end
 
+	-- ---- BRAS (R6) : pourquoi les anciens bras rentraient dans le corps ----
+	-- L'épaule R6 est au bord du torse. Lever le bras sur le côté AU-DELÀ de l'horizontale (angle Z > ~1,6 rad) le fait pivoter DANS
+	-- la tête et le torse. Règle : un bras qui monte passe par l'AVANT (rotation autour de l'axe X du torse : il reste dans la
+	-- colonne x ∈ [1, 2], à côté de la tête, jamais dedans), puis s'écarte un peu sur le côté (« V »). Tout est vérifié par un test
+	-- de collision (bras / tête / torse / jambes / autre bras) sur chaque image de chaque emote.
+	--   RAISE(e, lean) : e = 0 bras le long du corps → 1 bras levés en V (lean = écart du V en rad). Retourne f (avant), l (côté).
+	--   armR / armL    : CFrame d'épaule droite / gauche pour un bras levé de e (0..1).
+	--   fwdR / fwdL    : bras vers l'avant (f = hauteur : 1,57 = horizontal), balayé vers l'intérieur (yaw > 0) ou l'extérieur (yaw < 0).
+	local function RAISE(e, lean)
+		if e < 0 then e = 0 elseif e > 1.03 then e = 1.03 end
+		lean = lean or 0.5
+		local f = 2.95 * e ^ 1.5
+		local l = 0.08 + (lean - 0.08) * e + 0.8 * sin(pi * min(1, e)) * (1 - 0.5 * e)
+		return f, l
+	end
+	local function armR(e, lean) local f, l = RAISE(e, lean) return A(f, 0, l) end
+	local function armL(e, lean) local f, l = RAISE(e, lean) return A(f, 0, -l) end
+	local function fwdR(f, yaw, l) return A(0, yaw, 0) * A(f, 0, l or 0.04) end
+	local function fwdL(f, yaw, l) return A(0, -yaw, 0) * A(f, 0, -(l or 0.04)) end
+
+	-- Pose de base des bras (coucou + bienvenue), utilisée par l'aperçu : wv = coucou (0..1), air = bras levés de la bienvenue (0..1).
+	-- Le bras du coucou monte par l'avant puis ondule sur le côté, à côté de la tête (plus jamais dedans).
+	function Library._baseArms(t, wv, air, wave)
+		local ew = wave and (wv or 1) or 0
+		air = air or 0
+		local eR = ew + (1 - ew) * air
+		local f, l = RAISE(eR, 0.55)
+		l = l + sin(t * 8) * 0.28 * ew * (1 - air)
+		local f2, l2 = RAISE(air, 0.55)
+		return A(f, 0, l), A(f2, 0, -l2)
+	end
+
 	-- Chaque Fn(u, T, P) remplit P (rs / ls = épaules, rh / lh = hanches, nk = cou, rt = torse) et retourne :
 	--   décalage vertical, tour sur soi (Y), salto (X), glissement latéral (dx), inclinaison de côté (roll)
 
 	add("Saut de joie", 2.4, function(u, T, P)
 		local wind = pulse(u, 0.0, 0.16, 0.16, 0.24)                                      -- élan : bras en arrière
-		local up = pulse(u, 0.2, 0.3, 0.6, 0.7) + pulse(u, 0.64, 0.72, 0.84, 0.92) * 0.9   -- bras en V pendant les sauts
+		local up = min(1, pulse(u, 0.2, 0.3, 0.6, 0.7) + pulse(u, 0.64, 0.72, 0.84, 0.92) * 0.9)   -- bras en V pendant les sauts
 		local fl = sin(T * 22) * 0.07 * up
-		P.rs = A(-0.9 * wind, 0, 0.12 + 2.65 * up + fl)
-		P.ls = A(-0.9 * wind, 0, -(0.12 + 2.65 * up - fl))
+		local f, l = RAISE(up, 0.6)
+		P.rs = A(-0.9 * wind + f, 0, l + fl)
+		P.ls = A(-0.9 * wind + f, 0, -(l - fl))
 		P.rh, P.lh = A(0, 0, 0.32 * up), A(0, 0, -0.32 * up)
 		P.rt = A(-0.28 * wind + 0.12 * up, 0, 0)
 		P.nk = A(0.28 * up - 0.15 * wind, 0, 0)
@@ -10719,8 +10753,8 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 	add("Disco", 3.4, function(u, T, P)
 		local s = sin(T * 5.2)
 		local k, m = sm(0.5 + 0.5 * s), sm(0.5 - 0.5 * s)   -- k : bras droit vers le ciel · m : bras gauche
-		P.rs = A(0.3 * k, 0, lerp(0.15, 2.55, k))
-		P.ls = A(0.3 * m, 0, -lerp(0.15, 2.55, m))
+		P.rs = armR(k, 0.75)                                 -- le bras monte par l'avant, doigt vers le plafond
+		P.ls = armL(m, 0.75)
 		P.rt = A(0, 0.32 * s, 0.1 * s)
 		P.nk = A(0, -0.28 * s, 0)
 		P.rh, P.lh = A(0, 0, 0.24 + 0.08 * s), A(0, 0, -(0.24 - 0.08 * s))
@@ -10729,9 +10763,9 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 
 	add("Floss", 3.6, function(u, T, P)
 		local s = sin(T * 8.4)
-		local psi = 0.95 * s                       -- les deux bras balayent le devant du corps, les hanches vont à l'opposé
-		P.rs = A(0.85, 0, 0.12 - psi)
-		P.ls = A(0.85, 0, -(0.12 + psi))
+		local sw = 0.5 * s                         -- les deux bras balayent le devant du corps du même côté, les hanches vont à l'opposé
+		P.rs = fwdR(0.95, sw, 0.1)
+		P.ls = fwdL(0.95, -sw, 0.1)
 		P.rt = A(0, 0.28 * s, 0)
 		P.nk = A(0, -0.22 * s, 0)
 		P.rh, P.lh = A(0, 0, 0.12), A(0, 0, -0.12)
@@ -10740,9 +10774,10 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 
 	add("Dab", 2.8, function(u, T, P)
 		local k = back(seg(u, 0.1, 0.28)) * (1 - seg(u, 0.78, 0.94))   -- arrive d'un coup (pop), tient, relâche
-		P.rs = A(0.1 * k, 0, 0.08 + 2.32 * k)                          -- bras droit tendu en diagonale
-		P.ls = A(2.25 * k, 0, -0.08 + 0.63 * k)                        -- bras gauche replié devant le visage
-		P.nk = A(-0.5 * k, 0.75 * k, -0.15 * k)                        -- tête plongée dans le bras
+		local kc = min(1, k)
+		P.rs = armR(kc, 0.9)                                           -- bras droit tendu en diagonale vers le haut
+		P.ls = fwdL(0.8 + 1.35 * kc, 0.7 * kc, 0.04)                   -- bras gauche levé devant le visage, en travers
+		P.nk = A(-0.35 * k, 0.6 * k, -0.15 * k)                        -- tête plongée vers le bras
 		P.rt = A(-0.18 * k, -0.2 * k, 0)
 		P.rh, P.lh = A(0, 0, 0.15 * k), A(0, 0, -0.15 * k)
 		return 0, 0, 0, 0, 0
@@ -10750,11 +10785,11 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 
 	-- poses figées du robot : { bras D (avant, côté), bras G (avant, côté), tête (Y), torse (Y) }
 	local RB = {
-		{ 1.57, 0, 0, 1.57, 0.7, 0.25 },
-		{ 0, 1.57, 1.57, 0, -0.7, -0.25 },
+		{ 1.57, 0, 0, 1.1, 0.7, 0.25 },
+		{ 0, 1.1, 1.57, 0, -0.7, -0.25 },
 		{ 1.57, 0, 1.57, 0, 0, 0 },
 		{ 3.0, 0.05, 0, 0.35, 0.5, 0.15 },
-		{ 0, 1.57, 0, 1.57, 0, 0 },
+		{ 0, 1.1, 0, 1.1, 0, 0 },
 		{ 2.3, 0, 2.3, 0, -0.5, 0 },
 		{ 1.4, -0.3, 0.6, 0.9, 0.7, 0.3 },
 		{ 0, 0.08, 0, 0.08, 0, 0 },
@@ -10780,7 +10815,7 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 		local vel = cos(ph)                        -- vitesse latérale : le corps glisse, les jambes font semblant de marcher
 		local a = sin(T * 9) * (0.12 + 0.4 * abs(vel))
 		P.rh, P.lh = A(a, 0, 0.05), A(-a, 0, -0.05)
-		P.rs = A(0.2, 0, 1.2 + 0.15 * sin(T * 3))
+		P.rs = A(0.2, 0, 0.95 + 0.15 * sin(T * 3))
 		P.ls = A(0.9, 0, -0.2)
 		P.nk = A(0.1, 0.25 * vel, 0.1 * sin(T * 3))
 		P.rt = A(0.12, 0, 0)
@@ -10805,11 +10840,11 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 
 	add("Kamehameha", 4.0, function(u, T, P)
 		local ch = seg(u, 0.05, 0.4) * (1 - seg(u, 0.52, 0.58))   -- charge : les mains reviennent sur la hanche
-		local fi = seg(u, 0.52, 0.6) * (1 - seg(u, 0.86, 0.97))   -- tir : bras tendus
+		local fi = seg(u, 0.52, 0.6) * (1 - seg(u, 0.86, 0.97))   -- tir : bras tendus, mains jointes devant
 		local c = ch * (1 - fi)
 		local shake = sin(T * 55) * 0.025 * ch                    -- tremblement qui monte avec la charge
-		P.rs = A(-0.6 * c + 1.57 * fi, 0, 0.08 + 0.22 * c + 0.02 * fi)
-		P.ls = A(-0.5 * c + 1.57 * fi, 0, -0.08 + 0.63 * c - 0.02 * fi)
+		P.rs = A(-0.6 * c, 0, 0.08 + 0.22 * c):Lerp(fwdR(1.57, 0.42, 0.04), fi)
+		P.ls = A(-0.5 * c, 0, -(0.08 + 0.4 * c)):Lerp(fwdL(1.57, 0.42, 0.04), fi)
 		P.rt = A(0.12 * ch - 0.3 * fi, -0.4 * c, 0)
 		P.nk = A(0.1 * fi, -0.3 * c, 0)
 		local legs = max(ch, fi)
@@ -10837,8 +10872,10 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 		local w = pulse(u, 0.0, 0.18, 0.18, 0.3)                   -- élan : bras ouverts
 		local sp = seg(u, 0.2, 0.8)                                -- deux tours, départ et arrêt en douceur
 		local pose = pulse(u, 0.12, 0.28, 0.72, 0.88)              -- bras arrondis au-dessus de la tête
-		P.rs = A(0.5 * pose, 0, 0.1 + 0.8 * w * (1 - pose) + 2.5 * pose)
-		P.ls = A(0.5 * pose, 0, -(0.1 + 0.8 * w * (1 - pose) + 2.5 * pose))
+		local f, l = RAISE(pose, 0.3)
+		l = min(1.0, l + 0.8 * w * (1 - pose))
+		P.rs = A(f, 0, l)
+		P.ls = A(f, 0, -l)
 		P.rh = A(0.9 * pose, 0, 0.55 * pose)                       -- jambe levée
 		P.lh = A(0, 0, -0.05)
 		return 0.3 * pose, 4 * pi * sp, 0, 0, 0
@@ -10848,18 +10885,19 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 		local fl = pulse(u, 0.0, 0.12, 0.12, 0.3)                  -- le bras droit s'ouvre largement
 		local bow = seg(u, 0.14, 0.4) * (1 - seg(u, 0.6, 0.86))    -- inclinaison, tenue, redressement
 		P.rt = A(-1.15 * bow, 0, 0)
-		P.rs = A(0.4 * fl + 1.0 * bow, 0, 0.08 + 1.25 * fl - 0.18 * bow)
+		P.rs = A(0.4 * fl + 1.0 * bow, 0, 0.08 + 1.1 * fl - 0.18 * bow)
 		P.ls = A(-0.6 * bow, 0, -0.08 - 0.05 * bow)                -- main gauche dans le dos
 		P.nk = A(0.3 * bow, 0, 0)
 		P.rh, P.lh = A(-0.25 * bow, 0, 0.1 * bow), A(0.05 * bow, 0, -0.05 * bow)
-		return 0, 0, 0, 0, 0
+		return -(1 - cos(1.15 * bow)), 0, 0, 0, 0                  -- le buste pivote : on descend le corps pour garder les pieds au sol
 	end)
 
 	add("Applaudir", 3.2, function(u, T, P)
 		local ph = T * 17
 		local open = 0.5 + 0.5 * cos(ph)           -- 1 = mains ouvertes · 0 = elles se touchent
-		P.rs = A(1.45, 0, -0.05 + 0.45 * open)
-		P.ls = A(1.45, 0, 0.05 - 0.45 * open)
+		local yaw = 0.52 - 0.4 * open              -- les bras tendus devant se rejoignent au milieu
+		P.rs = fwdR(1.4, yaw, 0.04)
+		P.ls = fwdL(1.4, yaw, 0.04)
 		P.nk = A(0.12 * sin(ph * 0.5), 0, 0)
 		P.rt = A(-0.12 + 0.05 * open, 0, 0)
 		return 0.07 * (1 - open) * (1 - open), 0, 0, 0, 0
@@ -10870,8 +10908,10 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 		local p2 = pulse(u, 0.3, 0.38, 0.44, 0.52)   -- (2)
 		local both = pulse(u, 0.56, 0.66, 0.9, 0.98) -- les deux bras en V
 		local r = max(p1, p2, both)
-		P.rs = A(0.25 * r, 0, 0.08 + 2.4 * r + sin(T * 18) * 0.07 * both)
-		P.ls = A(0, 0, -(0.08 + 2.55 * both))
+		local f, l = RAISE(r, 0.5)
+		local f2, l2 = RAISE(both, 0.55)
+		P.rs = A(f, 0, l + sin(T * 18) * 0.07 * both)
+		P.ls = A(f2, 0, -l2)
 		P.nk = A(0.25 * both - 0.12 * max(p1, p2), 0, 0)
 		P.rt = A(0.15 * both, 0, 0.04 * sin(T * 4) * both)
 		P.rh, P.lh = A(0, 0, 0.2 * both), A(0, 0, -0.2 * both)
@@ -10893,9 +10933,9 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 		local s1 = pulse(u, 0.08, 0.2, 0.4, 0.5)
 		local s2 = pulse(u, 0.52, 0.62, 0.82, 0.92)
 		local k = max(s1, s2 * 0.85)
-		local tilt = 0.26 * (s1 - s2 * 0.85)       -- la tête penche d'un côté, puis de l'autre
-		P.rs = A(0.35 * k, 0, 0.08 + 0.75 * k)     -- bras ouverts, paumes vers le haut
-		P.ls = A(0.35 * k, 0, -(0.08 + 0.75 * k))
+		local tilt = 0.2 * (s1 - s2 * 0.85)       -- la tête penche d'un côté, puis de l'autre
+		P.rs = A(0.35 * k, 0, 0.08 + 0.65 * k)     -- bras ouverts, paumes vers le haut
+		P.ls = A(0.35 * k, 0, -(0.08 + 0.65 * k))
 		P.nk = A(0.05 * k, sin(T * 6) * 0.2 * k, tilt)
 		P.rt = A(0, 0, -tilt * 0.3)
 		return 0.03 * k, 0, 0, 0, 0
@@ -10905,7 +10945,8 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 		local w = T * 9
 		local s = 0.5 - 0.5 * cos(w)               -- 0 = fermé · 1 = ouvert
 		local e = s * s * (3 - 2 * s)
-		P.rs, P.ls = A(0, 0, 0.08 + 2.85 * e), A(0, 0, -(0.08 + 2.85 * e))
+		local f, l = RAISE(e, 0.5)
+		P.rs, P.ls = A(f, 0, l), A(f, 0, -l)
 		P.rh, P.lh = A(0, 0, 0.5 * e), A(0, 0, -0.5 * e)
 		P.nk = A(0.12 * e, 0, 0)
 		return 0.5 * abs(sin(w)), 0, 0, 0, 0
@@ -10913,7 +10954,7 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 
 	add("Chercher", 3.4, function(u, T, P)
 		local look = sin(pi * 0.5 * sin(T * 1.9))  -- la tête s'attarde aux extrémités
-		P.rs = A(2.55, 0, -0.12)                   -- main en visière
+		P.rs = fwdR(2.35, 0.45, 0.04)              -- main en visière devant le front
 		P.nk = A(0.05, 0.85 * look, 0)
 		P.rt = A(0, 0.25 * look, 0)
 		return 0, 0, 0, 0.05 * look, 0
@@ -11419,13 +11460,7 @@ function Block:CreatePreview3D(o)
 			local B, Pm, ID = EMO.base, EMO.em, CFrame.identity
 			-- pose de base : coucou en continu (pondéré par EMO.wv : 0 pendant la pause et l'emote) + bras levés / accroupi de la bienvenue
 			local wv = opt.Emotes and EMO.wv or 1
-			if opt.Wave then
-				local thR = 0.08 + ((2.55 + math.sin(t * 8) * 0.3) - 0.08) * wv
-				B.rs = A(-0.2 * wv * (1 - air), 0, thR + (2.85 - thR) * air)
-			else
-				B.rs = A(0, 0, 0.08 + 2.77 * air)
-			end
-			B.ls = A(0, 0, -(0.08 + 2.77 * air))
+			B.rs, B.ls = Library._baseArms(t, wv, air, opt.Wave)   -- bras montés par l'avant : ne traversent plus la tête
 			B.rt = A(-0.2 * c + math.sin(t * 2) * 0.01, 0, 0)
 			B.nk = A(math.sin(t * 2) * 0.04, 0, math.sin(t * 3.5) * 0.04)
 			if opt.Animate and not opt.Wave and air < 0.01 then
