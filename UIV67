@@ -12316,7 +12316,7 @@ function Library._rollText(lbl)
 		lastT = now
 		ivl = ivl and (ivl + (gap - ivl) * 0.5) or 0.5
 		local fast = ivl < 0.04
-		local dur = math.clamp(ivl * 0.85, 0.12, 0.45)
+		local dur = math.clamp(ivl * 0.4, 0.1, 0.22)   -- court : à 2 changements/s, 0,45 s de rouleau = chiffres flous ~85 % du temps
 		local canAnim = Library.Animations ~= false and host.AbsoluteSize.X > 0 and #cur > 0 and not plain and not fast
 		local xs, total, cw = positions(chars)
 		if lbl.TextWrapped or string.find(text, "\n", 1, true) or (cw > 0 and total > cw + 1) then
@@ -19010,6 +19010,10 @@ function Library:CreateWindow(cfg)
 	end
 	ec.updateGrip = updateGrip
 	updateGrip()
+	-- filet de sécurité : si un signal AbsoluteSize/AbsolutePosition a été manqué (animation d'entrée, zoom, réouverture), l'arc
+	-- restait figé à l'ancien emplacement, plus haut que le coin. updateGrip() est dédupliquée : si rien n'a bougé, elle ne
+	-- fait que comparer 5 nombres.
+	Ticker.connect(function() updateGrip() end, { gate = function() return main.Visible and not collapsed end })
 	main:GetPropertyChangedSignal("AbsolutePosition"):Connect(updateGrip)
 	main:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateGrip)
 	main:GetPropertyChangedSignal("Visible"):Connect(updateGrip)
