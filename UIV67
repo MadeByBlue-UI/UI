@@ -9023,53 +9023,87 @@ do
 	local tok = 0
 	local FADE_IN, FADE_OUT = 0.2, 0.14
 
+	-- Réglages de l'info-bulle : modifiables dans Paramètres > Thèmes > Info-bulles
+	Library.TipStyle = Library.TipStyle or {
+		Bg = Color3.fromRGB(255, 255, 255),        -- fond de la bulle
+		BgAlpha = 0.35,                            -- 0 = opaque, 1 = invisible
+		Gloss = true,                              -- reflet brillant (moitié haute plus claire)
+		Text1 = Color3.fromRGB(0, 0, 0),           -- texte : début du dégradé (noir)
+		Text2 = Color3.fromRGB(120, 120, 128),     -- texte : fin du dégradé (gris)
+		Outline = false,                           -- contour désactivé par défaut
+		OutlineColor = Color3.fromRGB(255, 255, 255),
+		OffsetX = 36,                              -- décalage vers la gauche (px) par rapport au bord droit de l'élément
+	}
+
 	local function skin()
+		local S = Library.TipStyle
 		local st = Library._tipStroke
+		local txt = Library._tipText
 		local sq = Library.SquareMode == true
-		local neon = Library.StyleName == "Néon"
-		-- V5.8 : tooltip lisible -> fond éclairci (teinte du thème) presque opaque, texte blanc, un peu plus gros
-		tipLabel.BackgroundColor3 = lighten(T.Second, 0.16)
-		tipLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+		local size = math.max(10, math.floor(14 * (Library.FontScale or 1) + 0.5))
+		-- le TextLabel parent ne sert qu'à dimensionner la bulle (texte invisible), le vrai texte est dans TipText
+		tipLabel.BackgroundColor3 = S.Bg
+		tipLabel.TextTransparency = 1
 		tipLabel.Font = Enum.Font.GothamMedium
-		tipLabel.TextSize = math.max(10, math.floor(14 * (Library.FontScale or 1) + 0.5))
-		local cr = Library._tipCorner
-		if cr then cr.CornerRadius = UDim.new(0, sq and 0 or math.floor(7 * (Library.GlobalCornerValue or 10) / 10)) end
-		-- reflet de verre sur le fond
-		local fill = tipLabel:FindFirstChild("TipGlassFill")
-		if Sty.Glass then
-			if not fill then
-				fill = Instance.new("UIGradient")
-				fill.Name = "TipGlassFill"
-				fill.Rotation = 40
-				fill.Parent = tipLabel
-			end
-			fill.Color = ColorSequence.new(lighten(T.Second, 0.30), lighten(T.Second, 0.12))
-			fill.Enabled = true
-		elseif fill then
-			fill.Enabled = false
+		tipLabel.TextSize = size
+		if txt then
+			txt.Font = Enum.Font.GothamMedium
+			txt.TextSize = size
+			txt.TextColor3 = Color3.new(1, 1, 1)
+			local tg = txt:FindFirstChild("TipTextGrad")
+			if tg then tg.Color = ColorSequence.new(S.Text1, S.Text2) end
 		end
+		local cr = Library._tipCorner
+		if cr then cr.CornerRadius = UDim.new(0, sq and 0 or math.floor(9 * (Library.GlobalCornerValue or 10) / 10)) end
+		-- reflet brillant : moitié haute blanche, moitié basse un peu plus sombre / plus transparente
+		local g = tipLabel:FindFirstChild("TipShine")
+		if not g then
+			g = Instance.new("UIGradient")
+			g.Name = "TipShine"
+			g.Rotation = 90
+			g.Parent = tipLabel
+		end
+		if S.Gloss then
+			g.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+				ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
+				ColorSequenceKeypoint.new(0.501, Color3.fromRGB(226, 230, 238)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(240, 243, 250)),
+			})
+			g.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0),
+				NumberSequenceKeypoint.new(0.5, 0),
+				NumberSequenceKeypoint.new(0.501, 0.14),
+				NumberSequenceKeypoint.new(1, 0.22),
+			})
+			g.Enabled = true
+		else
+			g.Enabled = false
+		end
+		-- contour : désactivé par défaut (option dans les paramètres)
 		if st then
-			st.Color = T.Accent
-			st.Thickness = neon and 2 or 1.5
-			local g = st:FindFirstChild("GlassGrad")
-			if Sty.Glass then
-				if not g then
-					g = Instance.new("UIGradient")
-					g.Name = "GlassGrad"
-					g.Rotation = 40
-					g.Transparency = GLASS_EDGE
-					g.Parent = st
-				end
-				g.Enabled = true
-			elseif g then
-				g.Enabled = false
-			end
+			st.Enabled = S.Outline == true
+			st.Color = S.OutlineColor
+			st.Thickness = 1
+			local gg = st:FindFirstChild("GlassGrad")
+			if gg then gg.Enabled = false end
 		end
 	end
 
 	local function targets()
-		-- quasi opaque pour rester lisible sur n'importe quel fond (même en style Verre / Givré), contour bien visible
-		return 0.04, 0.15
+		local S = Library.TipStyle
+		return S.BgAlpha, (S.Outline and 0.1 or 1)
+	end
+
+	-- appelé par les réglages : met à jour la bulle même si elle est déjà affichée
+	function Library._tipRestyle()
+		if not tipLabel then return end
+		skin()
+		if tipLabel.Visible and tipShown then
+			local bg, sTr = targets()
+			tipLabel.BackgroundTransparency = bg
+			if Library._tipStroke then Library._tipStroke.Transparency = sTr end
+		end
 	end
 
 	function Library._tipShow(text, anchor)
@@ -9077,12 +9111,14 @@ do
 		tok += 1
 		local my = tok
 		local st = Library._tipStroke
+		local txt = Library._tipText
 		skin()
 		tipLabel.Text = tostring(text)
+		if txt then txt.Text = tostring(text) end
 		tipShown = true
 		if not tipLabel.Visible then   -- départ du fondu
 			tipLabel.BackgroundTransparency = 1
-			tipLabel.TextTransparency = 1
+			if txt then txt.TextTransparency = 1 end
 			if st then st.Transparency = 1 end
 		end
 		tipLabel.Visible = true
@@ -9094,9 +9130,9 @@ do
 			local x, y
 			if anchor and anchor.Parent then
 				local ap, as = anchor.AbsolutePosition, anchor.AbsoluteSize
-				x = ap.X + as.X                 -- bord droit de l'élément
-				y = ap.Y + as.Y + 6             -- juste sous l'élément
-				if y + sz.Y > v.Y - 4 then y = ap.Y - sz.Y - 6 end   -- pas de place en bas : au-dessus
+				x = ap.X + as.X - (Library.TipStyle.OffsetX or 0)   -- bord droit de l'élément, décalé vers la gauche
+				y = ap.Y + as.Y + 6                                  -- juste sous l'élément
+				if y + sz.Y > v.Y - 4 then y = ap.Y - sz.Y - 6 end  -- pas de place en bas : au-dessus
 			else
 				local m = UIS:GetMouseLocation()
 				x, y = m.X + sz.X * 0.5, m.Y + 18
@@ -9107,7 +9143,8 @@ do
 			tipLabel.AnchorPoint = Vector2.new(1, 0)
 			tipLabel.Position = UDim2.fromOffset(x, y)
 			local bg, sTr = targets()
-			tween(tipLabel, { BackgroundTransparency = bg, TextTransparency = 0 }, FADE_IN, LINEAR)
+			tween(tipLabel, { BackgroundTransparency = bg }, FADE_IN, LINEAR)
+			if txt then tween(txt, { TextTransparency = 0 }, FADE_IN, LINEAR) end
 			if st then tween(st, { Transparency = sTr }, FADE_IN, LINEAR) end
 		end)
 	end
@@ -9118,7 +9155,9 @@ do
 		if not (tipLabel and tipLabel.Visible) then return end
 		local my = tok
 		local st = Library._tipStroke
-		tween(tipLabel, { BackgroundTransparency = 1, TextTransparency = 1 }, FADE_OUT, LINEAR)
+		local txt = Library._tipText
+		tween(tipLabel, { BackgroundTransparency = 1 }, FADE_OUT, LINEAR)
+		if txt then tween(txt, { TextTransparency = 1 }, FADE_OUT, LINEAR) end
 		if st then tween(st, { Transparency = 1 }, FADE_OUT, LINEAR) end
 		task.delay(FADE_OUT + 0.04, function()
 			if tok == my and tipLabel then tipLabel.Visible = false end
@@ -16292,6 +16331,37 @@ function Window:CreateSettingsTab(name, icon, docked)
 	CO:CreateColorPicker({ Name = "Texte secondaire", Flag = "ui.c.text2", Default = T.ElementAccent, Favorite = false,
 		Callback = function(c) Library:SetColor("ElementAccent", c) end })
 
+	-- Info-bulles (la petite bulle qui apparaît après ~0,4 s de survol)
+	local TP = BK("Thèmes", { Name = "Info-bulles", Side = "Right" })
+	local TS = Library.TipStyle
+	local function tipOpt(k)
+		return function(v)
+			Library.TipStyle[k] = v
+			if Library._tipRestyle then Library._tipRestyle() end
+		end
+	end
+	TP:CreateSection("Fond")
+	TP:CreateColorPicker({ Name = "Couleur du fond", Flag = "ui.tip.bg", Default = TS.Bg, Favorite = false,
+		Tooltip = "Couleur de base de la bulle (blanc par défaut).", Callback = tipOpt("Bg") })
+	TP:CreateSlider({ Name = "Transparence du fond", Flag = "ui.tip.alpha", Min = 0, Max = 95, Step = 5, Suffix = " %",
+		Default = pct(TS.BgAlpha), Favorite = false, Tooltip = "0 % = opaque, plus haut = plus transparent.",
+		Callback = function(v) tipOpt("BgAlpha")(v / 100) end })
+	TP:CreateToggle({ Name = "Reflet brillant", Flag = "ui.tip.gloss", Favorite = false, Keybind = false, Default = TS.Gloss,
+		Tooltip = "Moitié haute plus claire, façon verre brillant.", Callback = tipOpt("Gloss") })
+	TP:CreateSection("Texte (dégradé)")
+	TP:CreateColorPicker({ Name = "Texte : début (noir)", Flag = "ui.tip.text1", Default = TS.Text1, Favorite = false,
+		Callback = tipOpt("Text1") })
+	TP:CreateColorPicker({ Name = "Texte : fin (gris)", Flag = "ui.tip.text2", Default = TS.Text2, Favorite = false,
+		Callback = tipOpt("Text2") })
+	TP:CreateSection("Contour et position")
+	TP:CreateToggle({ Name = "Contour de la bulle", Flag = "ui.tip.outline", Favorite = false, Keybind = false, Default = TS.Outline,
+		Tooltip = "Désactivé par défaut : la bulle n'a pas de bordure.", Callback = tipOpt("Outline") })
+	TP:CreateColorPicker({ Name = "Couleur du contour", Flag = "ui.tip.outlinec", Default = TS.OutlineColor, Favorite = false,
+		Callback = tipOpt("OutlineColor") })
+	TP:CreateSlider({ Name = "Décalage vers la gauche", Flag = "ui.tip.offset", Min = 0, Max = 200, Step = 2, Suffix = " px",
+		Default = TS.OffsetX, Favorite = false, Tooltip = "Éloigne la bulle du bord droit de l'élément survolé, vers la gauche.",
+		Callback = tipOpt("OffsetX") })
+
 	-- Dégradé personnalisé
 	local GR = BK("Thèmes", { Name = "Dégradé personnalisé", Side = "Right" })
 	local gp1, gp2, gp3
@@ -19280,6 +19350,13 @@ function Library:CreateWindow(cfg)
 	new("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
 		PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, tipLabel)
 	new("UISizeConstraint", { MaxSize = Vector2.new(300, 400) }, tipLabel)
+	tipLabel.TextTransparency = 1   -- ce label ne sert qu'à dimensionner la bulle ; le texte visible est TipText (dégradé noir -> gris)
+	Library._tipText = new("TextLabel", { Name = "TipText", BackgroundTransparency = 1, BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 1, 0), Text = "", TextColor3 = Color3.new(1, 1, 1), TextTransparency = 1, TextSize = 12, Font = F_MED,
+		TextWrapped = true, TextXAlignment = LEFT, TextYAlignment = Enum.TextYAlignment.Center, ZIndex = 501 }, tipLabel)
+	new("UIGradient", { Name = "TipTextGrad", Rotation = 20,
+		Color = ColorSequence.new(Library.TipStyle.Text1, Library.TipStyle.Text2) }, Library._tipText)
+	if Library._tipRestyle then Library._tipRestyle() end
 
 	-- ------------------------------------------------------------------
 	-- Recherche + barre latérale + contenu
