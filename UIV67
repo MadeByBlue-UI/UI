@@ -9364,11 +9364,8 @@ do
 		local txt = Library._tipText
 		local sq = Library.SquareMode == true
 		local size = math.max(10, math.floor(14 * (Library.FontScale or 1) + 0.5))
-		-- le TextLabel parent ne sert qu'à dimensionner la bulle (texte invisible), le vrai texte est dans TipText
+		-- tipLabel = fond de la bulle (Frame) ; le texte est dans TipText
 		tipLabel.BackgroundColor3 = S.Bg
-		tipLabel.TextTransparency = 1
-		tipLabel.Font = Enum.Font.GothamMedium
-		tipLabel.TextSize = size
 		if txt then
 			txt.Font = Enum.Font.GothamMedium
 			txt.TextSize = size
@@ -9436,7 +9433,6 @@ do
 		local st = Library._tipStroke
 		local txt = Library._tipText
 		skin()
-		tipLabel.Text = tostring(text)
 		if txt then txt.Text = tostring(text) end
 		tipShown = true
 		if not tipLabel.Visible then   -- départ du fondu
@@ -9446,7 +9442,7 @@ do
 		end
 		tipLabel.Visible = true
 		task.spawn(function()
-			task.wait()   -- laisse la taille automatique se calculer, puis on pose le tooltip une bonne fois pour toutes
+			task.wait(); task.wait()   -- laisse la taille automatique se calculer (texte puis cadre), puis on pose la bulle une bonne fois pour toutes
 			if tok ~= my or not tipLabel then return end
 			local v = viewport()
 			local sz = tipLabel.AbsoluteSize
@@ -20487,20 +20483,22 @@ function Library:CreateWindow(cfg)
 	ec.titleLine = fadeLine(main, { Position = UDim2.new(0, 14, 0, 42), Size = UDim2.new(1, -28, 0, 1) })
 
 	-- Tooltip global
-	tipLabel = new("TextLabel", { Name = "Tooltip", AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.fromOffset(0, 0),
-		BackgroundColor3 = T.Second, BackgroundTransparency = 1, TextTransparency = 1, TextColor3 = T.Text, TextSize = 12, Font = F_REG,
-		TextWrapped = true, TextXAlignment = LEFT, Visible = false, ZIndex = 500, BorderSizePixel = 0,
+	-- La bulle est un Frame qui se dimensionne tout seul autour du texte (TipText, lui-même en AutomaticSize).
+	-- ⚠️ Ne jamais mettre, dans un parent en AutomaticSize, un enfant dont la Size est en Scale (ex. UDim2.new(1,0,1,0)) :
+	--    le parent regrossit à chaque passe de layout jusqu'à son MaxSize -> c'était le bug de la bulle géante (300 x 400).
+	tipLabel = new("Frame", { Name = "Tooltip", AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.fromOffset(0, 0),
+		BackgroundColor3 = T.Second, BackgroundTransparency = 1, Visible = false, ZIndex = 500, BorderSizePixel = 0,
 		AnchorPoint = Vector2.new(1, 0) }, gui)
 	tipShown = false
 	Library._tipCorner = corner(tipLabel, 7)
 	Library._tipStroke = stroke(tipLabel, 1)
-	new("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
+	new("UIPadding", { PaddingTop = UDim.new(0, 7), PaddingBottom = UDim.new(0, 7),
 		PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, tipLabel)
-	new("UISizeConstraint", { MaxSize = Vector2.new(300, 400) }, tipLabel)
-	tipLabel.TextTransparency = 1   -- ce label ne sert qu'à dimensionner la bulle ; le texte visible est TipText (dégradé noir -> gris)
-	Library._tipText = new("TextLabel", { Name = "TipText", BackgroundTransparency = 1, BorderSizePixel = 0,
-		Size = UDim2.new(1, 0, 1, 0), Text = "", TextColor3 = Color3.new(1, 1, 1), TextTransparency = 1, TextSize = 12, Font = F_MED,
-		TextWrapped = true, TextXAlignment = LEFT, TextYAlignment = Enum.TextYAlignment.Center, ZIndex = 501 }, tipLabel)
+	Library._tipText = new("TextLabel", { Name = "TipText", AutomaticSize = Enum.AutomaticSize.XY, Size = UDim2.fromOffset(0, 0),
+		BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", TextColor3 = Color3.new(1, 1, 1), TextTransparency = 1,
+		TextSize = 12, Font = F_MED, TextWrapped = true, TextXAlignment = LEFT, TextYAlignment = Enum.TextYAlignment.Top,
+		ZIndex = 501 }, tipLabel)
+	new("UISizeConstraint", { MaxSize = Vector2.new(276, 400) }, Library._tipText)   -- largeur max du texte : au-delà il passe à la ligne
 	new("UIGradient", { Name = "TipTextGrad", Rotation = 20,
 		Color = ColorSequence.new(Library.TipStyle.Text1, Library.TipStyle.Text2) }, Library._tipText)
 	if Library._tipRestyle then Library._tipRestyle() end
