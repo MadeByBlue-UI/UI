@@ -13,8 +13,8 @@
 		  Entrée = valider (pas de nouvelle ligne) · un texte collé est mis sur une seule ligne · o.MaxHeight (200) = hauteur maximale.
 		• CreateTextArea : la zone grandit aussi vers le bas avec le texte (Height = minimum, o.MaxHeight = 400) · o.AutoGrow = false = hauteur fixe.
 		• Library.AutoGrow = false : retour à des hauteurs fixes. Champ multi-ligne en interne : la sélection native de Roblox est utilisée.
-		• Poignée de redimensionnement (coin bas-droite) : l'arc est maintenant posé DANS la fenêtre, concentrique avec son arrondi (il pouvait être
-		  décalé vers le haut et ne suivait pas la courbe du coin). Il suit toujours le coin, même pendant le zoom d'ouverture ou un changement d'arrondi.
+		• Poignée de redimensionnement (coin bas-droite) : l'arc est maintenant posé À L'EXTÉRIEUR de la fenêtre, concentrique avec son arrondi (calque
+		  qui copie la position / taille / échelle / fondu de la fenêtre : il suit toujours le coin, même pendant le zoom d'ouverture ou un changement d'arrondi).
 
 	V9.2 — « HI. » DANS L'INTRO + SON
 		• Home > Serveur : l'icône du jeu dans lequel tu es s'affiche en haut du bloc (Library.HomeGameImage = false la retire). Si l'exécuteur autorise HTTP + fichiers, c'est la miniature 16:9 du jeu (Library.HomeGameThumb = false : icône seulement).
@@ -19180,15 +19180,29 @@ function Library:CreateWindow(cfg)
 	handle(1, -1, UDim2.new(1, -14, 0, 0),  UDim2.fromOffset(14, 14))  -- haut droite
 	handle(-1, 1, UDim2.new(0, 0, 1, -14),  UDim2.fromOffset(14, 14))  -- bas gauche
 
-	-- poignée visible (coin bas-droite) : un trait en arc posé DANS le coin de la fenêtre, concentrique avec son arrondi.
-	-- Il est ENFANT de la fenêtre : il reste donc toujours exactement sur son coin (échelle, animation d'ouverture, déplacement,
-	-- redimensionnement, changement d'arrondi) sans aucun calcul de position à l'écran (l'ancienne version, posée dans l'écran à
-	-- partir de AbsolutePosition, pouvait se retrouver décalée vers le haut et ne suivait pas l'arrondi).
-	local GRIP_GAP = 9                          -- écart entre le rebord de la fenêtre et l'arc (px)
-	local gripClip = new("Frame", { Name = "GripArcClip", AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 0, 1, 0),
-		Size = UDim2.fromOffset(26, 26), BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true,
-		Active = false, ZIndex = 60 }, main)
-	-- le centre du cercle est le coin haut-gauche du cadre de rognage = le centre de l'arrondi de la fenêtre ; seul le quart bas-droit est visible
+	-- poignée visible (coin bas-droite) : un trait en arc posé À L'EXTÉRIEUR du coin de la fenêtre, concentrique avec son arrondi.
+	-- La fenêtre rogne ses enfants (ClipsDescendants) : l'arc vit donc dans un calque transparent POSÉ À CÔTÉ de la fenêtre (dans le
+	-- ScreenGui) qui COPIE en direct sa position, sa taille, son échelle (UIScale), sa visibilité et son fondu d'ouverture. Mêmes
+	-- coordonnées que la fenêtre : aucun calcul à partir de AbsolutePosition, l'arc reste exactement sur le coin (déplacement,
+	-- redimensionnement, zoom d'ouverture, changement d'arrondi).
+	local GRIP_GAP = 6                          -- écart entre le rebord (arrondi) de la fenêtre et l'arc, vers l'extérieur (px)
+	local gripHost = new("Frame", { Name = "GripHost", BackgroundTransparency = 1, BorderSizePixel = 0, Active = false,
+		AnchorPoint = main.AnchorPoint, Position = main.Position, Size = main.Size, ZIndex = 60, Visible = false }, gui)
+	local gripScale = new("UIScale", { Scale = uiScale.Scale }, gripHost)
+	local function syncGripHost()
+		gripHost.AnchorPoint, gripHost.Position, gripHost.Size = main.AnchorPoint, main.Position, main.Size
+		gripScale.Scale = uiScale.Scale
+	end
+	for _, pn in ipairs({ "Position", "Size", "AnchorPoint" }) do main:GetPropertyChangedSignal(pn):Connect(syncGripHost) end
+	uiScale:GetPropertyChangedSignal("Scale"):Connect(syncGripHost)
+	-- petit cadre de rognage (CanvasGroup = il suit aussi le fondu d'ouverture / de fermeture de la fenêtre) : son coin haut-gauche est le
+	-- centre de l'arrondi de la fenêtre ; seul le quart bas-droit du cercle est visible
+	local gripClip = new(useCanvas and "CanvasGroup" or "Frame", { Name = "GripArcClip", BackgroundTransparency = 1,
+		BorderSizePixel = 0, ClipsDescendants = true, Active = false, ZIndex = 60 }, gripHost)
+	if useCanvas then
+		gripClip.GroupTransparency = main.GroupTransparency
+		main:GetPropertyChangedSignal("GroupTransparency"):Connect(function() gripClip.GroupTransparency = main.GroupTransparency end)
+	end
 	local gripArc = new("Frame", { Name = "GripArc", BackgroundTransparency = 1, BorderSizePixel = 0, Active = false,
 		ZIndex = 60 }, gripClip)
 	local gripCorner = new("UICorner", { CornerRadius = UDim.new(0, 17) }, gripArc)
@@ -19199,24 +19213,28 @@ function Library:CreateWindow(cfg)
 		NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.2, 1), NumberSequenceKeypoint.new(0.36, 0.25),
 		NumberSequenceKeypoint.new(0.5, 0), NumberSequenceKeypoint.new(0.64, 0.25), NumberSequenceKeypoint.new(0.8, 1),
 		NumberSequenceKeypoint.new(1, 1) }) }, gripStroke)
-	-- zone cliquable invisible dans le coin (la même que celle des autres poignées, juste plus grande)
-	local grip = new("TextButton", { Name = "GripHit", AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, 0, 1, 0),
-		Size = UDim2.fromOffset(26, 26), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 71 }, main)
+	-- zone cliquable invisible : le coin intérieur de la fenêtre + l'arc à l'extérieur
+	local grip = new("TextButton", { Name = "GripHit", BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
+		ZIndex = 71 }, gripHost)
 	local gripLast = {}
 	local function updateGrip()
-		local vis = not collapsed
+		local vis = (not collapsed) and main.Visible
 		if gripLast.vis ~= vis then
 			gripLast.vis = vis
-			gripClip.Visible, grip.Visible = vis, vis
+			gripHost.Visible = vis
 		end
 		local R = math.max(mainCorner.CornerRadius.Offset, 12)   -- rayon d'arrondi de la fenêtre (unités de la fenêtre, sans échelle)
 		if gripLast.R == R then return end
 		gripLast.R = R
-		local ra = math.max(R - GRIP_GAP, 4)                    -- rayon de l'arc (le trait est dessiné vers l'extérieur du cercle)
-		gripClip.Size = UDim2.fromOffset(R, R)
+		local ra = R + GRIP_GAP                                  -- rayon de l'arc (le trait est dessiné vers l'extérieur du cercle)
+		local box = ra + 8
+		gripClip.Position = UDim2.new(1, -R, 1, -R)
+		gripClip.Size = UDim2.fromOffset(box, box)
 		gripArc.Size = UDim2.fromOffset(ra * 2, ra * 2)
 		gripArc.Position = UDim2.fromOffset(-ra, -ra)
 		gripCorner.CornerRadius = UDim.new(0, ra)
+		grip.Position = UDim2.new(1, -R, 1, -R)
+		grip.Size = UDim2.fromOffset(box, box)
 	end
 	ec.updateGrip = updateGrip
 	updateGrip()
