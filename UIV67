@@ -1310,6 +1310,7 @@ local function new(class, props, parent)
 	if parent then o.Parent = parent end
 	if class == "TextBox" and Library._attachSelection then Library._attachSelection(o) end
 	if class == "ScrollingFrame" and Library._regScroll then Library._regScroll(o) end
+	if class == "ScrollingFrame" and Library._regBar then Library._regBar(o) end
 	return o
 end
 
@@ -1831,13 +1832,16 @@ end))
 -- Library.SmoothScrollSpeed (raideur, 20) · Library.SmoothScrollLegacy = true : ancien mode · tactile pur : ancien mode.
 -- Les cadres horizontaux (ScrollingDirection = X) ne sont pas touchés.
 -- ============================================================================
-Library.SmoothScrollStep  = 64
-Library.SmoothScrollSpeed = 20
+Library.SmoothScrollStep  = 110      -- px par cran de molette (avant : 64)
+Library.SmoothScrollSpeed = 26      -- raideur du ressort : plus haut = plus vif (avant : 20)
+Library.SmoothScrollAccel = true    -- molette tournée en continu : le défilement accélère (jusqu'à x4)
+Library.ScrollBarHover    = 9       -- épaisseur de la barre quand on la survole / la tient (px)
 do -- (portée réduite : limite de 200 locals)
 local CAS = game:GetService("ContextActionService")
 local frames = setmetatable({}, { __mode = "k" })   -- cadre -> état { pos, vel, target, last }
 local active, cand = {}, {}                         -- cadres qui glissent / cadres sous la souris au dernier cran
 local loopConn, queued, wz = nil, false, 0
+local lastWheelT, streak = 0, 0
 local touchOnly = UIS.TouchEnabled and not UIS.MouseEnabled
 local SINK, PASS = Enum.ContextActionResult.Sink, Enum.ContextActionResult.Pass
 
@@ -1944,7 +1948,11 @@ local function resolve()
 		local y = best.CanvasPosition.Y
 		st.pos, st.vel, st.target = y, 0, y
 	end
-	st.target = math.clamp(st.target - z * (Library.SmoothScrollStep or 64), 0, maxOf(best))
+	local nowT = os.clock()
+	if Library.SmoothScrollAccel ~= false and nowT - lastWheelT < 0.28 then streak = math.min(streak + 1, 10) else streak = 0 end
+	lastWheelT = nowT
+	local mult = 1 + streak * 0.3   -- crans enchaînés : jusqu'à x4
+	st.target = math.clamp(st.target - z * (Library.SmoothScrollStep or 110) * mult, 0, maxOf(best))
 	if Library.Animations == false then
 		best.CanvasPosition = Vector2.new(best.CanvasPosition.X, st.target)
 		st.last = best.CanvasPosition.Y
@@ -1991,6 +1999,76 @@ function Library._regScroll(sf)
 		active[sf] = nil
 	end)
 	bindSink()
+end
+
+-- BARRE DE DÉFILEMENT : s'élargit au survol (plus facile à viser) et se saisit à la souris : clic sur le curseur de la barre =
+-- on le fait glisser ; clic dans la gouttière = le curseur saute sous la souris puis suit. Épaisseur : Library.ScrollBarHover.
+function Library._regBar(sf)
+	if touchOnly or sf.ScrollingDirection == Enum.ScrollingDirection.X then return end
+	local base = sf.ScrollBarThickness
+	if base <= 0 then return end
+	if sf.VerticalScrollBarInset == Enum.ScrollBarInset.Always then
+		sf.VerticalScrollBarInset = Enum.ScrollBarInset.None   -- barre en surimpression : pas de décalage du contenu quand elle grossit
+	end
+	local baseTr = sf.ScrollBarImageTransparency
+	local over, dragging = false, false
+	local function look()
+		local wide = over or dragging
+		tween(sf, { ScrollBarThickness = wide and math.max(base, Library.ScrollBarHover or 9) or base,
+			ScrollBarImageTransparency = wide and math.min(baseTr, 0.15) or baseTr }, 0.15)
+	end
+	local function barShown()
+		return sf.Visible and sf.AbsoluteWindowSize.Y > 0 and sf.AbsoluteCanvasSize.Y > sf.AbsoluteWindowSize.Y + 1
+	end
+	local function inZone()
+		local p = Library._pointerPos({ X = 0, Y = 0 })
+		local ap, as = sf.AbsolutePosition, sf.AbsoluteSize
+		local w = (math.max(base, Library.ScrollBarHover or 9) + 6) * pxScale()
+		return p.X >= ap.X + as.X - w and p.X <= ap.X + as.X + 2 and p.Y >= ap.Y and p.Y <= ap.Y + as.Y
+	end
+	sf.MouseMoved:Connect(function()
+		local z = barShown() and inZone()
+		if z ~= over then over = z look() end
+	end)
+	sf.MouseLeave:Connect(function()
+		if over then over = false look() end
+	end)
+	sf.InputBegan:Connect(function(i)
+		if i.UserInputType ~= Enum.UserInputType.MouseButton1 or dragging or not frames[sf] then return end
+		if not (barShown() and inZone()) then return end
+		local p = Library._pointerPos({ X = 0, Y = 0 })
+		local winH, canH = sf.AbsoluteWindowSize.Y, sf.AbsoluteCanvasSize.Y
+		local thumbH = math.clamp(winH * winH / canH, 20 * pxScale(), winH)
+		local track = math.max(winH - thumbH, 1)
+		local mx0 = math.max(maxOf(sf), 1e-3)
+		local thumbTop = math.clamp(sf.CanvasPosition.Y / mx0, 0, 1) * track
+		local rel = p.Y - sf.AbsolutePosition.Y
+		local grab = (rel >= thumbTop and rel <= thumbTop + thumbH) and (rel - thumbTop) or thumbH / 2
+		dragging = true
+		active[sf] = nil
+		look()
+		local st = frames[sf]
+		local mv, up
+		local function upd()
+			local q = Library._pointerPos({ X = 0, Y = 0 })
+			local t = math.clamp((q.Y - sf.AbsolutePosition.Y - grab) / track, 0, 1)
+			sf.CanvasPosition = Vector2.new(sf.CanvasPosition.X, t * maxOf(sf))
+			local y = sf.CanvasPosition.Y
+			st.last, st.pos, st.target, st.vel = y, y, y, 0
+		end
+		upd()
+		mv = UIS.InputChanged:Connect(function(j)
+			if j.UserInputType == Enum.UserInputType.MouseMovement then upd() end
+		end)
+		up = UIS.InputEnded:Connect(function(j)
+			if j.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+			dragging = false
+			if mv then mv:Disconnect() end
+			if up then up:Disconnect() end
+			over = barShown() and inZone()
+			look()
+		end)
+	end)
 end
 end -- fin de la portée réduite
 
@@ -8283,7 +8361,7 @@ function Library._autoGrow(tb, row, cfg)
 	local lastH, lastX = nil, nil
 	local function target()
 		if tb.Text == "" then return minH end
-		return math.clamp(math.ceil(tb.TextBounds.Y) + padV, minH, maxH)   -- TextBounds : déjà en unités d'interface
+		return math.clamp(math.ceil(tb.TextBounds.Y) + padV + 1, minH, maxH)   -- TextBounds : déjà en unités d'interface
 	end
 	local function apply(h, animate)
 		local tbSize, rowSize = cfg.TbSize(h), cfg.RowSize(h)
@@ -8297,8 +8375,26 @@ function Library._autoGrow(tb, row, cfg)
 			tb.Size, row.Size = tbSize, rowSize
 		end
 	end
+	-- vérification différée : si la boîte n'a pas la bonne hauteur une fois l'animation finie (texte mesuré trop tôt, animation
+	-- interrompue...), on la recale d'un coup. C'est ce qui laissait des lignes coupées en bas.
+	local settleTok = 0
+	local function settle()
+		settleTok += 1
+		local my = settleTok
+		task.delay(0.55, function()
+			if my ~= settleTok or not tb.Parent then return end
+			if row.AbsoluteSize.X / pxScale() < 60 then return end
+			local h = target()
+			local cur = tb.AbsoluteSize.Y / pxScale()
+			if math.abs(cur - h) > 1.5 then
+				lastH = h
+				apply(h, false)
+			end
+		end)
+	end
 	local function fit()
 		if row.AbsoluteSize.X / pxScale() < 60 then return end   -- ligne pas encore mise en page (ou bloc replié)
+		settle()
 		local h = target()
 		if h == lastH then return end
 		local animate = lastH ~= nil and not Library._resizing   -- 1re mesure / redimensionnement de la fenêtre : sans animation
@@ -8307,6 +8403,8 @@ function Library._autoGrow(tb, row, cfg)
 	end
 	tb:GetPropertyChangedSignal("TextBounds"):Connect(fit)
 	tb:GetPropertyChangedSignal("Text"):Connect(fit)
+	tb:GetPropertyChangedSignal("TextSize"):Connect(fit)
+	tb:GetPropertyChangedSignal("Font"):Connect(fit)
 	row:GetPropertyChangedSignal("AbsoluteSize"):Connect(Library._lazy(function()
 		local x = row.AbsoluteSize.X
 		if lastX and math.abs(x - lastX) < 0.5 then return end   -- seule la LARGEUR compte (la hauteur change pendant l'animation)
@@ -16361,6 +16459,22 @@ function Window:CreateSettingsTab(name, icon, docked)
 	TP:CreateSlider({ Name = "Décalage vers la gauche", Flag = "ui.tip.offset", Min = 0, Max = 200, Step = 2, Suffix = " px",
 		Default = TS.OffsetX, Favorite = false, Tooltip = "Éloigne la bulle du bord droit de l'élément survolé, vers la gauche.",
 		Callback = tipOpt("OffsetX") })
+
+	-- Défilement (molette + barre)
+	local SC = BK("Interface", { Name = "Défilement", Side = "Right" })
+	SC:CreateSlider({ Name = "Vitesse de la molette", Flag = "ui.scroll.step", Min = 40, Max = 320, Step = 10, Suffix = " px",
+		Default = Library.SmoothScrollStep, Favorite = false, Tooltip = "Distance parcourue à chaque cran de molette.",
+		Callback = function(v) Library.SmoothScrollStep = v end })
+	SC:CreateSlider({ Name = "Vivacité", Flag = "ui.scroll.speed", Min = 8, Max = 50, Step = 2,
+		Default = Library.SmoothScrollSpeed, Favorite = false, Tooltip = "Plus haut = le contenu rattrape sa cible plus vite.",
+		Callback = function(v) Library.SmoothScrollSpeed = v end })
+	SC:CreateToggle({ Name = "Accélération", Flag = "ui.scroll.accel", Favorite = false, Keybind = false, Default = Library.SmoothScrollAccel,
+		Tooltip = "Plus tu tournes la molette sans t'arrêter, plus ça va vite (jusqu'à x4).",
+		Callback = function(v) Library.SmoothScrollAccel = v end })
+	SC:CreateSlider({ Name = "Largeur de la barre (survol)", Flag = "ui.scroll.bar", Min = 4, Max = 18, Step = 1, Suffix = " px",
+		Default = Library.ScrollBarHover, Favorite = false,
+		Tooltip = "La barre s'élargit quand tu la survoles ; clique-glisse dessus pour descendre vite.",
+		Callback = function(v) Library.ScrollBarHover = v end })
 
 	-- Dégradé personnalisé
 	local GR = BK("Thèmes", { Name = "Dégradé personnalisé", Side = "Right" })
