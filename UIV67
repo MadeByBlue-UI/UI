@@ -62,7 +62,7 @@
 		• 17 emotes entre les coucous (refaites) : coucou, pause, coucou, EMOTE, puis on recommence avec l'emote suivante (Saut de joie,
 		  Disco, Floss, Dab, Robot, Glissade, Karaté, Kamehameha, Salto arrière, Pirouette, Révérence, Applaudir, Champion, Zombie,
 		  Bof, Jumping jacks, Chercher).
-		  Le nom de l'emote s'affiche en bas de l'aperçu. Library.HomeEmotes = false les coupe · pv:PlayEmote(n | "Nom") en lance une ·
+		  Le nom de l'emote s'affiche en bas de l'aperçu. Les emotes sont coupées dans Home par défaut : Library.HomeEmotes = true les remet · pv:PlayEmote(n | "Nom") en lance une ·
 		  Library.PreviewEmotes (ta propre liste) · Library.PreviewEmoteWave (durée d'un coucou) · Library.PreviewEmoteRest (pause).
 
 	V9 — INTRO DE CHARGEMENT
@@ -200,6 +200,9 @@
 		• Dropdown : recherche intégrée (listes longues) et mode Multi = true (retourne une table).
 		  Option Search = true/false pour forcer la barre de recherche.
 		• Input : option Numeric = true, LiveUpdate = true, ClearOnFocus = true.
+		• Console (style CMD) : tab:CreateConsole({ Name, Description, Height, MaxLines, Save, Timestamp, Prompt, Filters, Events }) ;
+		  con:Log / Info / Ok / Warn / Error / Debug(texte, { Tag, Color, Plain }), con:Clear(), con:AddCommand(nom, usage, fonction),
+		  Library:LogEvent(tag, texte, niveau) pour écrire dans les consoles créées avec Events = true.
 		• Notifications : Type = "Info" | "Success" | "Warning" | "Error", barre de durée,
 		  clic pour fermer, 5 max empilées.
 		• Config : Library:SaveConfig(nom) / LoadConfig(nom) / DeleteConfig(nom) / ListConfigs()
@@ -10945,6 +10948,429 @@ function Block:CreateTable(o)
 	return item
 end
 
+-- ============================================================================
+-- CONSOLE (style CMD) : un bloc avec titre + description, des lignes colorées par niveau (Log / Info / Ok / Warn / Error / Debug),
+-- des puces de filtre, un champ de commandes (Prompt = true) et un historique qui peut être sauvegardé entre deux sessions.
+--   local con = tab:CreateConsole({ Name = "Événements", Description = "À quoi sert la console", Height = 200,
+--       MaxLines = 300, Save = true, Timestamp = true, Prompt = true, Filters = true, Flag = "console.events", Events = true })
+--   con:Log("texte") · con:Info() · con:Ok() · con:Warn() · con:Error() · con:Debug()      (2e argument : { Tag = "X", Color = Color3, Plain = true })
+--   con:Clear() · con:SetTitle(t) · con:SetDescription(t) · con:Export() · con:AddCommand("nom", "usage", function(args, con) end)
+--   Library:LogEvent("TAG", "message", "warn")  -> écrit dans toutes les consoles créées avec Events = true (ou Events = { "TAG", ... }).
+-- ============================================================================
+Library.Consoles = Library.Consoles or {}
+
+function Library:LogEvent(tag, msg, level)
+	for _, c in ipairs(Library.Consoles) do
+		local ev = c._events
+		local ok = ev == true
+		if type(ev) == "table" then ok = table.find(ev, tag) ~= nil end
+		if ok then pcall(c.AddLine, c, level or "log", msg, { Tag = tag }) end
+	end
+end
+
+do -- (portée réduite : limite de 200 locals)
+	local LVC = {
+		info = Color3.fromRGB(125, 175, 255), ok = Color3.fromRGB(110, 220, 140), warn = Color3.fromRGB(255, 190, 80),
+		error = Color3.fromRGB(255, 105, 105), debug = Color3.fromRGB(150, 150, 158),
+	}
+	local FILTERS = { { "Tout", nil }, { "Info", "info" }, { "Ok", "ok" }, { "Warn", "warn" }, { "Erreur", "error" }, { "Debug", "debug" } }
+	local function esc(t) return (tostring(t):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+	local function plain(t)
+		t = tostring(t):gsub("<[^>]+>", "")
+		return (t:gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&amp;", "&"))
+	end
+	local function group(l) if l == "log" then return "info" end return l end
+
+	function Block:CreateConsole(o)
+		o = o or {}
+		local title = tostring(o.Name or o.Title or "Console")
+		local desc = o.Description and tostring(o.Description) or ""
+		local height = math.clamp(tonumber(o.Height) or 200, 90, 500)
+		local maxLines = math.clamp(math.floor(tonumber(o.MaxLines) or 300), 20, 2000)
+		local doSave = o.Save == true
+		local doStamp = o.Timestamp ~= false
+		local folder = Library.ConfigFolder or "Ui-Lib"
+		local path = folder .. "/console_" .. (string.gsub(tostring(o.Flag or title), "[^%w_%-]", "_")) .. ".json"
+
+		-- ---------- bloc : titre, description, filtres, console, prompt, pied ----------
+		local holder = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundColor3 = T.Element,
+			BackgroundTransparency = 0.4, BorderSizePixel = 0 }, self.Body)
+		corner(holder, 8)
+		trackStyled(holder, stroke(holder, 0.93), "row")
+		new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 10),
+			PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, holder)
+		new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = BYORDER }, holder)
+
+		local head = new("Frame", { Size = UDim2.new(1, 0, 0, 24), BackgroundTransparency = 1, LayoutOrder = 1 }, holder)
+		local titleL = label(head, title, 13, { Font = F_BOLD, Position = UDim2.new(0, 2, 0, 0), Size = UDim2.new(1, -112, 1, 0) })
+		local function pill(text, w, x)
+			local b = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, x, 0.5, 0), Size = UDim2.fromOffset(w, 22),
+				BackgroundColor3 = T.Text, BackgroundTransparency = 0.92, Text = text, TextColor3 = T.ElementAccent, TextSize = 11,
+				Font = F_MED, AutoButtonColor = false, BorderSizePixel = 0 }, head)
+			corner(b, 11)
+			stroke(b, 0.9)
+			b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0.84 }, 0.15) end)
+			b.MouseLeave:Connect(function() tween(b, { BackgroundTransparency = 0.92 }, 0.2) end)
+			return b
+		end
+		local btnClear = pill("Vider", 46, 0)
+		local btnCopy = pill("Copier", 54, -52)
+
+		local descL = new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, Text = desc,
+			TextColor3 = T.ElementAccent, TextSize = 12, Font = F_REG, TextWrapped = true, TextXAlignment = LEFT,
+			TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 2, Visible = desc ~= "" }, holder)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 2) }, descL)
+
+		local chipBar = new("Frame", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, LayoutOrder = 3,
+			Visible = o.Filters ~= false }, holder)
+		new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = BYORDER,
+			VerticalAlignment = Enum.VerticalAlignment.Center }, chipBar)
+
+		local box = new("Frame", { Size = UDim2.new(1, 0, 0, height), BackgroundColor3 = T.Off, BackgroundTransparency = 0.3,
+			BorderSizePixel = 0, ClipsDescendants = true, LayoutOrder = 4 }, holder)
+		corner(box, 8)
+		trackStyled(box, stroke(box, 0.9), "input")
+		local sf = new("ScrollingFrame", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+			ScrollBarThickness = 3, ScrollBarImageColor3 = T.Accent, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY }, box)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 6),
+			PaddingBottom = UDim.new(0, 6) }, sf)
+		new("UIListLayout", { Padding = UDim.new(0, 1), SortOrder = BYORDER }, sf)
+		local newPill = new("TextButton", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), Size = UDim2.fromOffset(120, 20),
+			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.25, Text = "v nouvelles lignes", TextColor3 = T.Main, TextSize = 11,
+			Font = F_BOLD, AutoButtonColor = false, BorderSizePixel = 0, Visible = false, ZIndex = 5 }, box)
+		corner(newPill, 10)
+
+		local tb
+		if o.Prompt == true then
+			tb = new("TextBox", { Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = T.Off, BackgroundTransparency = 0.3, BorderSizePixel = 0,
+				Text = "", PlaceholderText = "> tape une commande (help)", PlaceholderColor3 = Color3.fromRGB(125, 125, 132),
+				TextColor3 = T.Text, TextSize = 12, Font = Enum.Font.Code, ClearTextOnFocus = false, TextXAlignment = LEFT, LayoutOrder = 5 }, holder)
+			corner(tb, 6)
+			trackStyled(tb, stroke(tb, 0.9), "input")
+			new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, tb)
+			Library._attachTextFade(tb)
+		end
+		local foot = label(holder, "", 10.5, { Size = UDim2.new(1, 0, 0, 14), TextColor3 = T.ElementAccent, LayoutOrder = 6 })
+		new("UIPadding", { PaddingLeft = UDim.new(0, 2) }, foot)
+
+		local e = self:_reg(holder, title)
+		local item = {}
+
+		-- ---------- données ----------
+		local lines, nextId = {}, 0
+		local active, allOn = {}, true
+		local dirty, flushing = false, false
+
+		local function pass(L)
+			if L.l == "cmd" or allOn then return true end
+			return active[group(L.l)] == true
+		end
+		local function lineText(L)
+			local dim = "#" .. T.ElementAccent:ToHex()
+			local col = L.c and Color3.fromHex(L.c) or (L.l == "log" and T.Text) or (L.l == "cmd" and T.Accent) or LVC[L.l] or T.Text
+			local s = ""
+			if doStamp then s = '<font color="' .. dim .. '">[' .. os.date("%H:%M:%S", L.t) .. "]</font> " end
+			if L.tag and L.tag ~= "" then s = s .. '<font color="' .. dim .. '">[' .. esc(L.tag) .. "]</font> " end
+			local m = L.p and esc(L.m) or L.m
+			if L.l == "cmd" then m = "&gt; " .. esc(L.m) elseif L.l == "warn" or L.l == "error" then m = "! " .. m end
+			return s .. '<font color="#' .. col:ToHex() .. '">' .. m .. "</font>"
+		end
+		local function mkLine(L)
+			return new("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, RichText = true,
+				Text = lineText(L), TextColor3 = T.Text, TextSize = 12, Font = Enum.Font.Code, TextWrapped = true, TextXAlignment = LEFT,
+				TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = L.id }, sf)
+		end
+		local function isBottom()
+			return sf.CanvasPosition.Y >= sf.AbsoluteCanvasSize.Y - sf.AbsoluteWindowSize.Y - 24
+		end
+		local function scrollBottom()
+			task.delay(0.03, function()
+				if sf.Parent then
+					sf.CanvasPosition = Vector2.new(0, math.max(0, sf.AbsoluteCanvasSize.Y - sf.AbsoluteWindowSize.Y + 40))
+					newPill.Visible = false
+				end
+			end)
+		end
+		local function updateFooter()
+			local n = #lines
+			foot.Text = n .. (n > 1 and " lignes" or " ligne") .. (doSave and "  ·  sauvegardé" or "")
+		end
+		local function rebuild()
+			for _, L in ipairs(lines) do
+				if L._lbl then L._lbl:Destroy() L._lbl = nil end
+			end
+			for _, L in ipairs(lines) do
+				if pass(L) then L._lbl = mkLine(L) end
+			end
+			updateFooter()
+			scrollBottom()
+		end
+
+		-- ---------- sauvegarde (fichier à part, jamais dans les configs) ----------
+		local function flush()
+			flushing = false
+			if not (doSave and dirty and writefile) then return end
+			dirty = false
+			local out = {}
+			for _, L in ipairs(lines) do out[#out + 1] = { t = L.t, l = L.l, tag = L.tag, m = L.m, p = L.p, c = L.c } end
+			pcall(function()
+				if makefolder and isfolder and not isfolder(folder) then makefolder(folder) end
+				writefile(path, HttpService:JSONEncode(out))
+			end)
+		end
+		local function markDirty()
+			if not doSave then return end
+			dirty = true
+			if not flushing then
+				flushing = true
+				task.delay(2, flush)   -- écriture groupée : pas à chaque ligne
+			end
+		end
+
+		local function addLine(level, msg, opts)
+			opts = type(opts) == "table" and opts or {}
+			level = tostring(level or "log")
+			if level ~= "log" and level ~= "cmd" and not LVC[level] then level = "log" end
+			nextId += 1
+			local L = { id = nextId, t = os.time(), l = level, m = tostring(msg == nil and "" or msg), tag = opts.Tag, p = opts.Plain,
+				c = typeof(opts.Color) == "Color3" and opts.Color:ToHex() or nil }
+			lines[#lines + 1] = L
+			if #lines > maxLines then
+				local old = table.remove(lines, 1)
+				if old._lbl then old._lbl:Destroy() end
+			end
+			if pass(L) then
+				local atBottom = isBottom()
+				L._lbl = mkLine(L)
+				if atBottom then scrollBottom() else newPill.Visible = true end
+			end
+			markDirty()
+			updateFooter()
+		end
+
+		if doSave and readfile and isfile then
+			local okR, data = pcall(function()
+				if isfile(path) then return HttpService:JSONDecode(readfile(path)) end
+			end)
+			if okR and type(data) == "table" then
+				for _, d in ipairs(data) do
+					if type(d) == "table" and d.m ~= nil then
+						nextId += 1
+						lines[#lines + 1] = { id = nextId, t = tonumber(d.t) or os.time(), l = tostring(d.l or "log"), m = tostring(d.m),
+							tag = d.tag, p = d.p, c = d.c }
+					end
+				end
+				while #lines > maxLines do table.remove(lines, 1) end
+				if #lines > 0 then
+					nextId += 1
+					lines[#lines + 1] = { id = nextId, t = os.time(), l = "debug", m = "---- nouvelle session ----", p = true }
+				end
+			end
+		end
+
+		-- ---------- filtres ----------
+		local chips = {}
+		local function paintChips()
+			for _, c in ipairs(chips) do
+				local on = (c.key == nil) and allOn or (not allOn and active[c.key] == true)
+				tween(c.btn, { BackgroundTransparency = on and 0.78 or 0.94 }, 0.15)
+				c.btn.TextColor3 = on and T.Text or T.ElementAccent
+			end
+		end
+		for i, f in ipairs(FILTERS) do
+			local key = f[2]
+			local btn = new("TextButton", { Size = UDim2.fromOffset(math.floor(18 + #f[1] * 6.5), 20), BackgroundColor3 = T.Text,
+				BackgroundTransparency = 0.94, Text = f[1], TextColor3 = T.ElementAccent, TextSize = 11, Font = F_MED,
+				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i }, chipBar)
+			corner(btn, 10)
+			chips[#chips + 1] = { key = key, btn = btn }
+			btn.MouseButton1Click:Connect(function()
+				uiSnd("click")
+				if key == nil then
+					allOn = true
+					table.clear(active)
+				elseif allOn then
+					allOn = false
+					table.clear(active)
+					active[key] = true
+				else
+					active[key] = not active[key] or nil
+					if next(active) == nil then allOn = true end
+				end
+				paintChips()
+				rebuild()
+			end)
+		end
+		paintChips()
+
+		-- ---------- export / boutons ----------
+		local function exportText()
+			local out = {}
+			for _, L in ipairs(lines) do
+				local s = doStamp and ("[" .. os.date("%H:%M:%S", L.t) .. "] ") or ""
+				if L.tag and L.tag ~= "" then s = s .. "[" .. L.tag .. "] " end
+				out[#out + 1] = s .. (L.l == "cmd" and "> " or "") .. (L.p and L.m or plain(L.m))
+			end
+			return table.concat(out, "\n")
+		end
+		btnClear.MouseButton1Click:Connect(function()
+			uiSnd("click")
+			item.Clear()
+		end)
+		btnCopy.MouseButton1Click:Connect(function()
+			uiSnd("click")
+			local clip = setclipboard or toclipboard
+			local ok = clip and pcall(clip, exportText())
+			pcall(function()
+				Library:Notify({ Title = title, Content = ok and "Console copiée dans le presse-papiers." or "Copie impossible ici.",
+					Type = ok and "Success" or "Warning", Duration = 2 })
+			end)
+		end)
+		newPill.MouseButton1Click:Connect(function() scrollBottom() end)
+		sf:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+			if newPill.Visible and isBottom() then newPill.Visible = false end
+		end)
+
+		-- ---------- commandes ----------
+		local cmds, cmdOrder = {}, {}
+		local function parse(s)
+			local args, i, n = {}, 1, #s
+			while i <= n do
+				local c = s:sub(i, i)
+				if c:match("%s") then
+					i += 1
+				elseif c == '"' then
+					local j = s:find('"', i + 1, true) or (n + 1)
+					args[#args + 1] = s:sub(i + 1, j - 1)
+					i = j + 1
+				else
+					local j = s:find("%s", i) or (n + 1)
+					args[#args + 1] = s:sub(i, j - 1)
+					i = j
+				end
+			end
+			return args
+		end
+		local hist, hi = {}, 0
+		local function runCommand(s)
+			addLine("cmd", s, { Plain = true })
+			local args = parse(s)
+			local name = string.lower(table.remove(args, 1) or "")
+			local c = cmds[name]
+			if not c then
+				addLine("error", "Commande inconnue : " .. name .. " (tape help)", { Plain = true })
+				return
+			end
+			local ok, res = pcall(c.fn, args, item, s)
+			if not ok then
+				addLine("error", "Erreur : " .. tostring(res), { Plain = true })
+			elseif res ~= nil then
+				addLine("log", tostring(res), { Plain = true })
+			end
+		end
+
+		if tb then
+			tb.Focused:Connect(function() uiSnd("focus") end)
+			tb.FocusLost:Connect(function(enter)
+				if not enter then return end
+				local s = string.gsub(tb.Text, "^%s+", "")
+				s = string.gsub(s, "%s+$", "")
+				tb.Text = ""
+				hi = 0
+				if s ~= "" then
+					hist[#hist + 1] = s
+					if #hist > 50 then table.remove(hist, 1) end
+					runCommand(s)
+				end
+				task.defer(function() if tb.Parent then tb:CaptureFocus() end end)   -- on reste dans le champ, comme un vrai CMD
+			end)
+			track(UIS.InputBegan:Connect(function(i)
+				if not tb:IsFocused() or #hist == 0 then return end
+				if i.KeyCode == Enum.KeyCode.Up then hi = math.min(hi + 1, #hist)
+				elseif i.KeyCode == Enum.KeyCode.Down then hi = math.max(hi - 1, 0)
+				else return end
+				tb.Text = hi > 0 and hist[#hist - hi + 1] or ""
+				tb.CursorPosition = #tb.Text + 1
+			end))
+		end
+
+		-- ---------- API ----------
+		local function lvl(level)
+			return function(...)
+				local m, opts = unself(item, ...)
+				addLine(level, m, opts)
+			end
+		end
+		item.Log, item.Add = lvl("log"), lvl("log")
+		item.Info, item.Ok, item.Warn, item.Error, item.Debug = lvl("info"), lvl("ok"), lvl("warn"), lvl("error"), lvl("debug")
+		item.AddLine = function(...)
+			local level, m, opts = unself(item, ...)
+			addLine(level, m, opts)
+		end
+		item.Clear = function()
+			for _, L in ipairs(lines) do
+				if L._lbl then L._lbl:Destroy() end
+			end
+			table.clear(lines)
+			newPill.Visible = false
+			markDirty()
+			updateFooter()
+		end
+		item.SetTitle = function(...)
+			title = tostring((unself(item, ...)))
+			titleL.Text = title
+			e.Name = title
+		end
+		item.SetDescription = function(...)
+			desc = tostring((unself(item, ...)) or "")
+			descL.Text = desc
+			descL.Visible = desc ~= ""
+		end
+		item.Export = function() return exportText() end
+		item.GetLines = function() return lines end
+		item.Refresh = rebuild
+		item.Save = function() dirty = true flush() end
+		item.AddCommand = function(...)
+			local name, usage, fn = unself(item, ...)
+			if type(usage) == "function" then fn, usage = usage, "" end
+			name = string.lower(tostring(name or ""))
+			if name == "" or type(fn) ~= "function" then return end
+			if not cmds[name] then cmdOrder[#cmdOrder + 1] = name end
+			cmds[name] = { usage = tostring(usage or ""), fn = fn }
+		end
+		item.RemoveCommand = function(...)
+			local name = string.lower(tostring((unself(item, ...)) or ""))
+			if cmds[name] then
+				cmds[name] = nil
+				table.remove(cmdOrder, table.find(cmdOrder, name))
+			end
+		end
+		item.AddCommand("help", "liste les commandes", function(_, con)
+			con:Info("Commandes :", { Plain = true })
+			for _, n in ipairs(cmdOrder) do
+				con:Log("  " .. n .. (cmds[n].usage ~= "" and ("  -  " .. cmds[n].usage) or ""), { Plain = true })
+			end
+		end)
+		item.AddCommand("clear", "vide la console", function(_, con) con:Clear() end)
+		item.AddCommand("copy", "copie la console", function(_, con)
+			local clip = setclipboard or toclipboard
+			if clip and pcall(clip, exportText()) then con:Ok("Copié.") else con:Warn("Presse-papiers indisponible.") end
+		end)
+
+		item._events = o.Events
+		item.Instance = holder
+		Library.Consoles[#Library.Consoles + 1] = item
+		holder.Destroying:Connect(function()
+			flush()
+			local k = table.find(Library.Consoles, item)
+			if k then table.remove(Library.Consoles, k) end
+		end)
+
+		rebuild()
+		return item
+	end
+end
+
 -- Image (rbxassetid://..., ou simple identifiant numérique)
 function Block:CreateImage(o)
 	if type(o) ~= "table" then o = { Image = o } end
@@ -11013,6 +11439,12 @@ local pvFocused = true
 pcall(function()
 	track(UIS.WindowFocused:Connect(function() pvFocused = true end))
 	track(UIS.WindowFocusReleased:Connect(function() pvFocused = false end))
+	-- toute entrée (souris, clavier, doigt) prouve que la fenêtre est au premier plan : l'aperçu repasse tout de suite en pleine fréquence.
+	-- Sans ça, certains lanceurs ne signalent pas bien le focus et l'aperçu restait à ~4 images/s (glisser / prise des membres inutilisables).
+	track(UIS.InputBegan:Connect(function() pvFocused = true end))
+	track(UIS.InputChanged:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then pvFocused = true end
+	end))
 end)
 
 local PV_WHITE = Color3.fromRGB(255, 255, 255)
@@ -11057,7 +11489,7 @@ end
 
 -- ============================================================================
 -- EMOTES de l'aperçu 3D (avatar R6) : coucou · pause · coucou · EMOTE · coucou · pause · coucou · EMOTE...
---   Option Emotes = true (Home l'active ; Library.HomeEmotes = false pour la couper). pv:PlayEmote(numéro | "Nom") en lance une tout de suite.
+--   Option Emotes = true (coupée dans Home par défaut ; Library.HomeEmotes = true pour l'activer). pv:PlayEmote(numéro | "Nom") en lance une tout de suite.
 --   Library.PreviewEmotes = liste { Name, Dur, Fn(u, T, P) } : P.rs / ls (épaules), rh / lh (hanches), nk (cou), rt (torse) = CFrame
 --   (rotations dans le repère du parent) ; Fn retourne : décalage vertical, tour sur soi (rad, axe Y), salto (rad, axe X),
 --   glissement latéral (studs), inclinaison de côté (rad, axe Z) — les deux derniers sont facultatifs.
@@ -12928,9 +13360,13 @@ function Block:CreatePreview3D(o)
 				setTheme(order[((table.find(order, curTheme) or 0) % #order) + 1])
 				bgBtn.Text = "Fond : " .. ((TH[curTheme] and TH[curTheme].Name) or "")
 			end)
-			pill("Emote", 2, randomEmote)
-			pill("Zoom", 3, function() zoomTo = zoomTo > 1.2 and 1 or 3.4 end)
-			pill("Vue", 4, function() yaw, pitch, zoomTo = YAW0, PITCH0, 1 end)
+			local slot = 2
+			if opt.Emotes then   -- bouton « Emote » seulement si les emotes sont actives
+				pill("Emote", slot, randomEmote)
+				slot += 1
+			end
+			pill("Zoom", slot, function() zoomTo = zoomTo > 1.2 and 1 or 3.4 end)
+			pill("Vue", slot + 1, function() yaw, pitch, zoomTo = YAW0, PITCH0, 1 end)
 		end
 	end
 
@@ -13198,6 +13634,13 @@ end
 Library.Version = "5.10.0"
 Library.AppName = "Invincible"
 Library.Changelog = {
+	{ Version = "5.11.0", Date = "2026-11-01", Title = "Console et recherche", Notes = {
+		"+ Nouvel élément Console (style CMD) : titre + description, lignes colorées par niveau, filtres, champ de commandes avec historique (flèches haut / bas) et sauvegarde optionnelle entre deux sessions.",
+		"+ Library:LogEvent(tag, texte, niveau) : écrit dans toutes les consoles créées avec Events = true.",
+		"Aperçu du personnage : il repasse en pleine fréquence dès qu'on touche la souris ou l'écran (avant, il pouvait rester à ~4 images/s et le glisser / la prise des membres ne répondaient pas).",
+		"Aperçu du personnage (Home) : les emotes sont retirées, le personnage fait juste coucou en boucle (Library.HomeEmotes = true pour les remettre).",
+		"Barre de recherche : elle s'agrandit vers le bas, à sa largeur, et les résultats s'affichent dedans, avec le même verre que le reste de l'interface.",
+	} },
 	{ Version = "5.10.0", Date = "2026-10-28", Title = "Serveurs", Notes = {
 		"+ Home > Serveurs : changer de serveur (aléatoire, le plus vide, le plus rempli) avec un filtre de joueurs, borné par le maximum du jeu.",
 		"+ Re-rejoindre le même serveur, ou rejoindre un serveur public à partir de son ID.",
@@ -14362,7 +14805,7 @@ function Library:_buildHomeExplain(sub)
 
 	local els = block("API · les éléments", "Right")
 	els:CreateParagraph({ Title = "Block:Create...", Content = lines({
-		"Button, Toggle, Slider, RangeSlider, Stepper, Dropdown (Multi, Search), Input, TextArea, ColorPicker (opacité, pipette), Keybind (Toggle / Hold / Always), Radio, Progress, Table, Image.",
+		"Button, Toggle, Slider, RangeSlider, Stepper, Dropdown (Multi, Search), Input, TextArea, ColorPicker (opacité, pipette), Keybind (Toggle / Hold / Always), Radio, Progress, Table, Image, Console.",
 		"",
 		"Texte : Section, Label, Paragraph, Divider.",
 		"Données en direct : Stats (tuiles chiffrées), Graph (histogramme glissant), Preview3D (aperçu 3D du personnage).",
@@ -14433,7 +14876,7 @@ function Window:CreateHomeTab(name, icon, cfg)
 	local prof = subInfo:CreateBlock({ Name = "Mon personnage", Side = "Left" })
 	local pv = prof:CreatePreview3D({ Name = false, Character = true, Height = 260,
 		Theme = "studio", Toolbar = false, Yaw = 180, Pitch = -0.04, RigType = "R6",
-		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = false, AutoRotate = false, Wave = true, Animate = true, Emotes = Library.HomeEmotes ~= false } })
+		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = false, AutoRotate = false, Wave = true, Animate = true, Emotes = Library.HomeEmotes == true } })
 	-- première arrivée : animation de bienvenue (2 sauts, bras levés) ; ensuite un petit saut à chaque retour sur Home > Info.
 	-- Dans les deux cas le coucou continue en boucle (une fois la lib entièrement chargée). Library.HomeWelcome = false : sauts seuls.
 	do
