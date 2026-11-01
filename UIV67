@@ -1792,7 +1792,38 @@ Library._ptrCheck = function(gui)
 	end
 	Library._ptrLearn = base - (ap.Y + as.Y / 2)
 end
-function Library:ResetPointerCalibration() Library._ptrLearn = 0 end
+-- Calibrage par VOTES (appris à l'usage, sans rien régler) : à chaque appui sur un petit élément (onglet du menu, bouton, aperçu...),
+-- le vrai pointeur y est forcément. Chaque correction candidate (0, ±inset, ±58, ±36) dont le pointeur calculé tombe dans l'élément
+-- marque un point ; les éléments fins (~34 px) départagent vite (un pointeur décalé de 58 px tombe à côté). Dès qu'une correction
+-- devance nettement l'actuelle, elle est adoptée : c'est ce qui rattrape un curseur trop haut / trop bas de 58 px.
+Library._ptrVotes = Library._ptrVotes or {}
+Library._ptrVote = function(gui, weight)
+	local okT, last = pcall(function() return UIS:GetLastInputType() end)
+	if okT and last == Enum.UserInputType.Touch then return end
+	if not (gui and gui.Parent) then return end
+	local ap, as = gui.AbsolutePosition, gui.AbsoluteSize
+	if as.Y < 4 or as.Y > 90 then return end   -- seulement les éléments fins : les grands ne départagent rien
+	local man = Library.PointerOffset
+	local base = UIS:GetMouseLocation().Y - (man and man.Y or 0)
+	local ins = guiInset().Y
+	local cands = { 0, ins, -ins, 58, -58, 36, -36 }
+	local V = Library._ptrVotes
+	local w = math.min(1, 34 / as.Y) * (weight or 1)
+	for _, c in ipairs(cands) do
+		local y = base - c
+		if y >= ap.Y and y <= ap.Y + as.Y then V[c] = (V[c] or 0) + w end
+	end
+	local cur = Library._ptrLearn or 0
+	local best, bv = cur, V[cur] or 0
+	for _, c in ipairs(cands) do
+		if (V[c] or 0) > bv then best, bv = c, V[c] end
+	end
+	if best ~= cur and bv >= (V[cur] or 0) + 1.5 then Library._ptrLearn = best end
+end
+function Library:ResetPointerCalibration()
+	Library._ptrLearn = 0
+	table.clear(Library._ptrVotes)
+end
 
 -- Échelle réelle de la fenêtre (UIScale + animation), pour convertir pixels écran <-> pixels UI
 local function pxScale()
@@ -6188,6 +6219,7 @@ function Block:CreateButton(o)
 	trackStyled(b, st, "row")
 	hover(b, st)
 	self:_reg(b, o.Name)
+	b.InputBegan:Connect(function(i) if isPress(i) then Library._ptrVote(b) end end)   -- calibrage du pointeur
 	local armed, armToken = false, 0
 	local baseText = o.Name or "Button"
 	b.MouseButton1Click:Connect(function()
@@ -13309,6 +13341,7 @@ function Block:CreatePreview3D(o)
 	vp.InputBegan:Connect(function(i)
 		if isPress(i) then
 			pressed, moved, pressT = true, 0, os.clock()
+			pcall(Library._ptrCheck, vp)   -- le vrai pointeur est dans l'aperçu : si le calculé est dehors, on recale
 			pressPos = Library._pointerPos(i.Position)
 			ix.press(pressPos)   -- sur un membre / le torse : prise (voir plus haut) au lieu de tourner la caméra
 			tween(hint, { TextTransparency = 1 }, 0.2)
@@ -13637,6 +13670,7 @@ Library.Changelog = {
 	{ Version = "5.11.0", Date = "2026-11-01", Title = "Console et recherche", Notes = {
 		"+ Nouvel élément Console (style CMD) : titre + description, lignes colorées par niveau, filtres, champ de commandes avec historique (flèches haut / bas) et sauvegarde optionnelle entre deux sessions.",
 		"+ Library:LogEvent(tag, texte, niveau) : écrit dans toutes les consoles créées avec Events = true.",
+		"Pointeur : calibrage automatique par votes (clics sur les onglets du menu et les boutons) : un curseur décalé de 58 px (trop haut ou trop bas) se recale tout seul, ce qui remet en état la prise des membres et le ragdoll du torse dans l'aperçu.",
 		"Aperçu du personnage : il repasse en pleine fréquence dès qu'on touche la souris ou l'écran (avant, il pouvait rester à ~4 images/s et le glisser / la prise des membres ne répondaient pas).",
 		"Aperçu du personnage (Home) : les emotes sont retirées, le personnage fait juste coucou en boucle (Library.HomeEmotes = true pour les remettre).",
 		"Barre de recherche : elle s'agrandit vers le bas, à sa largeur, et les résultats s'affichent dedans, avec le même verre que le reste de l'interface.",
@@ -16336,6 +16370,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 		LayoutOrder = parentTab and ((#parentTab.Children + 1) * 2) or ((#self.Tabs + 1) * 2),
 	}, parentTab and parentTab:_childHolder() or self.Sidebar)
 	new("UICorner", { CornerRadius = UDim.new(0, 8) }, btn)
+	btn.InputBegan:Connect(function(i) if isPress(i) then Library._ptrVote(btn) end end)   -- calibrage du pointeur (voir Library._ptrVote)
 	local bar = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
 		Size = UDim2.new(0, 3, 0, 0), BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, btn)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
@@ -18124,7 +18159,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Tooltip = "Tant que l'interface est ouverte, W A S D et Espace n'agissent plus sur ton personnage (Library.BlockedKeys pour changer la liste). Rien n'est bloqué pendant la saisie de texte ou l'assignation d'une touche.",
 		Callback = function(v) Library:SetBlockGameKeys(v) end })
 	D:CreateSlider({ Name = "Décalage vertical du curseur", Flag = "ui.ptroffset", Min = -80, Max = 80, Default = 0, Step = 1, Suffix = " px",
-		Tooltip = "Le color picker se recale tout seul au premier clic. À régler seulement si, malgré ça, la poignée n'est pas pile sous ton curseur : positif = la poignée monte, négatif = elle descend. Laisse 0 sinon.",
+		Tooltip = "Le color picker se recale tout seul au premier clic. À régler seulement si, malgré ça, la poignée n'est pas pile sous ton curseur : positif = la poignée / le curseur monte, négatif = il descend (ex. -58 si le curseur est 58 px trop haut). Le calibrage se fait aussi tout seul en cliquant sur les onglets et les boutons. Laisse 0 sinon.",
 		Callback = function(v) Library.PointerOffset = Vector2.new(0, tonumber(v) or 0) end })
 	D:CreateToggle({ Name = "Verrouiller la position", Flag = "ui.lockpos", Default = Library.LockPosition == true,
 		Tooltip = "La fenêtre ne peut plus être déplacée ni redimensionnée à la souris (le double-clic pour réduire et Ctrl+R restent possibles).",
