@@ -7,6 +7,20 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.4 — APERÇU DU PERSONNAGE : FOND ANIMÉ + INTERACTIF
+		• Home > Mon personnage : le fond bleu uni est remplacé par un décor animé à thèmes. Par défaut « Ange » : fond noir, aura + halo au-dessus
+		  de la tête de la couleur de la TÊTE du joueur, ailes qui battent de la couleur de son TORSE (couleurs très sombres légèrement éclaircies pour
+		  rester visibles sur le noir). Autres thèmes : Nuit (étoiles qui scintillent + étoiles filantes),
+		  Crépuscule (soleil qui se couche), Aurore (rubans qui ondulent), Studio (projecteur) et Cyber (grille néon qui défile).
+		  Le sol et la lumière de l'aperçu s'accordent au thème. Library.PreviewTheme = "night" | "dusk" | "aurora" | "studio" | "cyber" (retenu
+		  pendant la session) · Library.PreviewThemes (tes propres thèmes : top, bot, floor, floorTr, amb, light, accent, stars, starColor, sun,
+		  aurora, spot, grid, shoot) · Library.PreviewThemeOrder (ordre du bouton « Fond »).
+		• Interactions : clic sur l'aperçu = étincelles + emote au hasard · double-clic = zoom sur le haut du corps (re-double-clic = dézoom) ·
+		  le personnage tourne doucement la tête vers le curseur quand il survole l'aperçu · le décor suit le glissement (parallaxe) ·
+		  boutons en haut à droite : « Fond » (change de thème), « Emote », « Zoom », « Vue » (recentre).
+		  CreatePreview3D({ Theme = "night" | true }) active ce système sur n'importe quel aperçu · Toolbar = false cache les boutons.
+		  Sans Theme : ancien comportement (Background / FloorColor unis).
+
 	V9.3 — CHAMPS DE TEXTE QUI GRANDISSENT VERS LE BAS
 		• CreateInput : quand le texte est trop long, il passe à la ligne et le champ (ainsi que sa ligne dans le bloc) s'agrandit vers le bas
 		  avec une transition (ressort), au lieu de s'étirer sur une seule longue ligne. Il se rétracte quand le texte raccourcit.
@@ -11056,6 +11070,33 @@ Library._initEmotes = function()   -- dans une fonction : ses variables locales 
 end
 Library._initEmotes()
 
+-- Thèmes de fond de l'aperçu 3D (option Theme de CreatePreview3D) : dégradé top -> bot + décor animé. Tu peux en ajouter / modifier :
+--   Library.PreviewThemes.monTheme = { Name = "Mon thème", top = Color3, bot = Color3, floor = Color3, floorTr = 0.3, amb = Color3, light = Color3,
+--       accent = Color3 (étincelles), stars = 0..52, starColor = Color3, shoot = true, sun = true, aurora = true, spot = true, grid = true,
+--       tint = true (aura / étincelles / sol à la couleur de la tête), angel = true (halo + ailes sur l'avatar) }
+--   puis table.insert(Library.PreviewThemeOrder, "monTheme")
+Library.PreviewThemeOrder = Library.PreviewThemeOrder or { "angel", "night", "dusk", "aurora", "studio", "cyber" }
+Library.PreviewThemes = Library.PreviewThemes or {
+	-- Ange : fond noir, aura + halo de la couleur de la TÊTE du joueur, ailes de la couleur de son TORSE (tint = couleurs prises sur l'avatar)
+	angel = { Name = "Ange", top = Color3.fromRGB(0, 0, 0), bot = Color3.fromRGB(5, 5, 9), floorTr = 0.8,
+		amb = Color3.fromRGB(175, 175, 182), light = Color3.fromRGB(255, 255, 255), accent = Color3.fromRGB(255, 255, 255),
+		spot = true, tint = true, angel = true },
+	night = { Name = "Nuit", top = Color3.fromRGB(5, 7, 18), bot = Color3.fromRGB(30, 28, 62), floor = Color3.fromRGB(205, 210, 235), floorTr = 0.3,
+		amb = Color3.fromRGB(150, 155, 185), light = Color3.fromRGB(225, 230, 255), accent = Color3.fromRGB(255, 255, 255),
+		stars = 52, starColor = Color3.fromRGB(255, 255, 255), shoot = true },
+	dusk = { Name = "Crépuscule", top = Color3.fromRGB(34, 22, 72), bot = Color3.fromRGB(255, 132, 88), floor = Color3.fromRGB(255, 224, 198), floorTr = 0.25,
+		amb = Color3.fromRGB(195, 160, 150), light = Color3.fromRGB(255, 214, 180), accent = Color3.fromRGB(255, 205, 140),
+		stars = 18, starColor = Color3.fromRGB(255, 240, 225), sun = true, shoot = true },
+	aurora = { Name = "Aurore", top = Color3.fromRGB(3, 12, 24), bot = Color3.fromRGB(10, 42, 54), floor = Color3.fromRGB(190, 235, 225), floorTr = 0.3,
+		amb = Color3.fromRGB(150, 180, 180), light = Color3.fromRGB(210, 255, 240), accent = Color3.fromRGB(150, 255, 220),
+		stars = 30, starColor = Color3.fromRGB(235, 255, 250), aurora = true },
+	studio = { Name = "Studio", top = Color3.fromRGB(52, 52, 60), bot = Color3.fromRGB(13, 13, 17), floor = Color3.fromRGB(235, 235, 240), floorTr = 0.12,
+		amb = Color3.fromRGB(170, 170, 176), light = Color3.fromRGB(255, 255, 255), accent = Color3.fromRGB(255, 255, 255), spot = true },
+	cyber = { Name = "Cyber", top = Color3.fromRGB(14, 6, 36), bot = Color3.fromRGB(70, 16, 92), floor = Color3.fromRGB(255, 120, 220), floorTr = 0.45,
+		amb = Color3.fromRGB(170, 140, 190), light = Color3.fromRGB(255, 190, 255), accent = Color3.fromRGB(255, 120, 230),
+		stars = 14, starColor = Color3.fromRGB(255, 170, 240), grid = true },
+}
+
 function Block:CreatePreview3D(o)
 	if type(o) ~= "table" then o = { Name = o } end
 	local title = o.Name
@@ -11071,7 +11112,7 @@ function Block:CreatePreview3D(o)
 
 	local vp = new("ViewportFrame", {
 		Position = UDim2.new(0, 8, 0, top), Size = UDim2.new(1, -16, 0, h),
-		BackgroundColor3 = typeof(o.Background) == "Color3" and o.Background or Color3.fromRGB(10, 10, 13), BackgroundTransparency = 0, BorderSizePixel = 0,
+		BackgroundColor3 = typeof(o.Background) == "Color3" and o.Background or Color3.fromRGB(10, 10, 13), BackgroundTransparency = o.Theme and 1 or 0, BorderSizePixel = 0,
 		Ambient = typeof(o.Background) == "Color3" and Color3.fromRGB(200, 200, 205) or Color3.fromRGB(170, 170, 176), LightColor = Color3.fromRGB(255, 255, 255),
 		LightDirection = Vector3.new(-0.6, -1, -0.5), ClipsDescendants = true, Active = true,
 	}, f)
@@ -11120,6 +11161,210 @@ function Block:CreatePreview3D(o)
 	floor.Material = Enum.Material.SmoothPlastic
 	floor.Anchored, floor.CanCollide, floor.CanQuery, floor.CanTouch, floor.CastShadow = true, false, false, false, false
 	floor.Parent = vp
+
+	-- ---------------------------------------------------------------- FOND ANIMÉ À THÈMES (option Theme) + étincelles
+	--   Sans Theme : rien de tout ça (ancien fond uni). Le décor vit DERRIÈRE le ViewportFrame (devenu transparent) ; les étincelles dans le calque 2D.
+	local TH = (o.Theme and Library.PreviewThemes) or nil
+	local curTheme, floorTr = nil, 0.15
+	local angelOn, auraCol, avHeadCol, avTorsoCol = false, Color3.new(1, 1, 1), nil, nil   -- thème Ange : couleurs prises sur l'avatar
+	local setTheme, bgStep, spawnBurst = function() end, function() end, function() end
+	if TH then
+		local WHITE = Color3.new(1, 1, 1)
+		local bg = new("Frame", { Position = UDim2.new(0, 8, 0, top), Size = UDim2.new(1, -16, 0, h), BackgroundColor3 = WHITE,
+			BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 0 }, f)
+		corner(bg, 6)
+		local grad = new("UIGradient", { Rotation = 90 }, bg)
+		vp:GetPropertyChangedSignal("Size"):Connect(function() bg.Size = vp.Size end)
+
+		local function disc(parent, size, color, tr, z)   -- UICorner posé à la main : le mode « Carré » de la lib ne doit pas les carrer
+			local d = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(size, size), BackgroundColor3 = color,
+				BackgroundTransparency = tr, BorderSizePixel = 0, Visible = false, ZIndex = z or 1 }, parent)
+			local c = Instance.new("UICorner")
+			c.CornerRadius = UDim.new(1, 0)
+			c.Parent = d
+			return d
+		end
+
+		-- étoiles (profondeur d : les proches bougent plus à la parallaxe)
+		local stars = {}
+		for i = 1, 52 do
+			local dpt = 0.3 + math.random() * 0.7
+			stars[i] = { f = disc(bg, dpt > 0.72 and 3 or 2, WHITE, 0.3, 1), x = math.random(), y = math.random() * 0.82, d = dpt,
+				ph = math.random() * 6.28, sp = 0.8 + math.random() * 2.2 }
+		end
+		-- étoile filante
+		local shoot = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(46, 2), BackgroundColor3 = WHITE,
+			BorderSizePixel = 0, Rotation = 22, Visible = false, ZIndex = 1 }, bg)
+		new("UIGradient", { Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0) }) }, shoot)
+		-- crépuscule : soleil + halo
+		local sunGlow = disc(bg, 190, Color3.fromRGB(255, 170, 110), 0.82, 1)
+		local sunDisk = disc(bg, 62, Color3.fromRGB(255, 222, 160), 0.05, 1)
+		-- aurore : 3 rubans
+		local ribs = {}
+		for i = 1, 3 do
+			local r = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(1.6, 0, 0.34, 0), BackgroundColor3 = WHITE,
+				BorderSizePixel = 0, Visible = false, ZIndex = 1 }, bg)
+			new("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1),
+				NumberSequenceKeypoint.new(0.5, 0.62), NumberSequenceKeypoint.new(1, 1) }) }, r)
+			ribs[i] = r
+		end
+		-- studio : projecteur (3 halos empilés)
+		local glowSz = { 320, 230, 150 }
+		local glows = { disc(bg, 320, WHITE, 0.95, 1), disc(bg, 230, WHITE, 0.93, 1), disc(bg, 150, WHITE, 0.9, 1) }
+		-- cyber : soleil néon, sol, lignes qui défilent
+		local cySun = disc(bg, 96, Color3.fromRGB(255, 120, 200), 0.05, 1)
+		cySun.AnchorPoint = Vector2.new(0.5, 0.78)
+		local cyGround = new("Frame", { Position = UDim2.new(0, 0, 0.56, 0), Size = UDim2.new(1, 0, 0.44, 0), BackgroundColor3 = WHITE,
+			BorderSizePixel = 0, Visible = false, ZIndex = 2 }, bg)
+		new("UIGradient", { Rotation = 90, Color = ColorSequence.new(Color3.fromRGB(26, 6, 48), Color3.fromRGB(88, 20, 110)) }, cyGround)
+		local cyLines = {}
+		for i = 1, 8 do
+			cyLines[i] = new("Frame", { Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = Color3.fromRGB(255, 110, 220),
+				BorderSizePixel = 0, Visible = false, ZIndex = 3 }, bg)
+		end
+		-- étincelles du clic (réserve de 16, dans le calque 2D au-dessus de l'avatar)
+		local sparks, sparkOn = {}, false
+		for i = 1, 16 do
+			local sp = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(4, 4), BackgroundColor3 = WHITE,
+				BorderSizePixel = 0, Visible = false, ZIndex = 4 }, ov)
+			local c = Instance.new("UICorner")
+			c.CornerRadius = UDim.new(1, 0)
+			c.Parent = sp
+			sparks[i] = { f = sp, life = 0, max = 1, x = 0, y = 0, vx = 0, vy = 0 }
+		end
+
+		spawnBurst = function(pos)   -- pos : position du pointeur (même repère que AbsolutePosition)
+			local ap, as = vp.AbsolutePosition, vp.AbsoluteSize
+			local sc = as.Y / h
+			if sc <= 0.01 then return end
+			local th = TH[curTheme] or {}
+			local lx, ly = (pos.X - ap.X) / sc, (pos.Y - ap.Y) / sc
+			for i, s in ipairs(sparks) do
+				local a = (i / #sparks) * math.pi * 2 + math.random() * 0.5
+				local spd = 55 + math.random() * 95
+				s.x, s.y, s.vx, s.vy = lx, ly, math.cos(a) * spd, math.sin(a) * spd - 30
+				s.life = 0.55 + math.random() * 0.3
+				s.max = s.life
+				local z = (i % 3 == 0) and 5 or 3
+				s.f.Size = UDim2.fromOffset(z, z)
+				s.f.BackgroundColor3 = (th.tint and auraCol) or th.accent or WHITE
+				s.f.BackgroundTransparency = 0
+				s.f.Position = UDim2.fromOffset(lx, ly)
+				s.f.Visible = true
+			end
+			sparkOn = true
+		end
+
+		local bgT, shootWait, shootLife, sx0, sy0 = 0, 2.5, 0, 0.3, 0.1
+		bgStep = function(dt, yw, hx, hy)   -- yw : rotation de la vue (parallaxe) · hx, hy : curseur -1..1 sur l'aperçu
+			bgT += dt
+			local t = bgT
+			if sparkOn then
+				local alive = false
+				for _, s in ipairs(sparks) do
+					if s.life > 0 then
+						s.life -= dt
+						if s.life <= 0 then
+							s.f.Visible = false
+						else
+							alive = true
+							s.vy += 260 * dt
+							s.x += s.vx * dt
+							s.y += s.vy * dt
+							s.f.Position = UDim2.fromOffset(s.x, s.y)
+							s.f.BackgroundTransparency = 1 - math.clamp(s.life / s.max, 0, 1)
+						end
+					end
+				end
+				sparkOn = alive
+			end
+			local th = TH[curTheme]
+			if not th then return end
+			local tour = yw / (math.pi * 2)
+			for i = 1, (th.stars or 0) do
+				local s = stars[i]
+				if not s then break end
+				s.f.Position = UDim2.new((s.x - tour * s.d * 0.9 - hx * 0.025 * s.d) % 1, 0, s.y - hy * 0.02 * s.d, 0)
+				s.f.BackgroundTransparency = 0.1 + 0.75 * (0.5 + 0.5 * math.sin(t * s.sp + s.ph))
+			end
+			if th.shoot then
+				if shootLife <= 0 then
+					shootWait -= dt
+					if shootWait <= 0 then
+						shootLife, shootWait = 0.9, 4 + math.random() * 5
+						sx0, sy0 = 0.1 + math.random() * 0.5, 0.04 + math.random() * 0.25
+					end
+				else
+					shootLife -= dt
+					local u = 1 - shootLife / 0.9
+					shoot.Visible = shootLife > 0
+					shoot.Position = UDim2.new(sx0 + u * 0.38, 0, sy0 + u * 0.16, 0)
+					shoot.BackgroundTransparency = u > 0.7 and (u - 0.7) / 0.3 or 0
+				end
+			end
+			if th.sun then
+				local sx, sy = 0.5 - hx * 0.03, 0.78 + math.sin(t * 0.5) * 0.012
+				sunGlow.Position = UDim2.new(sx, 0, sy, 0)
+				sunDisk.Position = UDim2.new(sx, 0, sy, 0)
+				sunGlow.BackgroundTransparency = 0.8 + math.sin(t * 1.3) * 0.04
+			end
+			if th.aurora then
+				for i, r in ipairs(ribs) do
+					r.Position = UDim2.new(0.5 + math.sin(t * 0.25 + i * 2) * 0.1 - hx * 0.03, 0, 0.2 + i * 0.15 + math.sin(t * 0.4 + i) * 0.025 - hy * 0.02, 0)
+					r.Rotation = math.sin(t * 0.2 + i * 1.7) * 7
+					r.BackgroundColor3 = Color3.fromHSV((0.36 + 0.14 * math.sin(t * 0.3 + i * 1.3)) % 1, 0.65, 1)
+				end
+			end
+			if th.spot then
+				local k = 1 + math.sin(t * 0.8) * 0.04
+				for i, g in ipairs(glows) do
+					g.Position = UDim2.new(0.5 - hx * 0.02 * i, 0, 0.42 - hy * 0.015 * i, 0)
+					g.BackgroundColor3 = th.tint and auraCol or WHITE
+					g.Size = UDim2.fromOffset(glowSz[i] * k, glowSz[i] * k)
+				end
+			end
+			if th.grid then
+				cySun.Position = UDim2.new(0.5 - hx * 0.02, 0, 0.56, 0)
+				for i, l in ipairs(cyLines) do
+					local u = ((i - 1) / #cyLines + t * 0.2) % 1
+					l.Position = UDim2.new(0, 0, 0.56 + 0.44 * u * u, 0)
+					l.Size = UDim2.new(1, 0, 0, u > 0.6 and 2 or 1)
+					l.BackgroundTransparency = 1 - (0.2 + 0.7 * u)
+				end
+			end
+		end
+
+		setTheme = function(key)
+			local th = TH[key]
+			if not th then return end
+			curTheme = key
+			Library.PreviewTheme = key
+			grad.Color = ColorSequence.new(th.top or Color3.fromRGB(10, 10, 13), th.bot or th.top or Color3.fromRGB(30, 30, 40))
+			vp.Ambient = th.amb or vp.Ambient
+			vp.LightColor = th.light or vp.LightColor
+			floor.Color = th.floor or floor.Color
+			floorTr = th.floorTr or 0.15
+			angelOn = th.angel == true
+			if th.tint then floor.Color = auraCol end
+			local ns = th.stars or 0
+			for i, s in ipairs(stars) do
+				s.f.Visible = i <= ns
+				s.f.BackgroundColor3 = th.starColor or WHITE
+			end
+			shoot.Visible, shootLife = false, 0
+			shoot.BackgroundColor3 = th.starColor or WHITE
+			sunGlow.Visible, sunDisk.Visible = th.sun == true, th.sun == true
+			for _, r in ipairs(ribs) do r.Visible = th.aurora == true end
+			for i, g in ipairs(glows) do
+				g.Visible = th.spot == true
+				g.BackgroundTransparency = th.tint and ({ 0.9, 0.82, 0.7 })[i] or ({ 0.95, 0.93, 0.9 })[i]
+			end
+			cySun.Visible, cyGround.Visible = th.grid == true, th.grid == true
+			for _, l in ipairs(cyLines) do l.Visible = th.grid == true end
+			dirty = true
+		end
+		setTheme(TH[o.Theme] and o.Theme or Library.PreviewThemeOrder[1])
+	end
 
 	-- Highlight (si le moteur l'affiche dans un ViewportFrame ; sinon repli : teinte du corps)
 	local hl
@@ -11448,6 +11693,12 @@ function Block:CreatePreview3D(o)
 		local center = (mn + mx) / 2
 		rig:PivotTo(rig:GetPivot() - center)
 		avBase, avY = rig:GetPivot(), 0
+		do   -- couleurs de la tête et du torse (thème Ange : halo + ailes)
+			local hd = rig:FindFirstChild("Head")
+			local tor = rig:FindFirstChild("Torso") or rig:FindFirstChild("UpperTorso")
+			avHeadCol = (hd and hd:IsA("BasePart")) and hd.Color or nil
+			avTorsoCol = (tor and tor:IsA("BasePart")) and tor.Color or nil
+		end
 		local size = mx - mn
 		local bsize = Vector3.new(math.clamp(size.X, 1, 9), math.clamp(size.Y, 2, 9), math.clamp(size.Z, 1, 6))
 
@@ -11622,7 +11873,7 @@ function Block:CreatePreview3D(o)
 		end
 		for _, e in ipairs(decals) do e.d.Transparency = opt.Chams and 1 or e.tr end
 		for _, e in ipairs(hides) do e.i.Parent = opt.Chams and nil or e.parent end
-		floor.Transparency = (opt.Floor and fit) and 0.15 or 1
+		floor.Transparency = (opt.Floor and fit) and floorTr or 1
 		if hl then
 			hl.Enabled = opt.Highlight
 			hl.FillColor = opt.HighlightFill
@@ -11650,6 +11901,7 @@ function Block:CreatePreview3D(o)
 	local PITCH0 = tonumber(o.Pitch) or -0.12
 	local yaw, pitch = YAW0, PITCH0
 	local dragging = false
+	local hoverX, hoverY, zoomK, zoomTo = 0, 0, 1, 1   -- survol du curseur (-1..1) · zoom animé (double-clic / bouton Zoom)
 
 	-- ---------------------------------------------------------------- calque 2D
 	local lines, nLines = {}, 0
@@ -11777,6 +12029,99 @@ function Block:CreatePreview3D(o)
 		return true
 	end
 
+	-- ---------------------------------------------------------------- thème « Ange » : halo (couleur de la tête) + ailes (couleur du torse)
+	--   Pièces Neon ancrées, repositionnées chaque image sur la tête / le torse réels (elles suivent donc sauts, emotes, pirouettes).
+	local angel = { model = nil, rigFor = nil, feathers = {}, ring = {}, head = nil, torso = nil, r = 1 }
+	local function angelVisible(c)   -- lisible sur fond noir : seules les couleurs très sombres sont éclaircies
+		local lum = c.R * 0.3 + c.G * 0.59 + c.B * 0.11
+		if lum < 0.34 then c = c:Lerp(Color3.new(1, 1, 1), (0.34 - lum) * 2.8) end
+		return c
+	end
+	local function angelBuild()
+		if angel.model then angel.model:Destroy() end
+		angel.model, angel.feathers, angel.ring, angel.rigFor = nil, {}, {}, nil
+		local hd = rig and rig:FindFirstChild("Head")
+		local tor = rig and (rig:FindFirstChild("Torso") or rig:FindFirstChild("UpperTorso"))
+		if not (hd and tor and hd:IsA("BasePart") and tor:IsA("BasePart")) then return end
+		angel.head, angel.torso, angel.rigFor = hd, tor, rig
+		local m = Instance.new("Model")
+		m.Name = "AngelDecor"
+		local hc = angelVisible(avHeadCol or hd.Color)
+		local tc = angelVisible(avTorsoCol or tor.Color)
+		auraCol = hc
+		if angelOn then floor.Color = hc end
+		local function part(size, color, transp)
+			local p = Instance.new("Part")
+			p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = true, false, false, false, false
+			p.Material = Enum.Material.Neon
+			p.Color, p.Transparency, p.Size = color, transp, size
+			p.TopSurface, p.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
+			p.Parent = m
+			return p
+		end
+		local k = tor.Size.X / 2
+		-- ailes : 2 x 8 plumes (+ une lueur plus large et transparente derrière chacune), de la couleur du torse
+		local lens = { 2.4, 3.1, 3.7, 3.9, 3.6, 3.0, 2.3, 1.6 }
+		for _, sd in ipairs({ 1, -1 }) do
+			for i, l in ipairs(lens) do
+				local len = l * k
+				angel.feathers[#angel.feathers + 1] = {
+					p = part(Vector3.new(0.62 * k, len, 0.07 * k), tc, 0.1),
+					g = part(Vector3.new(0.95 * k, len * 1.05, 0.05 * k), tc, 0.82),
+					s = sd, i = i, a = 1.25 - (i - 1) * (1.65 / (#lens - 1)), len = len, z = i * 0.012 * k,
+				}
+			end
+		end
+		-- halo : anneau de 20 segments au-dessus de la tête, de la couleur de la tête (+ lueur)
+		local nSeg = 20
+		local r = math.max(hd.Size.X, hd.Size.Z) * 0.52
+		local chord = 2 * math.pi * r / nSeg * 1.12
+		for i = 1, nSeg do
+			angel.ring[i] = { p = part(Vector3.new(0.14 * k, 0.14 * k, chord), hc, 0), g = part(Vector3.new(0.38 * k, 0.38 * k, chord), hc, 0.78),
+				phi = (i / nSeg) * 2 * math.pi }
+		end
+		angel.r = r
+		m.Parent = vp
+		angel.model = m
+	end
+	local function angelStep(t)
+		local m = angel.model
+		if not angelOn or not (rig and rig.Parent) then
+			if m and m.Parent then m.Parent = nil end
+			return
+		end
+		if angel.rigFor ~= rig then
+			angelBuild()
+			m = angel.model
+		end
+		if not m then return end
+		if m.Parent ~= vp then m.Parent = vp end
+		local hd, tor = angel.head, angel.torso
+		if not (hd.Parent and tor.Parent) then return end
+		local tcf, hcf = tor.CFrame, hd.CFrame
+		local k = tor.Size.X / 2
+		local flap = math.sin(t * 2.4)
+		local rx, ry, rz = tor.Size.X * 0.28, tor.Size.Y * 0.3, tor.Size.Z * 0.5 + 0.06
+		local spread, lift = -0.5 + flap * 0.16, 0.1 + flap * 0.06   -- balayage vers l'arrière + battement
+		local wf = {}
+		for _, sd in ipairs({ 1, -1 }) do
+			wf[sd] = tcf * CFrame.new(sd * rx, ry, rz) * CFrame.Angles(0, sd * spread, 0) * CFrame.Angles(0, 0, sd * lift)
+		end
+		for _, w in ipairs(angel.feathers) do
+			local a = w.a + math.sin(t * 2.4 - w.i * 0.3) * 0.035   -- petite ondulation d'une plume à l'autre
+			local cf = wf[w.s] * CFrame.Angles(0, 0, w.s * (a - math.pi / 2)) * CFrame.new(0, w.len / 2, w.z)
+			w.p.CFrame, w.g.CFrame = cf, cf
+		end
+		local hh = hd.Size.Y / 2 + 0.55 * k + math.sin(t * 1.6) * 0.06 * k
+		local hc2 = hcf * CFrame.new(0, hh, 0) * CFrame.Angles(-0.14, 0, math.sin(t * 1.1) * 0.04)
+		local gt = 0.72 + 0.1 * math.sin(t * 2.2)
+		for _, g in ipairs(angel.ring) do
+			local cf = hc2 * CFrame.new(math.cos(g.phi) * angel.r, 0, math.sin(g.phi) * angel.r) * CFrame.Angles(0, -g.phi, 0)
+			g.p.CFrame, g.g.CFrame = cf, cf
+			g.g.Transparency = gt
+		end
+	end
+
 	local function render(dt)
 		if not fit then return end   -- avatar pas encore chargé
 		local sc = vp.AbsoluteSize.Y / h
@@ -11784,8 +12129,10 @@ function Block:CreatePreview3D(o)
 		local W, H = vp.AbsoluteSize.X / sc, h
 		t += dt
 		if opt.AutoRotate and not dragging then yaw += math.rad(opt.RotateSpeed) * dt end
-		local dist = fit.dist / math.clamp(opt.Zoom, 0.4, 3)
-		cam.CFrame = CFrame.new(fit.focus) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0) * CFrame.new(0, 0, dist)
+		local dist = fit.dist / (math.clamp(opt.Zoom, 0.4, 3) * zoomK)
+		local fo = fit.focus + Vector3.new(0, (zoomK - 1) * fit.size.Y * 0.2, 0)   -- zoom : on monte vers le haut du corps
+		-- le personnage tourne doucement la tête vers le curseur (hoverX / hoverY = 0 sans Theme)
+		cam.CFrame = CFrame.new(fo) * CFrame.Angles(0, yaw - hoverX * 0.16, 0) * CFrame.Angles(pitch - hoverY * 0.06, 0, 0) * CFrame.new(0, 0, dist)
 		if opt.Wave and not dragging then   -- face à la caméra : revient doucement de face après un glissement
 			local k = math.min(dt * 4, 1)
 			yaw += (((YAW0 - yaw + math.pi) % (2 * math.pi)) - math.pi) * k
@@ -11814,6 +12161,7 @@ function Block:CreatePreview3D(o)
 				avY, avSpin, avFlip, EMO.ax, EMO.ar = y, EMO.spin, EMO.flip, ex, er
 				rig:PivotTo(avBase * CFrame.new(ex, y, 0) * CFrame.Angles(EMO.flip, EMO.spin, er))
 			end
+			angelStep(t)   -- thème Ange : halo + ailes (ne fait rien pour les autres thèmes)
 			local em = (opt.Emotes and EMO.stage == 4) and Library.PreviewEmotes[EMO.idx] or nil
 			local lblTxt = em and ("Emote " .. EMO.idx .. "/" .. #Library.PreviewEmotes .. "  ·  " .. em.Name) or ""
 			if lblTxt ~= EMO.lbl then
@@ -11974,27 +12322,106 @@ function Block:CreatePreview3D(o)
 			dirty = false
 			applyAppearance()
 		end
+		if TH then
+			local tx, ty = 0, 0
+			local okp, mp = pcall(Library._pointerPos, Vector2.new(0, 0))
+			if okp and typeof(mp) == "Vector2" then
+				local ap, as = vp.AbsolutePosition, vp.AbsoluteSize
+				if as.X > 1 and as.Y > 1 and mp.X >= ap.X and mp.X <= ap.X + as.X and mp.Y >= ap.Y and mp.Y <= ap.Y + as.Y then
+					tx, ty = (mp.X - ap.X) / as.X * 2 - 1, (mp.Y - ap.Y) / as.Y * 2 - 1
+				end
+			end
+			local k = math.min(dt * 5, 1)
+			hoverX += (tx - hoverX) * k
+			hoverY += (ty - hoverY) * k
+			zoomK += (zoomTo - zoomK) * math.min(dt * 8, 1)
+			bgStep(dt, yaw, hoverX, hoverY)
+		end
 		render(dt)
 	end)
 	track(hbConn)
 	f.Destroying:Connect(function() pcall(function() hbConn:Disconnect() end) end)
 
-	-- ---------------------------------------------------------------- rotation à la souris / au doigt
+	-- ---------------------------------------------------------------- rotation à la souris / au doigt + clic / double-clic
+	--   glisser (> 5 px) = tourner · clic = étincelles + emote au hasard · double-clic = zoom (avec Theme)
+	local pressed, moved, pressT, pressPos = false, 0, 0, Vector2.new(0, 0)
+	local lastClickT = 0
+	local function randomEmote()
+		local list = Library.PreviewEmotes
+		if opt.Emotes and fit and fit.avatar and list and #list > 0 then
+			EMO.force = math.random(1, #list)
+		else
+			jumpPending = true
+		end
+	end
+	local function onViewClick(pos)
+		if not TH then return end
+		spawnBurst(pos)
+		local now = os.clock()
+		if now - lastClickT < 0.38 then
+			lastClickT = 0
+			zoomTo = zoomTo > 1.2 and 1 or 1.6
+			return
+		end
+		lastClickT = now
+		randomEmote()
+	end
 	vp.InputBegan:Connect(function(i)
 		if isPress(i) then
-			dragging = true
+			pressed, moved, pressT = true, 0, os.clock()
+			pressPos = Library._pointerPos(i.Position)
 			tween(hint, { TextTransparency = 1 }, 0.2)
 		end
 	end)
 	track(UIS.InputChanged:Connect(function(i)
-		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-			yaw -= i.Delta.X * 0.012
-			pitch = math.clamp(pitch - i.Delta.Y * 0.006, -1, 0.6)
+		if pressed and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			moved += math.abs(i.Delta.X) + math.abs(i.Delta.Y)
+			if moved > 5 then dragging = true end
+			if dragging then
+				yaw -= i.Delta.X * 0.012
+				pitch = math.clamp(pitch - i.Delta.Y * 0.006, -1, 0.6)
+			end
 		end
 	end))
 	track(UIS.InputEnded:Connect(function(i)
-		if dragging and isPress(i) then dragging = false end
+		if pressed and isPress(i) then
+			local wasClick = (not dragging) and (os.clock() - pressT) < 0.45
+			pressed, dragging = false, false
+			if wasClick then onViewClick(pressPos) end
+		end
 	end))
+
+	-- boutons en haut à droite de l'aperçu (frères du ViewportFrame : leurs clics ne font jamais tourner l'avatar)
+	if TH then
+		hint.Text = "glisser : tourner  ·  clic : emote  ·  double-clic : zoom"
+		if o.Toolbar ~= false then
+			local tb = new("Frame", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, top + 6),
+				Size = UDim2.fromOffset(0, 22), AutomaticSize = Enum.AutomaticSize.X, ZIndex = 6 }, f)
+			new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Right,
+				Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, tb)
+			local function pill(text, order, cb)
+				local b = new("TextButton", { AutoButtonColor = false, BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.45,
+					BorderSizePixel = 0, Font = F_MED, TextSize = 11, Text = text, TextColor3 = Color3.fromRGB(255, 255, 255),
+					Size = UDim2.fromOffset(0, 22), AutomaticSize = Enum.AutomaticSize.X, LayoutOrder = order, ZIndex = 6 }, tb)
+				new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, b)
+				corner(b, 6)
+				new("UIStroke", { Thickness = 1, Transparency = 0.75, Color = Color3.fromRGB(255, 255, 255), ApplyStrokeMode = BORDER }, b)
+				b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0.25 }, 0.12) end)
+				b.MouseLeave:Connect(function() tween(b, { BackgroundTransparency = 0.45 }, 0.12) end)
+				b.Activated:Connect(function() cb() end)
+				return b
+			end
+			local bgBtn
+			bgBtn = pill("Fond : " .. ((TH[curTheme] and TH[curTheme].Name) or ""), 1, function()
+				local order = Library.PreviewThemeOrder
+				setTheme(order[((table.find(order, curTheme) or 0) % #order) + 1])
+				bgBtn.Text = "Fond : " .. ((TH[curTheme] and TH[curTheme].Name) or "")
+			end)
+			pill("Emote", 2, randomEmote)
+			pill("Zoom", 3, function() zoomTo = zoomTo > 1.2 and 1 or 1.6 end)
+			pill("Vue", 4, function() yaw, pitch, zoomTo = YAW0, PITCH0, 1 end)
+		end
+	end
 
 	-- ---------------------------------------------------------------- API
 	local item = {}
@@ -13494,7 +13921,7 @@ function Window:CreateHomeTab(name, icon, cfg)
 	-- ----- mon personnage : aperçu 3D + identité
 	local prof = subInfo:CreateBlock({ Name = "Mon personnage", Side = "Left" })
 	local pv = prof:CreatePreview3D({ Name = false, Character = true, Height = 260,
-		Background = Color3.fromRGB(135, 206, 235), FloorColor = Color3.fromRGB(240, 248, 255), Yaw = 180, Pitch = -0.04, RigType = "R6",
+		Theme = Library.PreviewTheme or "angel", Yaw = 180, Pitch = -0.04, RigType = "R6",
 		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = true, AutoRotate = false, Wave = true, Animate = true, Emotes = Library.HomeEmotes ~= false } })
 	-- première arrivée : animation de bienvenue (2 sauts, bras levés) ; ensuite un petit saut à chaque retour sur Home > Info.
 	-- Dans les deux cas le coucou continue en boucle (une fois la lib entièrement chargée). Library.HomeWelcome = false : sauts seuls.
