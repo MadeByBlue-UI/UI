@@ -1836,6 +1836,11 @@ Library.SmoothScrollStep  = 110      -- px par cran de molette (avant : 64)
 Library.SmoothScrollSpeed = 26      -- raideur du ressort : plus haut = plus vif (avant : 20)
 Library.SmoothScrollAccel = true    -- molette tournée en continu : le défilement accélère (jusqu'à x4)
 Library.ScrollBarHover    = 9       -- épaisseur de la barre quand on la survole / la tient (px)
+-- Bouton « remonter en haut » (bas à droite de chaque colonne qui défile, dès qu'on a descendu)
+Library.TopBtn = { Enabled = true, Bg = Color3.fromRGB(255, 255, 255), Alpha = 0.25, Arrow = Color3.fromRGB(35, 35, 42), Threshold = 220 }
+Library._topBtns = {}
+Library.RememberScroll = true   -- chaque onglet retrouve sa position de défilement quand on y revient
+function Library._topBtnRestyle() for _, f in ipairs(Library._topBtns) do pcall(f) end end
 do -- (portée réduite : limite de 200 locals)
 local CAS = game:GetService("ContextActionService")
 local frames = setmetatable({}, { __mode = "k" })   -- cadre -> état { pos, vel, target, last }
@@ -2068,6 +2073,150 @@ function Library._regBar(sf)
 			over = barShown() and inZone()
 			look()
 		end)
+	end)
+end
+
+-- BOUTON « REMONTER EN HAUT » : petite pastille de verre blanc brillant avec une flèche vers le haut, en bas à droite de la colonne.
+-- Apparaît (fondu) quand on a descendu de plus de Library.TopBtn.Threshold px ; un clic remonte en douceur tout en haut.
+function Library._regTopBtn(sf, page)
+	if touchOnly then return end
+	local btn = new("TextButton", { Name = "ScrollTopBtn", Text = "", AutoButtonColor = false, BorderSizePixel = 0,
+		AnchorPoint = Vector2.new(1, 1), Size = UDim2.fromOffset(32, 32), BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 1, Visible = false, ZIndex = 40 }, page)
+	new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, btn)
+	new("UIGradient", { Rotation = 90,   -- reflet : moitié haute plus claire
+		Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+			ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
+			ColorSequenceKeypoint.new(0.501, Color3.fromRGB(226, 230, 238)),
+			ColorSequenceKeypoint.new(1, Color3.fromRGB(240, 243, 250)),
+		}) }, btn)
+	local bars = {}
+	for _, side in ipairs({ -1, 1 }) do   -- chevron « ^ » = deux petits traits arrondis
+		bars[#bars + 1] = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, side * 3.6, 0.5, 0.2),
+			Size = UDim2.fromOffset(10, 2.5), Rotation = side * 40, BackgroundColor3 = Library.TopBtn.Arrow,
+			BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 41 }, btn)
+		new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, bars[#bars])
+	end
+
+	local shown, hovered = false, false
+	local function restyle()
+		local S = Library.TopBtn
+		btn.BackgroundColor3 = S.Bg
+		for _, b in ipairs(bars) do b.BackgroundColor3 = S.Arrow end
+		if shown then btn.BackgroundTransparency = hovered and math.max(S.Alpha - 0.2, 0) or S.Alpha end
+	end
+	Library._topBtns[#Library._topBtns + 1] = restyle
+
+	local function place()   -- bas à droite de la colonne, un peu à gauche de la barre de défilement
+		local pa, sp, ss, k = page.AbsolutePosition, sf.AbsolutePosition, sf.AbsoluteSize, pxScale()
+		btn.Position = UDim2.fromOffset((sp.X + ss.X - pa.X) / k - 16, (sp.Y + ss.Y - pa.Y) / k - 14)
+	end
+	local function setShown(v)
+		if v == shown then return end
+		shown = v
+		local S = Library.TopBtn
+		if v then btn.Visible = true end
+		tween(btn, { BackgroundTransparency = v and S.Alpha or 1 }, 0.2)
+		for _, b in ipairs(bars) do tween(b, { BackgroundTransparency = v and 0 or 1 }, 0.2) end
+		if not v then
+			task.delay(0.24, function() if not shown then btn.Visible = false end end)
+		end
+	end
+	local function refresh()
+		if not sf.Parent then return end
+		local S = Library.TopBtn
+		local want = S.Enabled ~= false and sf.Visible and maxOf(sf) > S.Threshold and sf.CanvasPosition.Y > S.Threshold
+		setShown(want and true or false)
+		if want then place() end
+	end
+	sf:GetPropertyChangedSignal("CanvasPosition"):Connect(refresh)
+	sf:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(refresh)
+	sf:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() place() refresh() end)
+	sf:GetPropertyChangedSignal("AbsolutePosition"):Connect(function() if shown then place() end end)
+	sf:GetPropertyChangedSignal("Visible"):Connect(refresh)
+
+	btn.MouseEnter:Connect(function()
+		hovered = true
+		tween(btn, { Size = UDim2.fromOffset(36, 36), BackgroundTransparency = math.max(Library.TopBtn.Alpha - 0.2, 0) }, 0.12)
+	end)
+	btn.MouseLeave:Connect(function()
+		hovered = false
+		tween(btn, { Size = UDim2.fromOffset(32, 32), BackgroundTransparency = shown and Library.TopBtn.Alpha or 1 }, 0.12)
+	end)
+
+	local run, conn, wheelConn = 0, nil, nil
+	local function stopRise()   -- coupe la remontée (molette, glisser de la barre, nouveau clic...) sans à-coup : on reste où on est
+		run += 1
+		if conn then conn:Disconnect() conn = nil end
+		if wheelConn then wheelConn:Disconnect() wheelConn = nil end
+	end
+	btn.MouseButton1Click:Connect(function()
+		stopRise()
+		local my = run
+		active[sf] = nil
+		local y0 = sf.CanvasPosition.Y
+		if y0 <= 0 then return end
+		local dur = 0.4 + math.min(y0 / 3500, 0.6)   -- plus on est loin, plus c'est long (0,4 s à 1 s)
+		local t0, lastY = os.clock(), y0
+		-- un coup de molette pendant la montée l'arrête aussitôt
+		wheelConn = UIS.InputChanged:Connect(function(i)
+			if i.UserInputType == Enum.UserInputType.MouseWheel and my == run then stopRise() end
+		end)
+		conn = RunService.Heartbeat:Connect(function()
+			if my ~= run or not sf.Parent then stopRise() return end
+			if math.abs(sf.CanvasPosition.Y - lastY) > 3 then stopRise() return end   -- quelqu'un d'autre a bougé le contenu (barre saisie...)
+			local a = math.clamp((os.clock() - t0) / dur, 0, 1)
+			local e = a * a * a * (a * (a * 6 - 15) + 10)   -- « smootherstep » : démarre et finit tout en douceur
+			local y = y0 * (1 - e)
+			sf.CanvasPosition = Vector2.new(sf.CanvasPosition.X, y)
+			lastY = sf.CanvasPosition.Y
+			if a >= 1 then stopRise() end
+		end)
+	end)
+	restyle()
+	place()
+end
+
+-- MÉMOIRE DE DÉFILEMENT : la position de chaque colonne est retenue tant que son onglet est affiché, puis remise quand on y revient.
+-- (Quand la page est cachée, Roblox peut ramener le contenu en haut ; on ignore ces changements et on restaure après la mise en page.)
+function Library._regScrollMemory(sf, page)
+	local saved, busy, token = 0, false, 0
+	sf:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+		if busy or not page.Visible or not sf.Visible then return end
+		saved = sf.CanvasPosition.Y
+	end)
+	local function restore()
+		if Library.RememberScroll == false or saved <= 0 then return end
+		token += 1
+		local my = token
+		busy = true
+		task.spawn(function()
+			-- on attend que la page soit mise en page (hauteur du contenu connue), ~0,5 s au maximum
+			for _ = 1, 30 do
+				if my ~= token or not sf.Parent then return end
+				if maxOf(sf) >= saved - 1 then break end
+				task.wait()
+			end
+			if my ~= token then return end
+			local y = math.clamp(saved, 0, maxOf(sf))
+			active[sf] = nil
+			if math.abs(sf.CanvasPosition.Y - y) > 1 then
+				sf.CanvasPosition = Vector2.new(sf.CanvasPosition.X, y)
+			end
+			busy = false
+		end)
+	end
+	page:GetPropertyChangedSignal("Visible"):Connect(function()
+		if page.Visible then
+			restore()
+		else
+			token += 1   -- annule une restauration en cours ; la valeur retenue reste celle d'avant le masquage
+			busy = false
+		end
+	end)
+	sf:GetPropertyChangedSignal("Visible"):Connect(function()
+		if sf.Visible and page.Visible then restore() end
 	end)
 end
 end -- fin de la portée réduite
@@ -9169,6 +9318,10 @@ do
 		OutlineColor = Color3.fromRGB(255, 255, 255),
 		OffsetX = 36,                              -- décalage vers la gauche (px) par rapport au bord droit de l'élément
 	}
+	if not Library.TipStyleDefaults then   -- copie du style d'origine, utilisée par le bouton « Réinitialiser »
+		Library.TipStyleDefaults = {}
+		for k, v in pairs(Library.TipStyle) do Library.TipStyleDefaults[k] = v end
+	end
 
 	local function skin()
 		local S = Library.TipStyle
@@ -11249,26 +11402,12 @@ Library._initEmotes()
 --       accent = Color3 (étincelles), stars = 0..52, starColor = Color3, shoot = true, sun = true, aurora = true, spot = true, grid = true,
 --       tint = true (aura / étincelles / sol à la couleur de la tête), angel = true (halo + ailes sur l'avatar) }
 --   puis table.insert(Library.PreviewThemeOrder, "monTheme")
-Library.PreviewThemeOrder = Library.PreviewThemeOrder or { "angel", "night", "dusk", "aurora", "studio", "cyber" }
-Library.PreviewThemes = Library.PreviewThemes or {
-	-- Ange : fond noir, aura + halo de la couleur de la TÊTE du joueur, ailes de la couleur de son TORSE (tint = couleurs prises sur l'avatar)
-	angel = { Name = "Ange", top = Color3.fromRGB(0, 0, 0), bot = Color3.fromRGB(5, 5, 9), floorTr = 0.8,
-		amb = Color3.fromRGB(175, 175, 182), light = Color3.fromRGB(255, 255, 255), accent = Color3.fromRGB(255, 255, 255),
-		spot = true, tint = true, angel = true },
-	night = { Name = "Nuit", top = Color3.fromRGB(5, 7, 18), bot = Color3.fromRGB(30, 28, 62), floor = Color3.fromRGB(205, 210, 235), floorTr = 0.3,
-		amb = Color3.fromRGB(150, 155, 185), light = Color3.fromRGB(225, 230, 255), accent = Color3.fromRGB(255, 255, 255),
-		stars = 52, starColor = Color3.fromRGB(255, 255, 255), shoot = true },
-	dusk = { Name = "Crépuscule", top = Color3.fromRGB(34, 22, 72), bot = Color3.fromRGB(255, 132, 88), floor = Color3.fromRGB(255, 224, 198), floorTr = 0.25,
-		amb = Color3.fromRGB(195, 160, 150), light = Color3.fromRGB(255, 214, 180), accent = Color3.fromRGB(255, 205, 140),
-		stars = 18, starColor = Color3.fromRGB(255, 240, 225), sun = true, shoot = true },
-	aurora = { Name = "Aurore", top = Color3.fromRGB(3, 12, 24), bot = Color3.fromRGB(10, 42, 54), floor = Color3.fromRGB(190, 235, 225), floorTr = 0.3,
-		amb = Color3.fromRGB(150, 180, 180), light = Color3.fromRGB(210, 255, 240), accent = Color3.fromRGB(150, 255, 220),
-		stars = 30, starColor = Color3.fromRGB(235, 255, 250), aurora = true },
+-- Un seul fond d'aperçu : « Studio » (les autres thèmes — Ange, Nuit, Crépuscule, Aurore, Cyber — ont été supprimés).
+Library.PreviewThemeOrder = { "studio" }
+Library.PreviewThemes = {
 	studio = { Name = "Studio", top = Color3.fromRGB(52, 52, 60), bot = Color3.fromRGB(13, 13, 17), floor = Color3.fromRGB(235, 235, 240), floorTr = 0.12,
-		amb = Color3.fromRGB(170, 170, 176), light = Color3.fromRGB(255, 255, 255), accent = Color3.fromRGB(255, 255, 255), spot = true },
-	cyber = { Name = "Cyber", top = Color3.fromRGB(14, 6, 36), bot = Color3.fromRGB(70, 16, 92), floor = Color3.fromRGB(255, 120, 220), floorTr = 0.45,
-		amb = Color3.fromRGB(170, 140, 190), light = Color3.fromRGB(255, 190, 255), accent = Color3.fromRGB(255, 120, 230),
-		stars = 14, starColor = Color3.fromRGB(255, 170, 240), grid = true },
+		amb = Color3.fromRGB(170, 170, 176), light = Color3.fromRGB(255, 255, 255), accent = Color3.fromRGB(255, 255, 255), spot = true,
+		halo = true },   -- halo au-dessus de la tête (couleur de la tête du joueur), sans ailes
 }
 
 function Block:CreatePreview3D(o)
@@ -11518,7 +11657,7 @@ function Block:CreatePreview3D(o)
 			vp.LightColor = th.light or vp.LightColor
 			floor.Color = th.floor or floor.Color
 			floorTr = th.floorTr or 0.15
-			angelOn = th.angel == true
+			angelOn = th.angel == true or th.halo == true   -- décor sur l'avatar : halo (th.halo) et/ou halo + ailes (th.angel)
 			if th.tint then floor.Color = auraCol end
 			local ns = th.stars or 0
 			for i, s in ipairs(stars) do
@@ -11916,6 +12055,11 @@ function Block:CreatePreview3D(o)
 	-- Poses faites à la main : coucou en boucle si Wave, sinon petit balancement si Animate ; wCrouch / wAir viennent de l'animation de
 	-- bienvenue (accroupi avant le saut, bras levés en l'air). R6 : une rotation est exprimée dans le repère du PARENT puis convertie
 	-- avec le C0 de l'articulation, donc la convention (très différente) des Motor6D R6 / R15 n'a plus d'importance.
+	-- état des interactions avec le personnage (prise d'un membre, ragdoll du torse) ; les fonctions sont définies plus bas, après la caméra
+	local ix = { w = 0, rw = 0, off = Vector3.zero, offV = Vector3.zero, roll = 0, rollOut = 0, headCF = CFrame.identity, headT = CFrame.identity,
+		th = { rs = 0, ls = 0, rh = 0, lh = 0 }, accF = 0, velS = 0, prev = Vector3.zero, pvel = Vector3.zero,
+		pd = { rs = { 0, 0 }, ls = { 0, 0 }, rh = { 0, 0 }, lh = { 0, 0 }, nk = { 0, 0 } },
+		rt = { rs = 0, ls = 0, rh = 0, lh = 0, nk = 0 }, pressed = false, active = false, rag = false }
 	local wCrouch, wAir = 0, 0
 	local function avatarPose(t)
 		local A = CFrame.Angles
@@ -11950,6 +12094,7 @@ function Block:CreatePreview3D(o)
 			else
 				EMO.y, EMO.spin, EMO.flip, EMO.x, EMO.roll = 0, 0, 0, 0, 0
 			end
+			if ix.apply then ix.apply(B, t) end   -- membre tenu à la souris / ragdoll du torse
 			local inv = B.rt:Inverse()   -- les jambes compensent l'inclinaison / la torsion du torse : elles restent d'aplomb
 			rot("RootJoint", B.rt)
 			rot("Neck", B.nk)
@@ -12076,6 +12221,187 @@ function Block:CreatePreview3D(o)
 	local yaw, pitch = YAW0, PITCH0
 	local dragging = false
 	local hoverX, hoverY, zoomK, zoomTo = 0, 0, 1, 1   -- survol du curseur (-1..1) · zoom animé (double-clic / bouton Zoom)
+
+	-- ---------------------------------------------------------------- interactions avec le personnage (avatar R6)
+	--   • tenir un bras / une jambe / la tête : le membre suit le curseur (comme une poignée de main) ;
+	--   • tenir le torse : ragdoll — on trimballe le personnage partout dans l'aperçu, bras / jambes / tête ballottent, et il
+	--     revient à sa place avec un petit rebond quand on le lâche.
+	do
+		local PARTS = { "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg" }
+		local JOINT = { Head = "Neck", ["Left Arm"] = "Left Shoulder", ["Right Arm"] = "Right Shoulder", ["Left Leg"] = "Left Hip", ["Right Leg"] = "Right Hip" }
+		local KEY = { Head = "nk", ["Left Arm"] = "ls", ["Right Arm"] = "rs", ["Left Leg"] = "lh", ["Right Leg"] = "rh" }
+		local LIMIT = { ["Left Arm"] = 3.0, ["Right Arm"] = 3.0, ["Left Leg"] = 1.1, ["Right Leg"] = 1.1 }   -- amplitude max d'un membre tenu (rad)
+		local LEN = { rs = 2.2, ls = 2.2, rh = 2.4, lh = 2.4, nk = 1.1 }                                      -- longueur des « pendules » du ragdoll
+		local LIM2 = { rs = 3.0, ls = 3.0, rh = 0.9, lh = 0.9, nk = 0.7 }                                      -- angle relatif max au torse (rad)
+
+		local function r6ok() return rig ~= nil and rig.Parent ~= nil and avJoints["Right Shoulder"] ~= nil end
+
+		local function screenBox(part)   -- rectangle écran (en pixels de l'aperçu) qui englobe la pièce
+			local half, cf = part.Size / 2, part.CFrame
+			local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+			for sx = -1, 1, 2 do
+				for sy = -1, 1, 2 do
+					for sz = -1, 1, 2 do
+						local v = cam:WorldToViewportPoint(cf * Vector3.new(sx * half.X, sy * half.Y, sz * half.Z))
+						x0, y0, x1, y1 = math.min(x0, v.X), math.min(y0, v.Y), math.max(x1, v.X), math.max(y1, v.Y)
+					end
+				end
+			end
+			return x0, y0, x1, y1
+		end
+
+		local function planePoint(px, py, through)   -- point 3D sous le curseur, dans le plan (perpendiculaire à la caméra) qui passe par « through »
+			local r = cam:ViewportPointToRay(px, py)
+			local n = cam.CFrame.LookVector
+			local dn = r.Direction:Dot(n)
+			if math.abs(dn) < 1e-4 then return through end
+			return r.Origin + r.Direction * ((through - r.Origin):Dot(n) / dn)
+		end
+
+		function ix.pick(px, py)   -- partie du corps sous le curseur (la plus petite qui le contient : un bras gagne sur le torse)
+			if not r6ok() then return nil end
+			local best, bestA
+			for _, n in ipairs(PARTS) do
+				local part = rig:FindFirstChild(n)
+				if part and part:IsA("BasePart") then
+					local x0, y0, x1, y1 = screenBox(part)
+					local pad = 5
+					if px >= x0 - pad and px <= x1 + pad and py >= y0 - pad and py <= y1 + pad then
+						local a = (x1 - x0) * (y1 - y0)
+						if not bestA or a < bestA then best, bestA = n, a end
+					end
+				end
+			end
+			return best
+		end
+
+		function ix.press(absPos)
+			ix.p0 = absPos - vp.AbsolutePosition
+			ix.t0 = os.clock()
+			ix.pressed, ix.active = true, false
+			ix.part = ix.pick(ix.p0.X, ix.p0.Y)
+		end
+
+		function ix.release()
+			ix.pressed, ix.active, ix.part = false, false, nil
+		end
+
+		function ix.step(dt)
+			dt = math.clamp(dt, 1 / 240, 1 / 20)
+			local ok = r6ok()
+			local torso = ok and rig:FindFirstChild("Torso") or nil
+			local mp
+			if ix.pressed then
+				local okp, v = pcall(Library._pointerPos, Vector2.new(0, 0))
+				if okp and typeof(v) == "Vector2" then mp = v - vp.AbsolutePosition end
+			end
+			-- début de la prise : le curseur a bougé de plus de 3 px, ou on tient depuis plus de 0,18 s
+			if ix.pressed and ix.part and ok and torso and mp and not ix.active then
+				if (mp - ix.p0).Magnitude > 3 or os.clock() - ix.t0 > 0.18 then
+					ix.active = true
+					if ix.part == "Torso" then
+						ix.rag = true
+						ix.anchor = torso.Position
+						ix.P0 = planePoint(ix.p0.X, ix.p0.Y, ix.anchor)
+						ix.off0 = ix.off
+					else
+						ix.limb, ix.key = ix.part, KEY[ix.part]
+					end
+				end
+			end
+			if ix.rag and not ix.active then ix.rag = false end   -- torse lâché
+
+			local right = cam.CFrame.RightVector
+
+			-- ---- membre tenu : il pointe vers le curseur (repère du torse), lissé
+			local limbOn = ix.active and ix.limb ~= nil and not ix.rag and mp ~= nil and torso ~= nil
+			if limbOn then
+				local j = avJoints[JOINT[ix.limb]]
+				if j and j.Part0 then
+					local S = j.Part0.CFrame * j.C0.Position
+					local v = torso.CFrame:VectorToObjectSpace(planePoint(mp.X, mp.Y, S) - S)
+					if ix.limb == "Head" then
+						ix.headT = CFrame.Angles(math.clamp((v.Y - 1.2) * 0.25, -0.5, 0.6), -math.clamp(v.X * 0.35, -0.9, 0.9), -math.clamp(v.X * 0.1, -0.3, 0.3))
+					else
+						local lim = LIMIT[ix.limb]
+						local goal = math.clamp(math.atan2(v.X, -v.Y), -lim, lim)
+						ix.th[ix.key] += (goal - ix.th[ix.key]) * math.min(dt * 16, 1)
+					end
+				end
+			else
+				ix.headT = CFrame.identity
+			end
+			ix.w += ((limbOn and 1 or 0) - ix.w) * math.min(dt * (limbOn and 14 or 9), 1)
+			if ix.w < 0.003 and not limbOn then ix.w = 0 end
+			ix.headCF = ix.headCF:Lerp(ix.headT, math.min(dt * 14, 1))
+
+			-- ---- torse tenu : le personnage suit le curseur (borné à l'aperçu) ; relâché, il revient avec un petit rebond
+			if ix.rag and mp then
+				local cx = math.clamp(mp.X, 16, math.max(vp.AbsoluteSize.X - 16, 17))
+				local cy = math.clamp(mp.Y, 16, math.max(vp.AbsoluteSize.Y - 16, 17))
+				local tgt = ix.off0 + (planePoint(cx, cy, ix.anchor) - ix.P0)
+				local d = tgt - ix.off
+				ix.offV = d * 16
+				ix.off += d * math.min(dt * 16, 1)
+			elseif ix.off.Magnitude > 0.003 or ix.offV.Magnitude > 0.03 then
+				ix.offV += (-ix.off * 140 - ix.offV * 14) * dt
+				ix.off += ix.offV * dt
+			else
+				ix.off, ix.offV = Vector3.zero, Vector3.zero
+			end
+			local vel = (ix.off - ix.prev) / dt
+			local acc = (vel - ix.pvel) / dt
+			ix.prev, ix.pvel = ix.off, vel
+			ix.velS += (vel:Dot(right) - ix.velS) * math.min(dt * 10, 1)
+			ix.accF += (acc:Dot(right) - ix.accF) * math.min(dt * 12, 1)
+
+			if ix.rag then ix.rw = math.min(1, ix.rw + dt * 9) else ix.rw = math.max(0, ix.rw - dt * 1.4) end
+
+			-- inclinaison du corps (les pieds traînent derrière) : positive = sens anti-horaire à l'écran
+			ix.roll += (((ix.rw > 0.01) and math.clamp(-ix.velS * 0.05, -0.8, 0.8) or 0) - ix.roll) * math.min(dt * 8, 1)
+			local mult = (avBase and avBase.ZVector:Dot(cam.CFrame.LookVector) < 0) and 1 or -1
+			ix.rollOut = mult * ix.roll
+
+			-- ---- pendules : bras, jambes, tête ballottent (gravité + accélération du torse)
+			if ix.rw > 0 and torso then
+				local g, ax = 26, math.clamp(ix.accF, -240, 240)
+				local s = (torso.CFrame.RightVector:Dot(right) >= 0) and 1 or -1   -- le côté « droit » du torse est-il à droite de l'écran ?
+				for k, L in pairs(LEN) do
+					local pd = ix.pd[k]
+					local h = dt / 2
+					for _ = 1, 2 do
+						local alpha = -(g * math.sin(pd[1]) + ax * math.cos(pd[1])) / L - 2.2 * pd[2]
+						pd[2] += alpha * h
+						pd[1] += pd[2] * h
+					end
+					local rel, lim = pd[1] - ix.roll, LIM2[k]
+					if rel > lim then pd[1], pd[2] = ix.roll + lim, math.min(pd[2], 0)
+					elseif rel < -lim then pd[1], pd[2] = ix.roll - lim, math.max(pd[2], 0) end
+					ix.rt[k] = s * (pd[1] - ix.roll)
+				end
+			elseif ix.rw <= 0 then
+				for k, pd in pairs(ix.pd) do pd[1], pd[2], ix.rt[k] = 0, 0, 0 end
+			end
+		end
+
+		function ix.apply(B, t)
+			local A = CFrame.Angles
+			if ix.w > 0 and ix.key then
+				local k = ix.key
+				if k == "nk" then
+					B.nk = B.nk:Lerp(ix.headCF, ix.w)
+				else
+					local shake = (k == "rs" or k == "ls") and math.sin(t * 13) * 0.05 or 0   -- petit tremblement : « poignée de main »
+					B[k] = B[k]:Lerp(A(0, 0, ix.th[k] + shake), ix.w)
+				end
+			end
+			if ix.rw > 0 then
+				for k, th in pairs(ix.rt) do
+					B[k] = B[k]:Lerp(A(0, 0, k == "nk" and th * 0.5 or th), ix.rw)
+				end
+			end
+		end
+	end
 
 	-- ---------------------------------------------------------------- calque 2D
 	local lines, nLines = {}, 0
@@ -12236,7 +12562,8 @@ function Block:CreatePreview3D(o)
 		local k = tor.Size.X / 2
 		-- ailes : 2 x 8 plumes (+ une lueur plus large et transparente derrière chacune), de la couleur du torse
 		local lens = { 2.4, 3.1, 3.7, 3.9, 3.6, 3.0, 2.3, 1.6 }
-		for _, sd in ipairs({ 1, -1 }) do
+		local thNow = TH and TH[curTheme]
+		for _, sd in ipairs((thNow and thNow.angel == true) and { 1, -1 } or {}) do   -- ailes seulement pour le thème « angel » (aucun à présent)
 			for i, l in ipairs(lens) do
 				local len = l * k
 				angel.feathers[#angel.feathers + 1] = {
@@ -12305,6 +12632,12 @@ function Block:CreatePreview3D(o)
 		if opt.AutoRotate and not dragging then yaw += math.rad(opt.RotateSpeed) * dt end
 		local dist = fit.dist / (math.clamp(opt.Zoom, 0.4, 3) * zoomK)
 		local fo = fit.focus + Vector3.new(0, (zoomK - 1) * fit.size.Y * 0.2, 0)   -- zoom : on monte vers le haut du corps
+		if zoomK > 1.01 and rig then   -- ... puis on se centre sur le visage (suit la tête : sauts, emotes, ragdoll)
+			local hd = rig:FindFirstChild("Head")
+			if hd and hd:IsA("BasePart") then
+				fo = fo:Lerp(hd.Position + Vector3.new(0, 0.1, 0), math.clamp((zoomK - 1) / 2.4, 0, 1))
+			end
+		end
 		-- le personnage tourne doucement la tête vers le curseur (hoverX / hoverY = 0 sans Theme)
 		cam.CFrame = CFrame.new(fo) * CFrame.Angles(0, yaw - hoverX * 0.16, 0) * CFrame.Angles(pitch - hoverY * 0.06, 0, 0) * CFrame.new(0, 0, dist)
 		if opt.Wave and not dragging then   -- face à la caméra : revient doucement de face après un glissement
@@ -12326,14 +12659,15 @@ function Block:CreatePreview3D(o)
 			if opt.Emotes and not welcomeT0 and not welcomePending then Library._emoStep(EMO, dt) end
 			local waving = (not opt.Emotes) or EMO.stage == 1 or EMO.stage == 3
 			EMO.wv = EMO.wv + ((waving and 1 or 0) - EMO.wv) * math.min(dt * 9, 1)
+			ix.step(dt)     -- interactions : membre tenu / ragdoll du torse
 			avatarPose(t)   -- avatar réel : poses des articulations + saut en bougeant tout le modèle
 			local y, finished = jumpOffset()
 			if finished then jumpT0, y = nil, 0 end
 			y = y + wy + EMO.y
 			local ex, er = EMO.x or 0, EMO.roll or 0
-			if rig and avBase and (y ~= avY or EMO.spin ~= avSpin or EMO.flip ~= avFlip or ex ~= EMO.ax or er ~= EMO.ar) then
-				avY, avSpin, avFlip, EMO.ax, EMO.ar = y, EMO.spin, EMO.flip, ex, er
-				rig:PivotTo(avBase * CFrame.new(ex, y, 0) * CFrame.Angles(EMO.flip, EMO.spin, er))
+			if rig and avBase and (y ~= avY or EMO.spin ~= avSpin or EMO.flip ~= avFlip or ex ~= EMO.ax or er ~= EMO.ar or ix.off ~= ix.lo or ix.rollOut ~= ix.lr) then
+				avY, avSpin, avFlip, EMO.ax, EMO.ar, ix.lo, ix.lr = y, EMO.spin, EMO.flip, ex, er, ix.off, ix.rollOut
+				rig:PivotTo(CFrame.new(ix.off) * avBase * CFrame.new(ex, y, 0) * CFrame.Angles(EMO.flip, EMO.spin, er + ix.rollOut))
 			end
 			angelStep(t)   -- thème Ange : halo + ailes (ne fait rien pour les autres thèmes)
 			local em = (opt.Emotes and EMO.stage == 4) and Library.PreviewEmotes[EMO.idx] or nil
@@ -12534,7 +12868,7 @@ function Block:CreatePreview3D(o)
 		local now = os.clock()
 		if now - lastClickT < 0.38 then
 			lastClickT = 0
-			zoomTo = zoomTo > 1.2 and 1 or 1.6
+			zoomTo = zoomTo > 1.2 and 1 or 3.4
 			return
 		end
 		lastClickT = now
@@ -12544,13 +12878,14 @@ function Block:CreatePreview3D(o)
 		if isPress(i) then
 			pressed, moved, pressT = true, 0, os.clock()
 			pressPos = Library._pointerPos(i.Position)
+			ix.press(pressPos)   -- sur un membre / le torse : prise (voir plus haut) au lieu de tourner la caméra
 			tween(hint, { TextTransparency = 1 }, 0.2)
 		end
 	end)
 	track(UIS.InputChanged:Connect(function(i)
 		if pressed and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
 			moved += math.abs(i.Delta.X) + math.abs(i.Delta.Y)
-			if moved > 5 then dragging = true end
+			if moved > 5 and not ix.part then dragging = true end
 			if dragging then
 				yaw -= i.Delta.X * 0.012
 				pitch = math.clamp(pitch - i.Delta.Y * 0.006, -1, 0.6)
@@ -12559,7 +12894,9 @@ function Block:CreatePreview3D(o)
 	end))
 	track(UIS.InputEnded:Connect(function(i)
 		if pressed and isPress(i) then
-			local wasClick = (not dragging) and (os.clock() - pressT) < 0.45
+			local wasGrab = ix.active
+			ix.release()
+			local wasClick = (not dragging) and (not wasGrab) and (os.clock() - pressT) < 0.45
 			pressed, dragging = false, false
 			if wasClick then onViewClick(pressPos) end
 		end
@@ -12567,7 +12904,7 @@ function Block:CreatePreview3D(o)
 
 	-- boutons en haut à droite de l'aperçu (frères du ViewportFrame : leurs clics ne font jamais tourner l'avatar)
 	if TH then
-		hint.Text = "glisser : tourner  ·  clic : emote  ·  double-clic : zoom"
+		hint.Text = "glisser : tourner  ·  tenir un membre : le bouger  ·  tenir le torse : ragdoll  ·  double-clic : visage"
 		if o.Toolbar ~= false then
 			local tb = new("Frame", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, top + 6),
 				Size = UDim2.fromOffset(0, 22), AutomaticSize = Enum.AutomaticSize.X, ZIndex = 6 }, f)
@@ -12592,7 +12929,7 @@ function Block:CreatePreview3D(o)
 				bgBtn.Text = "Fond : " .. ((TH[curTheme] and TH[curTheme].Name) or "")
 			end)
 			pill("Emote", 2, randomEmote)
-			pill("Zoom", 3, function() zoomTo = zoomTo > 1.2 and 1 or 1.6 end)
+			pill("Zoom", 3, function() zoomTo = zoomTo > 1.2 and 1 or 3.4 end)
 			pill("Vue", 4, function() yaw, pitch, zoomTo = YAW0, PITCH0, 1 end)
 		end
 	end
@@ -13979,7 +14316,7 @@ function Library:_buildHomeExplain(sub)
 	what:CreateSection("Navigation rapide")
 	what:CreateParagraph({ Content = lines({
 		"• Barre de recherche globale : filtre les éléments de tous les onglets.",
-		"• Ctrl+T : barre de recherche seule au milieu de l'écran. Ctrl+K : palette de commandes (lance un bouton ou règle un curseur sans ouvrir la fenêtre).",
+		"• Tape dans la barre de recherche : les résultats glissent juste en dessous, clique sur l'un d'eux pour y aller.",
 		"• Étoile ★ sur chaque élément pour l'ajouter aux favoris, filtre « Modifiés », onglet Récents.",
 	}) })
 	what:CreateSection("Clavier")
@@ -14095,8 +14432,8 @@ function Window:CreateHomeTab(name, icon, cfg)
 	-- ----- mon personnage : aperçu 3D + identité
 	local prof = subInfo:CreateBlock({ Name = "Mon personnage", Side = "Left" })
 	local pv = prof:CreatePreview3D({ Name = false, Character = true, Height = 260,
-		Theme = Library.PreviewTheme or "angel", Yaw = 180, Pitch = -0.04, RigType = "R6",
-		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = true, AutoRotate = false, Wave = true, Animate = true, Emotes = Library.HomeEmotes ~= false } })
+		Theme = "studio", Toolbar = false, Yaw = 180, Pitch = -0.04, RigType = "R6",
+		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = false, AutoRotate = false, Wave = true, Animate = true, Emotes = Library.HomeEmotes ~= false } })
 	-- première arrivée : animation de bienvenue (2 sauts, bras levés) ; ensuite un petit saut à chaque retour sur Home > Info.
 	-- Dans les deux cas le coucou continue en boucle (une fois la lib entièrement chargée). Library.HomeWelcome = false : sauts seuls.
 	do
@@ -15356,6 +15693,119 @@ local function applySearch(win, q)
 end
 Library._applySearch = applySearch
 
+do -- (portée réduite : évite d'ajouter des variables locales au niveau principal)
+-- Résultats de la recherche : une liste glisse sous la barre (ressort + fondu) quand on tape, et remonte quand on efface.
+-- Un clic sur un résultat ouvre son onglet, déplie son bloc et fait défiler jusqu'à la ligne (Library:RevealElement).
+Library.SearchResults = true
+local SR_W, SR_ROW, SR_MAX = 290, 30, 7
+local function srBuild(win)
+	if win._sr then return win._sr end
+	local sr = { tok = 0, rows = {} }
+	sr.box = new("CanvasGroup", { Name = "SearchResults", AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 34),
+		Size = UDim2.fromOffset(SR_W, 0), BackgroundColor3 = T.Second, BackgroundTransparency = 0.08, BorderSizePixel = 0,
+		ClipsDescendants = true, GroupTransparency = 1, Visible = false, ZIndex = 300 }, win.Main)
+	local cr = Instance.new("UICorner")
+	cr.CornerRadius = UDim.new(0, 14)
+	cr:SetAttribute("KeepRound", true)
+	cr.Parent = sr.box
+	sr.list = new("ScrollingFrame", { Position = UDim2.new(0, 4, 0, 4), Size = UDim2.new(1, -8, 1, -8), BackgroundTransparency = 1,
+		BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.Accent, ScrollBarImageTransparency = 0.5,
+		CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y }, sr.box)
+	new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, sr.list)
+	win._sr = sr
+	return sr
+end
+
+local function srMove(sr, h, shown)
+	local y = shown and 42 or 34   -- légère glissade verticale en plus de l'ouverture en hauteur
+	Library._spring(sr.box, { Size = UDim2.fromOffset(SR_W, h), Position = UDim2.new(0.5, 0, 0, y) }, "smooth")
+	tween(sr.box, { GroupTransparency = shown and 0 or 1 }, shown and 0.2 or 0.16)
+end
+
+local function srHide(sr)
+	sr.tok += 1
+	local my = sr.tok
+	if not sr.box.Visible then return end
+	srMove(sr, 0, false)
+	task.delay(0.4, function()
+		if sr.tok == my and sr.box.Parent then sr.box.Visible = false end
+	end)
+end
+
+function Library._updateSearchResults(win, q)
+	if Library.SearchResults == false or not win or not win.Main then return end
+	local sr = srBuild(win)
+	q = string.lower(q or "")
+	if q == "" then srHide(sr) return end
+
+	-- résultats : éléments dont le nom contient le texte (ceux qui commencent par le texte d'abord)
+	local found, seen = {}, {}
+	for _, tab in ipairs(win.Tabs) do
+		for _, blk in ipairs(tab:_allBlocks()) do
+			for _, e in ipairs(blk.Entries) do
+				if e.Name and e.Name ~= "" and e.Frame and not seen[e.Frame] then
+					local pos = string.find(string.lower(e.Name), q, 1, true)
+					if pos then
+						seen[e.Frame] = true
+						found[#found + 1] = { e = e, owner = blk.Tab or tab, blk = blk, rank = pos == 1 and 0 or 1, n = #found }
+					end
+				end
+			end
+		end
+	end
+	table.sort(found, function(a, b)
+		if a.rank ~= b.rank then return a.rank < b.rank end
+		return a.n < b.n
+	end)
+
+	sr.tok += 1
+	for _, r in ipairs(sr.rows) do r:Destroy() end
+	table.clear(sr.rows)
+	sr.box.BackgroundColor3 = T.Second
+	sr.list.ScrollBarImageColor3 = T.Accent
+
+	local count = math.min(#found, 40)
+	if count == 0 then
+		sr.rows[1] = new("TextLabel", { Size = UDim2.new(1, 0, 0, SR_ROW), BackgroundTransparency = 1, Text = "Aucun résultat",
+			TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED, BorderSizePixel = 0, LayoutOrder = 1 }, sr.list)
+	end
+	for i = 1, count do
+		local it = found[i]
+		local row = new("TextButton", { Size = UDim2.new(1, 0, 0, SR_ROW), BackgroundColor3 = T.Text, BackgroundTransparency = 1,
+			Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i }, sr.list)
+		local rc = Instance.new("UICorner")
+		rc.CornerRadius = UDim.new(0, 10)
+		rc:SetAttribute("KeepRound", true)
+		rc.Parent = row
+		new("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(0.58, -10, 1, 0),
+			Text = tostring(it.e.Name), TextColor3 = T.Text, TextSize = 12, Font = F_MED, TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0 }, row)
+		new("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0.58, 0, 0, 0), Size = UDim2.new(0.42, -10, 1, 0),
+			Text = tostring(it.owner.Name or ""), TextColor3 = T.ElementAccent, TextSize = 10.5, Font = F_MED,
+			TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0 }, row)
+		row.MouseEnter:Connect(function() tween(row, { BackgroundTransparency = 0.9 }, 0.12) end)
+		row.MouseLeave:Connect(function() tween(row, { BackgroundTransparency = 1 }, 0.12) end)
+		row.MouseButton1Click:Connect(function()
+			if win.Search then pcall(function() win.Search:ReleaseFocus() end) end
+			Library:RevealElement({ Tab = it.owner, Block = it.blk, Frame = it.e.Frame })   -- vide aussi la recherche : la liste remonte
+		end)
+		sr.rows[i] = row
+	end
+
+	local rows = math.max(1, math.min(count, SR_MAX))
+	local h = rows * (SR_ROW + 2) + 6
+	local maxH = win.Main.AbsoluteSize.Y / pxScale() - 64
+	h = math.max(40, math.min(h, maxH))
+	if not sr.box.Visible then   -- ouverture : on part replié, un peu plus haut, transparent
+		sr.box.Size = UDim2.fromOffset(SR_W, 0)
+		sr.box.Position = UDim2.new(0.5, 0, 0, 34)
+		sr.box.GroupTransparency = 1
+		sr.box.Visible = true
+	end
+	srMove(sr, h, true)
+end
+end
+
 -- Transition d'onglet (Paramètres > Animations & performances > « Transition des onglets »)
 --   Glisser (défaut) : la page glisse de 16 px · Fondu : la page sort doucement du voile · Zoom : la page grossit depuis son centre
 Library.TabTransitions = { "Glisser", "Fondu", "Zoom" }
@@ -15415,6 +15865,8 @@ function Window:CreateTab(name, _, icon, parentTab)
 		new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, sf)
 		new("UIPadding", { PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 10), PaddingTop = UDim.new(0, 2) }, sf)
 		if Library.SquareMode then Library._sqApplyCol(sf) end
+		if Library._regTopBtn then Library._regTopBtn(sf, page) end
+		if Library._regScrollMemory then Library._regScrollMemory(sf, page) end
 		return sf
 	end
 
@@ -15646,6 +16098,8 @@ function Tab:CreateSubTabs(list)
 				CanvasSize = UDim2.new(), AutomaticCanvasSize = AY }, page)
 			new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, sf)
 			new("UIPadding", { PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 10), PaddingTop = UDim.new(0, 2) }, sf)
+			if Library._regTopBtn then Library._regTopBtn(sf, page) end
+			if Library._regScrollMemory then Library._regScrollMemory(sf, page) end
 			return sf
 		end
 		local sub = setmetatable({ Name = tostring(parent.Name) .. " / " .. name, SubName = name, Page = page,
@@ -16469,6 +16923,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	-- Info-bulles (la petite bulle qui apparaît après ~0,4 s de survol)
 	local TP = BK("Thèmes", { Name = "Info-bulles", Side = "Right" })
 	local TS = Library.TipStyle
+	local tpBg, tpAlpha, tpGloss, tpT1, tpT2, tpOut, tpOutC, tpOff
 	local function tipOpt(k)
 		return function(v)
 			Library.TipStyle[k] = v
@@ -16476,26 +16931,42 @@ function Window:CreateSettingsTab(name, icon, docked)
 		end
 	end
 	TP:CreateSection("Fond")
-	TP:CreateColorPicker({ Name = "Couleur du fond", Flag = "ui.tip.bg", Default = TS.Bg, Favorite = false,
+	tpBg = TP:CreateColorPicker({ Name = "Couleur du fond", Flag = "ui.tip.bg", Default = TS.Bg, Favorite = false,
 		Tooltip = "Couleur de base de la bulle (blanc par défaut).", Callback = tipOpt("Bg") })
-	TP:CreateSlider({ Name = "Transparence du fond", Flag = "ui.tip.alpha", Min = 0, Max = 95, Step = 5, Suffix = " %",
+	tpAlpha = TP:CreateSlider({ Name = "Transparence du fond", Flag = "ui.tip.alpha", Min = 0, Max = 95, Step = 5, Suffix = " %",
 		Default = pct(TS.BgAlpha), Favorite = false, Tooltip = "0 % = opaque, plus haut = plus transparent.",
 		Callback = function(v) tipOpt("BgAlpha")(v / 100) end })
-	TP:CreateToggle({ Name = "Reflet brillant", Flag = "ui.tip.gloss", Favorite = false, Keybind = false, Default = TS.Gloss,
+	tpGloss = TP:CreateToggle({ Name = "Reflet brillant", Flag = "ui.tip.gloss", Favorite = false, Keybind = false, Default = TS.Gloss,
 		Tooltip = "Moitié haute plus claire, façon verre brillant.", Callback = tipOpt("Gloss") })
 	TP:CreateSection("Texte (dégradé)")
-	TP:CreateColorPicker({ Name = "Texte : début (noir)", Flag = "ui.tip.text1", Default = TS.Text1, Favorite = false,
+	tpT1 = TP:CreateColorPicker({ Name = "Texte : début (noir)", Flag = "ui.tip.text1", Default = TS.Text1, Favorite = false,
 		Callback = tipOpt("Text1") })
-	TP:CreateColorPicker({ Name = "Texte : fin (gris)", Flag = "ui.tip.text2", Default = TS.Text2, Favorite = false,
+	tpT2 = TP:CreateColorPicker({ Name = "Texte : fin (gris)", Flag = "ui.tip.text2", Default = TS.Text2, Favorite = false,
 		Callback = tipOpt("Text2") })
 	TP:CreateSection("Contour et position")
-	TP:CreateToggle({ Name = "Contour de la bulle", Flag = "ui.tip.outline", Favorite = false, Keybind = false, Default = TS.Outline,
+	tpOut = TP:CreateToggle({ Name = "Contour de la bulle", Flag = "ui.tip.outline", Favorite = false, Keybind = false, Default = TS.Outline,
 		Tooltip = "Désactivé par défaut : la bulle n'a pas de bordure.", Callback = tipOpt("Outline") })
-	TP:CreateColorPicker({ Name = "Couleur du contour", Flag = "ui.tip.outlinec", Default = TS.OutlineColor, Favorite = false,
+	tpOutC = TP:CreateColorPicker({ Name = "Couleur du contour", Flag = "ui.tip.outlinec", Default = TS.OutlineColor, Favorite = false,
 		Callback = tipOpt("OutlineColor") })
-	TP:CreateSlider({ Name = "Décalage vers la gauche", Flag = "ui.tip.offset", Min = 0, Max = 200, Step = 2, Suffix = " px",
+	tpOff = TP:CreateSlider({ Name = "Décalage vers la gauche", Flag = "ui.tip.offset", Min = 0, Max = 200, Step = 2, Suffix = " px",
 		Default = TS.OffsetX, Favorite = false, Tooltip = "Éloigne la bulle du bord droit de l'élément survolé, vers la gauche.",
 		Callback = tipOpt("OffsetX") })
+	TP:CreateButton({ Name = "Réinitialiser les info-bulles", Callback = function()
+		-- 1) on remet les valeurs d'origine ; 2) on met à jour l'affichage de chaque contrôle ; 3) on rafraîchit la bulle
+		for k, v in pairs(Library.TipStyleDefaults) do Library.TipStyle[k] = v end
+		local D = Library.TipStyle
+		local function put(it, v) if it and it.Set then pcall(it.Set, v) end end
+		put(tpBg, D.Bg)
+		put(tpAlpha, math.floor(D.BgAlpha * 100 + 0.5))
+		put(tpGloss, D.Gloss)
+		put(tpT1, D.Text1)
+		put(tpT2, D.Text2)
+		put(tpOut, D.Outline)
+		put(tpOutC, D.OutlineColor)
+		put(tpOff, D.OffsetX)
+		for k, v in pairs(Library.TipStyleDefaults) do Library.TipStyle[k] = v end   -- au cas où un Set aurait rappelé un callback
+		if Library._tipRestyle then Library._tipRestyle() end
+	end })
 
 	-- Défilement (molette + barre)
 	local SC = BK("Interface", { Name = "Défilement", Side = "Right" })
@@ -16512,6 +16983,25 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Default = Library.ScrollBarHover, Favorite = false,
 		Tooltip = "La barre s'élargit quand tu la survoles ; clique-glisse dessus pour descendre vite.",
 		Callback = function(v) Library.ScrollBarHover = v end })
+	local function topOpt(k, conv)
+		return function(v)
+			Library.TopBtn[k] = conv and conv(v) or v
+			Library._topBtnRestyle()
+		end
+	end
+	SC:CreateToggle({ Name = "Mémoriser la position des onglets", Flag = "ui.scroll.remember", Favorite = false, Keybind = false,
+		Default = Library.RememberScroll, Tooltip = "Quand tu reviens sur un onglet, tu retrouves l'endroit où tu t'étais arrêté.",
+		Callback = function(v) Library.RememberScroll = v end })
+	SC:CreateToggle({ Name = "Bouton « remonter en haut »", Flag = "ui.top.enabled", Favorite = false, Keybind = false,
+		Default = Library.TopBtn.Enabled, Tooltip = "Pastille en bas à droite qui ramène tout en haut quand tu as descendu.",
+		Callback = function(v) Library.TopBtn.Enabled = v Library._topBtnRestyle() end })
+	SC:CreateColorPicker({ Name = "Bouton : couleur", Flag = "ui.top.bg", Default = Library.TopBtn.Bg, Favorite = false, Callback = topOpt("Bg") })
+	SC:CreateColorPicker({ Name = "Bouton : flèche", Flag = "ui.top.arrow", Default = Library.TopBtn.Arrow, Favorite = false, Callback = topOpt("Arrow") })
+	SC:CreateSlider({ Name = "Bouton : transparence", Flag = "ui.top.alpha", Min = 0, Max = 90, Step = 5, Suffix = " %",
+		Default = math.floor(Library.TopBtn.Alpha * 100 + 0.5), Favorite = false, Callback = topOpt("Alpha", function(v) return v / 100 end) })
+	SC:CreateSlider({ Name = "Bouton : apparaît après", Flag = "ui.top.threshold", Min = 60, Max = 800, Step = 20, Suffix = " px",
+		Default = Library.TopBtn.Threshold, Favorite = false, Tooltip = "Distance de défilement à partir de laquelle le bouton apparaît.",
+		Callback = function(v) Library.TopBtn.Threshold = v end })
 
 	-- Dégradé personnalisé
 	local GR = BK("Thèmes", { Name = "Dégradé personnalisé", Side = "Right" })
@@ -17041,39 +17531,6 @@ function Window:CreateSettingsTab(name, icon, docked)
 		end
 	end })
 
-	-- ───────────── Palette de commandes ─────────────
-	local PL = BK("Interface", { Name = "Palette de commandes", Side = "Right", Collapsed = true })
-	PL:CreateToggle({ Name = "Palette activée", Flag = "ui.paletteon", Default = Library.PaletteEnabled,
-		Callback = function(v) Library:SetPaletteEnabled(v) end })
-	PL:CreateToggle({ Name = "Exiger Ctrl", Flag = "ui.palettectrl", Default = Library.PaletteNeedCtrl,
-		Tooltip = "Désactivé : la touche seule ouvre la palette (déconseillé si tu tapes du texte).",
-		Callback = function(v) Library.PaletteNeedCtrl = v and true or false end })
-	PL:CreateKeybind({ Name = "Touche d'ouverture", Flag = "ui.palettekey", Default = Library.PaletteKey, Favorite = false,
-		Callback = function(k) Library.PaletteKey = k end })
-	PL:CreateButton({ Name = "Ouvrir la palette", Favorite = false, Callback = function() Library:OpenPalette() end })
-	PL:CreateParagraph({ Title = "Utilisation",
-		Content = "Ctrl+K ouvre la roue au milieu de l'écran (curseur libre).\n1 à 0 ou clic : choisir.   Tab : filtre (Tout / Favoris / Boutons / Toggles / Réglages).\nMolette ou ← → : page.   / : rechercher.   Échap ou Retour : retour / fermer.\nMaj + bouton : la palette reste ouverte.   Les éléments ★ passent en premier." })
-
-	-- ───────────── Barre de recherche (Ctrl+T) ─────────────
-	local SP = BK("Interface", { Name = "Barre de recherche", Side = "Left", Collapsed = true })
-	SP:CreateToggle({ Name = "Barre de recherche activée", Flag = "ui.spotlighton", Default = Library.SpotlightEnabled,
-		Callback = function(v) Library:SetSpotlightEnabled(v) end })
-	SP:CreateToggle({ Name = "Exiger Ctrl (recherche)", Flag = "ui.spotlightctrl", Default = Library.SpotlightNeedCtrl,
-		Tooltip = "Désactivé : la touche seule ouvre la barre (déconseillé si tu tapes du texte).",
-		Callback = function(v) Library.SpotlightNeedCtrl = v and true or false end })
-	SP:CreateKeybind({ Name = "Touche d'ouverture (recherche)", Flag = "ui.spotlightkey", Default = Library.SpotlightKey,
-		Favorite = false, Callback = function(k) Library.SpotlightKey = k end })
-	SP:CreateToggle({ Name = "Masquer la fenêtre à l'ouverture", Flag = "ui.spotlighthide", Default = Library.SpotlightHideWindow,
-		Tooltip = "La barre s'affiche seule, sans la fenêtre derrière ; elle revient à la fermeture.",
-		Callback = function(v) Library.SpotlightHideWindow = v and true or false end })
-	SP:CreateSlider({ Name = "Étoiles du fond (recherche)", Flag = "ui.spotlightstars", Min = 0, Max = 140, Step = 5,
-		Default = Library.SpotlightStars, Callback = function(v) Library.SpotlightStars = v end })
-	SP:CreateSlider({ Name = "Résultats affichés", Flag = "ui.spotlightmax", Min = 3, Max = 14, Step = 1,
-		Default = Library.SpotlightMax, Callback = function(v) Library.SpotlightMax = v end })
-	SP:CreateButton({ Name = "Ouvrir la barre de recherche", Favorite = false, Callback = function() Library:OpenSpotlight() end })
-	SP:CreateParagraph({ Title = "Utilisation",
-		Content = "Ctrl+T ouvre la barre au milieu de l'écran, sans la fenêtre : juste le trou noir et les étoiles.\nTape pour trouver n'importe quel bouton, interrupteur, curseur, liste, champ, couleur ou touche, et règle-le directement.\nEntrée : lance / bascule le premier résultat.   Échap : efface puis ferme.   Clic dehors : ferme." })
-
 	-- ───────────── Curseur ─────────────
 	do
 		local CD = Library.CursorDefaults
@@ -17395,7 +17852,7 @@ end
 ;(function(...)
 	local CAS = game:GetService("ContextActionService")
 
-	Library.PaletteEnabled  = true
+	Library.PaletteEnabled  = false   -- désactivée : la seule barre de recherche est celle de l'interface
 	Library.PaletteNeedCtrl = true
 	Library.PaletteKey      = Enum.KeyCode.K
 
@@ -18292,7 +18749,7 @@ local spotOk, spotErr = pcall(function()
 	local SINK, PASS = Enum.ContextActionResult.Sink, Enum.ContextActionResult.Pass
 	local IN = Enum.EasingDirection.In
 
-	Library.SpotlightEnabled    = true
+	Library.SpotlightEnabled    = false   -- désactivée : la seule barre de recherche est celle de l'interface
 	Library.SpotlightNeedCtrl   = true
 	Library.SpotlightKey        = KC.T
 	Library.SpotlightStars      = 70
@@ -19604,6 +20061,9 @@ function Library:CreateWindow(cfg)
 	}, Window)
 
 	search:GetPropertyChangedSignal("Text"):Connect(function() applySearch(win, search.Text) end)
+	search:GetPropertyChangedSignal("Text"):Connect(function()
+		if Library._updateSearchResults then Library._updateSearchResults(win, search.Text) end
+	end)
 	win.ModChip = modChip
 	Library:_paintModChip()
 
