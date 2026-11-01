@@ -15694,49 +15694,97 @@ end
 Library._applySearch = applySearch
 
 do -- (portée réduite : évite d'ajouter des variables locales au niveau principal)
--- Résultats de la recherche : une liste glisse sous la barre (ressort + fondu) quand on tape, et remonte quand on efface.
+-- Résultats de la recherche : la barre elle-même s'agrandit vers le bas (même verre, même bord, même largeur) puis les résultats
+-- apparaissent à l'intérieur, séparés de la zone de saisie par un fin trait. Quand on efface, elle se rétracte en pilule.
 -- Un clic sur un résultat ouvre son onglet, déplie son bloc et fait défiler jusqu'à la ligne (Library:RevealElement).
 Library.SearchResults = true
-local SR_W, SR_ROW, SR_MAX = 290, 30, 7
+local SR_MINW, SR_ROW, SR_MAX = 200, 32, 7
+local function srEsc(t) return (tostring(t):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+
+-- position / largeur / hauteur de la barre, en unités de la fenêtre (indépendant de l'échelle)
+local function srGeom(win)
+	local main, bar = win.Main, win.Search
+	local sc = pxScale()
+	local bx = (bar.AbsolutePosition.X - main.AbsolutePosition.X) / sc
+	local by = (bar.AbsolutePosition.Y - main.AbsolutePosition.Y) / sc
+	local bw, bh = bar.AbsoluteSize.X / sc, bar.AbsoluteSize.Y / sc
+	local w = math.max(bw, SR_MINW)
+	local mw = main.AbsoluteSize.X / sc
+	local left = math.clamp(bx + bw / 2 - w / 2, 8, math.max(8, mw - w - 8))
+	return left, by, w, bh
+end
+
 local function srBuild(win)
 	if win._sr then return win._sr end
-	local sr = { tok = 0, rows = {} }
-	sr.box = new("CanvasGroup", { Name = "SearchResults", AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 34),
-		Size = UDim2.fromOffset(SR_W, 0), BackgroundColor3 = T.Second, BackgroundTransparency = 0.08, BorderSizePixel = 0,
+	local sr = { tok = 0, rows = {}, extra = 0 }
+	win.Search.ZIndex = 310   -- la zone de saisie reste au-dessus du panneau qui s'agrandit derrière elle
+	sr.barStroke = win.Search:FindFirstChildOfClass("UIStroke")
+	sr.box = new("CanvasGroup", { Name = "SearchResults", AnchorPoint = Vector2.new(0, 0), Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.fromOffset(SR_MINW, 30), BackgroundColor3 = T.Second, BackgroundTransparency = 0.18, BorderSizePixel = 0,
 		ClipsDescendants = true, GroupTransparency = 1, Visible = false, ZIndex = 300 }, win.Main)
 	local cr = Instance.new("UICorner")
-	cr.CornerRadius = UDim.new(0, 14)
+	cr.CornerRadius = UDim.new(0, 18)   -- se limite tout seul à une pilule quand le panneau est replié
 	cr:SetAttribute("KeepRound", true)
 	cr.Parent = sr.box
-	sr.list = new("ScrollingFrame", { Position = UDim2.new(0, 4, 0, 4), Size = UDim2.new(1, -8, 1, -8), BackgroundTransparency = 1,
-		BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.Accent, ScrollBarImageTransparency = 0.5,
-		CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y }, sr.box)
+	-- reflet de verre (voile clair très léger) + bord lumineux, comme la barre
+	sr.sheen = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = T.Text, BackgroundTransparency = 0.95,
+		BorderSizePixel = 0, ZIndex = 300 }, sr.box)
+	sr.stroke = new("UIStroke", { Color = T.Text, Thickness = 1, Transparency = 0.3, ApplyStrokeMode = BORDER }, sr.box)
+	new("UIGradient", { Rotation = 40, Transparency = GLASS_EDGE }, sr.stroke)
+	sr.sep = new("Frame", { BackgroundColor3 = T.Text, BackgroundTransparency = 0.9, BorderSizePixel = 0, ZIndex = 301 }, sr.box)
+	sr.list = new("ScrollingFrame", { BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+		ScrollBarImageColor3 = T.Accent, ScrollBarImageTransparency = 0.5, CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 301 }, sr.box)
 	new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, sr.list)
 	win._sr = sr
+
+	-- suit la barre si elle bouge / change de taille (changement de type d'interface, redimensionnement de la fenêtre...)
+	local function follow()
+		if not (sr.box.Parent and sr.box.Visible and sr.shown) then return end
+		local left, by, w, bh = srGeom(win)
+		sr.box.Position = UDim2.fromOffset(left, by)
+		sr.box.Size = UDim2.fromOffset(w, bh + sr.extra)
+	end
+	for _, sig in ipairs({ win.Search:GetPropertyChangedSignal("AbsoluteSize"), win.Search:GetPropertyChangedSignal("AbsolutePosition") }) do
+		local c = sig:Connect(follow)
+		if track then track(c) end
+	end
 	return sr
 end
 
-local function srMove(sr, h, shown)
-	local y = shown and 42 or 34   -- légère glissade verticale en plus de l'ouverture en hauteur
-	Library._spring(sr.box, { Size = UDim2.fromOffset(SR_W, h), Position = UDim2.new(0.5, 0, 0, y) }, "smooth")
-	tween(sr.box, { GroupTransparency = shown and 0 or 1 }, shown and 0.2 or 0.16)
+-- extra = hauteur ajoutée sous la barre (0 = replié)
+local function srMove(win, sr, extra, shown)
+	local left, by, w, bh = srGeom(win)
+	sr.extra, sr.shown = extra, shown
+	sr.sep.Position = UDim2.new(0, 16, 0, bh + 1)
+	sr.sep.Size = UDim2.new(1, -32, 0, 1)
+	sr.list.Position = UDim2.new(0, 6, 0, bh + 5)
+	sr.list.Size = UDim2.new(1, -12, 1, -(bh + 11))
+	Library._spring(sr.box, { Size = UDim2.fromOffset(w, bh + extra), Position = UDim2.fromOffset(left, by) }, "smooth")
 end
 
-local function srHide(sr)
+local function srHide(win, sr)
 	sr.tok += 1
 	local my = sr.tok
 	if not sr.box.Visible then return end
-	srMove(sr, 0, false)
-	task.delay(0.4, function()
-		if sr.tok == my and sr.box.Parent then sr.box.Visible = false end
+	srMove(win, sr, 0, false)
+	tween(sr.sep, { BackgroundTransparency = 1 }, 0.12)
+	task.delay(0.22, function()   -- le panneau a fini de se replier sous la barre : il s'efface
+		if sr.tok == my and sr.box.Parent then tween(sr.box, { GroupTransparency = 1 }, 0.14) end
+	end)
+	task.delay(0.42, function()
+		if sr.tok == my and sr.box.Parent then
+			sr.box.Visible = false
+			if sr.barStroke then sr.barStroke.Enabled = true end
+		end
 	end)
 end
 
 function Library._updateSearchResults(win, q)
-	if Library.SearchResults == false or not win or not win.Main then return end
+	if Library.SearchResults == false or not win or not win.Main or not win.Search then return end
 	local sr = srBuild(win)
 	q = string.lower(q or "")
-	if q == "" then srHide(sr) return end
+	if q == "" then srHide(win, sr) return end
 
 	-- résultats : éléments dont le nom contient le texte (ceux qui commencent par le texte d'abord)
 	local found, seen = {}, {}
@@ -15747,7 +15795,7 @@ function Library._updateSearchResults(win, q)
 					local pos = string.find(string.lower(e.Name), q, 1, true)
 					if pos then
 						seen[e.Frame] = true
-						found[#found + 1] = { e = e, owner = blk.Tab or tab, blk = blk, rank = pos == 1 and 0 or 1, n = #found }
+						found[#found + 1] = { e = e, owner = blk.Tab or tab, blk = blk, rank = pos == 1 and 0 or 1, n = #found, pos = pos }
 					end
 				end
 			end
@@ -15761,48 +15809,61 @@ function Library._updateSearchResults(win, q)
 	sr.tok += 1
 	for _, r in ipairs(sr.rows) do r:Destroy() end
 	table.clear(sr.rows)
+	-- couleurs du thème courant
 	sr.box.BackgroundColor3 = T.Second
+	sr.sheen.BackgroundColor3 = T.Text
+	sr.stroke.Color = T.Text
+	sr.sep.BackgroundColor3 = T.Text
 	sr.list.ScrollBarImageColor3 = T.Accent
 
 	local count = math.min(#found, 40)
 	if count == 0 then
 		sr.rows[1] = new("TextLabel", { Size = UDim2.new(1, 0, 0, SR_ROW), BackgroundTransparency = 1, Text = "Aucun résultat",
-			TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED, BorderSizePixel = 0, LayoutOrder = 1 }, sr.list)
+			TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED, BorderSizePixel = 0, LayoutOrder = 1, ZIndex = 302 }, sr.list)
 	end
 	for i = 1, count do
 		local it = found[i]
+		local nm = tostring(it.e.Name)
 		local row = new("TextButton", { Size = UDim2.new(1, 0, 0, SR_ROW), BackgroundColor3 = T.Text, BackgroundTransparency = 1,
-			Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i }, sr.list)
+			Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i, ZIndex = 302 }, sr.list)
 		local rc = Instance.new("UICorner")
-		rc.CornerRadius = UDim.new(0, 10)
+		rc.CornerRadius = UDim.new(0, 13)
 		rc:SetAttribute("KeepRound", true)
 		rc.Parent = row
-		new("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(0.58, -10, 1, 0),
-			Text = tostring(it.e.Name), TextColor3 = T.Text, TextSize = 12, Font = F_MED, TextXAlignment = Enum.TextXAlignment.Left,
-			TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0 }, row)
-		new("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0.58, 0, 0, 0), Size = UDim2.new(0.42, -10, 1, 0),
-			Text = tostring(it.owner.Name or ""), TextColor3 = T.ElementAccent, TextSize = 10.5, Font = F_MED,
-			TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0 }, row)
-		row.MouseEnter:Connect(function() tween(row, { BackgroundTransparency = 0.9 }, 0.12) end)
+		-- nom avec la partie trouvée en gras
+		local pre, mid, post = nm:sub(1, it.pos - 1), nm:sub(it.pos, it.pos + #q - 1), nm:sub(it.pos + #q)
+		new("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0, 14, 0, 0), Size = UDim2.new(0.6, -14, 1, 0),
+			Text = srEsc(pre) .. "<b>" .. srEsc(mid) .. "</b>" .. srEsc(post), RichText = true, TextColor3 = T.Text, TextSize = 12.5, Font = F_MED,
+			TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0, ZIndex = 303 }, row)
+		new("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0.6, 0, 0, 0), Size = UDim2.new(0.4, -14, 1, 0),
+			Text = tostring(it.owner.Name or ""), TextColor3 = T.ElementAccent, TextTransparency = 0.15, TextSize = 10.5, Font = F_MED,
+			TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0, ZIndex = 303 }, row)
+		row.MouseEnter:Connect(function() tween(row, { BackgroundTransparency = 0.88 }, 0.12) end)
 		row.MouseLeave:Connect(function() tween(row, { BackgroundTransparency = 1 }, 0.12) end)
 		row.MouseButton1Click:Connect(function()
 			if win.Search then pcall(function() win.Search:ReleaseFocus() end) end
-			Library:RevealElement({ Tab = it.owner, Block = it.blk, Frame = it.e.Frame })   -- vide aussi la recherche : la liste remonte
+			Library:RevealElement({ Tab = it.owner, Block = it.blk, Frame = it.e.Frame })   -- vide aussi la recherche : le panneau se rétracte
 		end)
 		sr.rows[i] = row
 	end
 
+	local _, by, _, bh = srGeom(win)
 	local rows = math.max(1, math.min(count, SR_MAX))
-	local h = rows * (SR_ROW + 2) + 6
-	local maxH = win.Main.AbsoluteSize.Y / pxScale() - 64
-	h = math.max(40, math.min(h, maxH))
-	if not sr.box.Visible then   -- ouverture : on part replié, un peu plus haut, transparent
-		sr.box.Size = UDim2.fromOffset(SR_W, 0)
-		sr.box.Position = UDim2.new(0.5, 0, 0, 34)
+	local extra = rows * (SR_ROW + 2) + 14
+	local maxExtra = win.Main.AbsoluteSize.Y / pxScale() - by - bh - 12
+	extra = math.max(44, math.min(extra, maxExtra))
+	if not sr.box.Visible then   -- ouverture : le panneau part exactement de la pilule, puis s'agrandit vers le bas
+		local left, y, w = srGeom(win)
+		sr.box.Size = UDim2.fromOffset(w, bh)
+		sr.box.Position = UDim2.fromOffset(left, y)
 		sr.box.GroupTransparency = 1
 		sr.box.Visible = true
+		sr.sep.BackgroundTransparency = 1
+		if sr.barStroke then sr.barStroke.Enabled = false end   -- le bord du panneau remplace celui de la barre
 	end
-	srMove(sr, h, true)
+	tween(sr.box, { GroupTransparency = 0 }, 0.12)
+	tween(sr.sep, { BackgroundTransparency = 0.9 }, 0.3)
+	srMove(win, sr, extra, true)
 end
 end
 
