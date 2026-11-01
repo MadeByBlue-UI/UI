@@ -8359,9 +8359,12 @@ function Library._autoGrow(tb, row, cfg)
 	local minH, maxH, padV = cfg.MinH, cfg.MaxH, cfg.PadV
 	local fade = tb:FindFirstChild("FadeText")   -- calque du fondu : sa hauteur suit la cible (sinon il se coupe pendant l'animation)
 	local lastH, lastX = nil, nil
+	local mH, mText = 0, nil   -- dernière mesure TextService (hauteur de la boîte) et le texte pour lequel elle a été faite
 	local function target()
 		if tb.Text == "" then return minH end
-		return math.clamp(math.ceil(tb.TextBounds.Y) + padV + 1, minH, maxH)   -- TextBounds : déjà en unités d'interface
+		local h = math.clamp(math.ceil(tb.TextBounds.Y) + padV + 1, minH, maxH)   -- TextBounds : déjà en unités d'interface
+		if mText == tb.Text then h = math.max(h, mH) end                          -- la plus grande des deux mesures
+		return h
 	end
 	local function apply(h, animate)
 		local tbSize, rowSize = cfg.TbSize(h), cfg.RowSize(h)
@@ -8377,6 +8380,36 @@ function Library._autoGrow(tb, row, cfg)
 	end
 	-- vérification différée : si la boîte n'a pas la bonne hauteur une fois l'animation finie (texte mesuré trop tôt, animation
 	-- interrompue...), on la recale d'un coup. C'est ce qui laissait des lignes coupées en bas.
+	-- 2e mesure, indépendante de TextBounds (qui peut sous-estimer d'une ligne un mot très long coupé à la lettre) : on demande à
+	-- TextService la hauteur du texte à la largeur réelle de la boîte, et on agrandit si elle est plus grande.
+	local TextService = game:GetService("TextService")
+	local mTok = 0
+	local function measureFit()
+		mTok += 1
+		local my = mTok
+		task.spawn(function()
+			if tb.Text == "" or not tb.Parent then return end
+			local pad = tb:FindFirstChildOfClass("UIPadding")
+			local padH = pad and (pad.PaddingLeft.Offset + pad.PaddingRight.Offset) or 0
+			local w = tb.AbsoluteSize.X / pxScale() - padH
+			if w < 10 then return end
+			local ok, b = pcall(function()
+				local gp = Instance.new("GetTextBoundsParams")
+				gp.Text, gp.Font, gp.Size, gp.Width = tb.Text, tb.FontFace, tb.TextSize, w
+				return TextService:GetTextBoundsAsync(gp)
+			end)
+			if my ~= mTok or not ok or not b or not tb.Parent then return end
+			local h = math.clamp(math.ceil(b.Y) + padV + 1, minH, maxH)
+			if Library.DebugGrow then print("[autoGrow] texte=", #tb.Text, "TextBounds.Y=", tb.TextBounds.Y, "mesure=", b.Y, "h=", h, "lastH=", lastH) end
+			mH, mText = h, tb.Text
+			local t = target()
+			if t ~= lastH then
+				local animate = lastH ~= nil and not Library._resizing
+				lastH = t
+				apply(t, animate)
+			end
+		end)
+	end
 	local settleTok = 0
 	local function settle()
 		settleTok += 1
@@ -8386,6 +8419,7 @@ function Library._autoGrow(tb, row, cfg)
 			if row.AbsoluteSize.X / pxScale() < 60 then return end
 			local h = target()
 			local cur = tb.AbsoluteSize.Y / pxScale()
+			measureFit()
 			if math.abs(cur - h) > 1.5 then
 				lastH = h
 				apply(h, false)
@@ -8395,7 +8429,9 @@ function Library._autoGrow(tb, row, cfg)
 	local function fit()
 		if row.AbsoluteSize.X / pxScale() < 60 then return end   -- ligne pas encore mise en page (ou bloc replié)
 		settle()
+		measureFit()
 		local h = target()
+		if Library.DebugGrow then print("[autoGrow] fit: TextBounds.Y=", tb.TextBounds.Y, "h=", h, "lastH=", lastH) end
 		if h == lastH then return end
 		local animate = lastH ~= nil and not Library._resizing   -- 1re mesure / redimensionnement de la fenêtre : sans animation
 		lastH = h
@@ -8409,6 +8445,7 @@ function Library._autoGrow(tb, row, cfg)
 		local x = row.AbsoluteSize.X
 		if lastX and math.abs(x - lastX) < 0.5 then return end   -- seule la LARGEUR compte (la hauteur change pendant l'animation)
 		lastX = x
+		mText = nil   -- largeur changée : l'ancienne mesure n'est plus valable
 		fit()
 	end))
 	fit()
