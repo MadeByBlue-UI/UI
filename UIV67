@@ -12696,14 +12696,26 @@ function Block:CreatePreview3D(o)
 
 		local function r6ok() return rig ~= nil and rig.Parent ~= nil and avJoints["Right Shoulder"] ~= nil end
 
+		-- Projection MANUELLE (les mêmes maths que le calque 2D de render) : on ne dépend plus de cam:WorldToViewportPoint /
+		-- cam:ViewportPointToRay, dont le repère dans un ViewportFrame dépend du moteur : la zone cliquable doit coïncider avec ce qu'on voit.
+		-- Tout est exprimé en pixels réels de l'aperçu (0,0 = coin haut-gauche du ViewportFrame), comme le curseur.
+		local function projPx(p)
+			local s = vp.AbsoluteSize
+			local v = cam.CFrame:PointToObjectSpace(p)
+			local d = math.max(-v.Z, 0.2)
+			local tanH = math.tan(math.rad(cam.FieldOfView) / 2)
+			local asp = s.X / math.max(s.Y, 1)
+			return (v.X / d / (tanH * asp) * 0.5 + 0.5) * s.X, (0.5 - v.Y / d / tanH * 0.5) * s.Y
+		end
+
 		local function screenBox(part)   -- rectangle écran (en pixels de l'aperçu) qui englobe la pièce
 			local half, cf = part.Size / 2, part.CFrame
 			local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
 			for sx = -1, 1, 2 do
 				for sy = -1, 1, 2 do
 					for sz = -1, 1, 2 do
-						local v = cam:WorldToViewportPoint(cf * Vector3.new(sx * half.X, sy * half.Y, sz * half.Z))
-						x0, y0, x1, y1 = math.min(x0, v.X), math.min(y0, v.Y), math.max(x1, v.X), math.max(y1, v.Y)
+						local vx, vy = projPx(cf * Vector3.new(sx * half.X, sy * half.Y, sz * half.Z))
+						x0, y0, x1, y1 = math.min(x0, vx), math.min(y0, vy), math.max(x1, vx), math.max(y1, vy)
 					end
 				end
 			end
@@ -12711,11 +12723,16 @@ function Block:CreatePreview3D(o)
 		end
 
 		local function planePoint(px, py, through)   -- point 3D sous le curseur, dans le plan (perpendiculaire à la caméra) qui passe par « through »
-			local r = cam:ViewportPointToRay(px, py)
+			local s = vp.AbsoluteSize
+			local tanH = math.tan(math.rad(cam.FieldOfView) / 2)
+			local nx = (px / math.max(s.X, 1) - 0.5) * 2 * tanH * (s.X / math.max(s.Y, 1))
+			local ny = (0.5 - py / math.max(s.Y, 1)) * 2 * tanH
+			local origin = cam.CFrame.Position
+			local dir = cam.CFrame:VectorToWorldSpace(Vector3.new(nx, ny, -1)).Unit
 			local n = cam.CFrame.LookVector
-			local dn = r.Direction:Dot(n)
+			local dn = dir:Dot(n)
 			if math.abs(dn) < 1e-4 then return through end
-			return r.Origin + r.Direction * ((through - r.Origin):Dot(n) / dn)
+			return origin + dir * ((through - origin):Dot(n) / dn)
 		end
 
 		function ix.pick(px, py)   -- partie du corps sous le curseur (la plus petite qui le contient : un bras gagne sur le torse)
@@ -12725,7 +12742,7 @@ function Block:CreatePreview3D(o)
 				local part = rig:FindFirstChild(n)
 				if part and part:IsA("BasePart") then
 					local x0, y0, x1, y1 = screenBox(part)
-					local pad = 5
+					local pad = 8
 					if px >= x0 - pad and px <= x1 + pad and py >= y0 - pad and py <= y1 + pad then
 						local a = (x1 - x0) * (y1 - y0)
 						if not bestA or a < bestA then best, bestA = n, a end
