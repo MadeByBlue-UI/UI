@@ -7,6 +7,12 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.5 — TRACKER DE JOUEUR
+		• Home > Serveurs > « Tracker » : pseudo exact (+ PlaceId facultatif) -> cherche le joueur dans les serveurs PUBLICS du jeu en comparant
+		  les avatars (API games / thumbnails de Roblox). Serveur actuel vérifié d'abord, progression en direct, Arrêter, Rejoindre, Copier l'ID.
+		• Région : non fournie par l'API publique -> filtre « Ping max » facultatif (approximation). Nécessite request / http_request.
+		• Library.Tracker = false retire le bloc · Library:TrackerSearch(pseudo, placeId) · Library:TrackerStop().
+
 	V9.4 — APERÇU DU PERSONNAGE : FOND ANIMÉ + INTERACTIF
 		• Home > Mon personnage : le fond bleu uni est remplacé par un décor animé à thèmes. Par défaut « Ange » : fond noir, aura + halo au-dessus
 		  de la tête de la couleur de la TÊTE du joueur, ailes qui battent de la couleur de son TORSE (couleurs très sombres légèrement éclaircies pour
@@ -13680,6 +13686,12 @@ end
 Library.Version = "5.10.0"
 Library.AppName = "Invincible"
 Library.Changelog = {
+	{ Version = "5.13.0", Date = "2026-11-07", Title = "Tracker de joueur", Notes = {
+		"+ Home > Serveurs > « Tracker » : retrouve un joueur à partir de son pseudo EXACT dans les serveurs publics d'un jeu (PlaceId au choix, jeu actuel par défaut).",
+		"+ Le serveur actuel est vérifié d'abord ; ensuite les serveurs publics sont parcourus page par page (barre de progression, bouton Arrêter).",
+		"+ Filtre « Ping max » (approximation de la région : Roblox ne publie pas la région des serveurs) et choix de l'ordre de la liste.",
+		"+ Boutons « Rejoindre le serveur trouvé » et « Copier l'ID ». Library.Tracker = false retire le bloc.",
+	} },
 	{ Version = "5.12.0", Date = "2026-11-07", Title = "Serveurs : 20 et logs", Notes = {
 		"~ Home > Serveurs : l'historique passe de 5 à 20 serveurs (Library.ServerHistoryMax).",
 		"+ Chaque serveur garde l'ID du jeu et son nom : on retourne dans le bon jeu même si c'était un autre jeu.",
@@ -14899,6 +14911,12 @@ function Library._buildHomeServers(sub)
 	chg:CreateButton({ Name = "Serveur le plus vide", Favorite = false, Callback = function() findServer("small") end })
 	chg:CreateButton({ Name = "Serveur le plus rempli", Favorite = false, Callback = function() findServer("full") end })
 
+	-- ===================== TRACKER (colonne gauche) =====================
+	if Library.Tracker ~= false then
+		local okT, errT = pcall(Library._buildHomeTracker, sub, { joinId = joinId })
+		if not okT then warn("[Ui-Lib] Tracker : " .. tostring(errT)) end
+	end
+
 	-- ===================== COLONNE DROITE =====================
 	local byid = sub:CreateBlock({ Name = "Rejoindre par ID", Side = "Right" })
 	local typed = ""
@@ -14926,6 +14944,343 @@ function Library._buildHomeServers(sub)
 		if Library.ServerLogScan ~= false then scanLogs(false) end
 	end)
 	refresh()
+end
+
+-- ============================================================================
+-- HOME > Serveurs > « Tracker » : retrouver un joueur (pseudo EXACT) dans les serveurs publics d'un jeu
+--   • Entre le pseudo exact (pas le nom d'affichage). Le PlaceId est facultatif : vide = le jeu dans lequel tu es.
+--   • Principe : le pseudo est converti en UserId, puis l'UI parcourt les serveurs publics du jeu (API games.roblox.com)
+--     et compare l'avatar (miniature de la tête) de chaque joueur présent avec celui du joueur cherché
+--     (API thumbnails.roblox.com). Le serveur courant est vérifié en premier, sans requête.
+--   • RÉGION : l'API publique de Roblox ne donne PAS la région d'un serveur. Le seul indice est « ping » (moyenne des joueurs
+--     du serveur). Le filtre « Ping max » est donc une approximation facultative : 0 = tous les serveurs.
+--   • Ne voit que les serveurs PUBLICS (pas les serveurs privés / VIP). Deux joueurs ayant exactement le même avatar
+--     peuvent donner une fausse correspondance : le résultat est « probable », pas certain.
+--   • Nécessite une fonction de requête HTTP de l'exécuteur (request / http_request / syn.request / fluxus.request).
+--   • Library.Tracker = false retire le bloc · Library:TrackerSearch(pseudo, placeId) / Library:TrackerStop() à la demande.
+-- ============================================================================
+function Library._buildHomeTracker(sub, ctx)
+	ctx = ctx or {}
+	local HttpService = game:GetService("HttpService")
+	local Players = game:GetService("Players")
+	local MarketplaceService = game:GetService("MarketplaceService")
+
+	local THUMB_URL = "https://thumbnails.roblox.com/v1/batch"
+	local BATCH = 100 -- limite de l'API de miniatures par requête
+
+	local cfg = { name = "", place = "", pingMax = 0, pages = 5, order = "Desc" }
+	local state = { token = 0, running = false }
+	local found -- { id, place, playing, max, ping, fps }
+	local resItem, progItem
+
+	local function say(title, text, kind)
+		Library:Notify({ Title = title, Content = text, Type = kind or "Info", Duration = 4 })
+	end
+	local function trim(s) return (string.gsub(tostring(s or ""), "^%s*(.-)%s*$", "%1")) end
+	local function short(id)
+		id = tostring(id or "")
+		return string.sub(id, 1, 8) .. "…" .. string.sub(id, -4)
+	end
+	local function setResult(title, content)
+		if resItem then resItem.Set(resItem, { Title = title, Content = content }) end
+	end
+	local function setProgress(ratio, text)
+		if not progItem then return end
+		progItem.Set(progItem, math.floor(math.clamp(ratio, 0, 1) * 100))
+		if text then progItem.SetText(progItem, text) end
+	end
+
+	-- ----- requêtes HTTP (fonction de l'exécuteur), avec nouvelle tentative sur 429 / erreur serveur
+	local function getRequester()
+		return (syn and syn.request) or http_request or request or (fluxus and fluxus.request)
+	end
+	local function httpOnce(method, url, body)
+		local req = getRequester()
+		if not req then return nil, 0 end
+		local opts = { Url = url, Method = method, Headers = { ["Accept"] = "application/json" } }
+		if body ~= nil then
+			opts.Headers["Content-Type"] = "application/json"
+			opts.Body = HttpService:JSONEncode(body)
+		end
+		local ok, res = pcall(req, opts)
+		if not ok or type(res) ~= "table" then return nil, 0 end
+		local status = tonumber(res.StatusCode or res.status_code) or 0
+		local okJ, data = pcall(function() return HttpService:JSONDecode(res.Body or res.body or "") end)
+		return (okJ and type(data) == "table") and data or nil, status
+	end
+	local function sleep(sec, token)
+		local t = 0
+		while t < sec and token == state.token do
+			task.wait(0.1)
+			t += 0.1
+		end
+	end
+	local function call(method, url, body, token)
+		local data, status
+		for attempt = 1, 4 do
+			if token ~= state.token then return nil, -1 end
+			data, status = httpOnce(method, url, body)
+			if status == 429 then
+				sleep(1.5 * attempt, token)
+			elseif status == 0 or status >= 500 then
+				sleep(1, token)
+			else
+				break
+			end
+		end
+		return data, status
+	end
+
+	-- ----- miniatures : on compare le hash de l'image (identique pour un même avatar)
+	local function thumbReq(requestId, targetId, tok)
+		return { requestId = requestId, type = "AvatarHeadshot", targetId = targetId or 0, token = tok,
+			size = "150x150", format = "png", isCircular = false }
+	end
+	local function hashOf(url)
+		if type(url) ~= "string" then return nil end
+		return string.match(url, "rbxcdn%.com/([^/]+)/")
+	end
+	local function targetHash(userId, token)
+		for _ = 1, 5 do
+			local data = call("POST", THUMB_URL, { thumbReq("target", userId, nil) }, token)
+			local d = data and type(data.data) == "table" and data.data[1]
+			if d and d.state == "Completed" then return hashOf(d.imageUrl) end
+			if token ~= state.token then return nil end
+			sleep(1, token)
+		end
+		return nil
+	end
+
+	-- ----- parcourt les serveurs publics du jeu ; renvoie (serveur | nil, statut, nb de serveurs vérifiés, nb d'échecs)
+	local function scan(token, placeId, hash)
+		local cursor, scanned, failed = nil, 0, 0
+		for page = 1, cfg.pages do
+			if token ~= state.token then return nil, "cancel", scanned, failed end
+			local url = "https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?sortOrder=" .. cfg.order
+				.. "&excludeFullGames=false&limit=100"
+				.. (cursor and ("&cursor=" .. HttpService:UrlEncode(cursor)) or "")
+			local data, status = call("GET", url, nil, token)
+			if token ~= state.token then return nil, "cancel", scanned, failed end
+			if not (data and type(data.data) == "table") then
+				if scanned > 0 then break end -- on a déjà vérifié des pages : on rend un résultat partiel
+				if status == 429 then return nil, "rate", scanned, failed end
+				if status == 400 or status == 404 then return nil, "nogame", scanned, failed end
+				return nil, "api", scanned, failed
+			end
+
+			local items, byTok = {}, {}
+			for _, s in ipairs(data.data) do
+				local pingOk = cfg.pingMax <= 0 or (tonumber(s.ping) or 0) <= cfg.pingMax
+				if pingOk and type(s.playerTokens) == "table" and #s.playerTokens > 0 then
+					scanned += 1
+					for _, tk in ipairs(s.playerTokens) do
+						items[#items + 1] = thumbReq(tk, 0, tk)
+						byTok[tk] = s
+					end
+				end
+			end
+
+			local nChunks = math.max(1, math.ceil(#items / BATCH))
+			for c = 1, nChunks do
+				if token ~= state.token then return nil, "cancel", scanned, failed end
+				local chunk = {}
+				for k = (c - 1) * BATCH + 1, math.min(c * BATCH, #items) do chunk[#chunk + 1] = items[k] end
+				if #chunk > 0 then
+					local res = call("POST", THUMB_URL, chunk, token)
+					if token ~= state.token then return nil, "cancel", scanned, failed end
+					if res and type(res.data) == "table" then
+						for _, d in ipairs(res.data) do
+							if d.state == "Completed" and hashOf(d.imageUrl) == hash then
+								local s = byTok[d.requestId]
+								if s then return s, "ok", scanned, failed end
+							end
+						end
+					else
+						failed += 1
+					end
+					sleep(0.3, token)
+				end
+				setProgress(((page - 1) + c / nChunks) / cfg.pages,
+					"Page " .. page .. "/" .. cfg.pages .. " · " .. scanned .. " serveurs")
+			end
+
+			cursor = data.nextPageCursor
+			if not cursor then break end
+			sleep(0.4, token)
+		end
+		return nil, "none", scanned, failed
+	end
+
+	-- ----- recherche complète
+	local function run(nameArg, placeArg)
+		if state.running then
+			say("Tracker", "Une recherche est déjà en cours.", "Warning")
+			return
+		end
+		local name = trim(nameArg ~= nil and nameArg or cfg.name)
+		if #name < 3 or #name > 20 or not string.match(name, "^[%w_]+$") then
+			say("Tracker", "Pseudo invalide : 3 à 20 caractères (lettres, chiffres, _). Il faut le pseudo exact, pas le nom d'affichage.", "Error")
+			return
+		end
+		local placeId = tonumber(placeArg ~= nil and placeArg or cfg.place) or game.PlaceId
+		if not placeId or placeId <= 0 then
+			say("Tracker", "Aucun PlaceId : entre celui du jeu à fouiller.", "Warning")
+			return
+		end
+		if not getRequester() then
+			say("Tracker", "Ton exécuteur n'a pas de fonction de requête HTTP (request / http_request) : recherche impossible.", "Error")
+			return
+		end
+
+		state.token += 1
+		local token = state.token
+		state.running = true
+		found = nil
+		setProgress(0, "…")
+		setResult("Recherche en cours…", "Résolution du pseudo « " .. name .. " »…")
+
+		task.spawn(function()
+			local function done(title, text, kind)
+				if token ~= state.token then return end
+				state.running = false
+				setResult(title, text)
+				say("Tracker", title, kind or "Info")
+			end
+
+			-- 1) pseudo -> UserId
+			local userId
+			local ok, id = pcall(function() return Players:GetUserIdFromNameAsync(name) end)
+			if ok and tonumber(id) then
+				userId = tonumber(id)
+			else
+				local data = call("POST", "https://users.roblox.com/v1/usernames/users",
+					{ usernames = { name }, excludeBannedUsers = true }, token)
+				local u = data and type(data.data) == "table" and data.data[1]
+				if u and type(u.name) == "string" and string.lower(u.name) == string.lower(name) then
+					userId = tonumber(u.id)
+				end
+			end
+			if token ~= state.token then return end
+			if not userId then
+				return done("Joueur introuvable", "Aucun compte nommé « " .. name .. " » (pseudo exact requis, ou compte banni).", "Error")
+			end
+			local canon = name
+			pcall(function() canon = Players:GetNameFromUserIdAsync(userId) end)
+
+			-- nom du jeu (affichage)
+			local gameName = "PlaceId " .. placeId
+			pcall(function()
+				local info = MarketplaceService:GetProductInfo(placeId)
+				if info and info.Name then gameName = info.Name end
+			end)
+
+			-- 2) serveur actuel : pas de requête nécessaire
+			if placeId == game.PlaceId then
+				for _, p in ipairs(Players:GetPlayers()) do
+					if p.UserId == userId then
+						found = { id = game.JobId, place = placeId, playing = #Players:GetPlayers(), max = Players.MaxPlayers }
+						setProgress(1, "Trouvé")
+						return done(canon .. " est dans TON serveur",
+							"« " .. canon .. " » (ID " .. userId .. ") joue avec toi, dans « " .. gameName .. " » ("
+							.. found.playing .. " / " .. found.max .. " joueurs).", "Success")
+					end
+				end
+			end
+
+			-- 3) miniature du joueur cherché
+			setResult("Recherche en cours…", "« " .. canon .. " » (ID " .. userId .. ") · jeu : " .. gameName .. "\nAnalyse des serveurs publics…")
+			local hash = targetHash(userId, token)
+			if token ~= state.token then return end
+			if not hash then
+				return done("Avatar illisible", "La miniature de « " .. canon .. " » n'est pas disponible (en cours de génération, ou bloquée). Réessaie dans un instant.", "Warning")
+			end
+
+			-- 4) parcours des serveurs
+			local s, status, scanned, failed = scan(token, placeId, hash)
+			if token ~= state.token then return end
+			setProgress(1, scanned .. " serveurs vérifiés")
+
+			if s then
+				found = { id = s.id, place = placeId, playing = tonumber(s.playing), max = tonumber(s.maxPlayers),
+					ping = tonumber(s.ping), fps = tonumber(s.fps) }
+				local lines = {
+					"« " .. canon .. " » (ID " .. userId .. ") est probablement dans un serveur de « " .. gameName .. " ».",
+					"Joueurs : " .. tostring(found.playing or "?") .. " / " .. tostring(found.max or "?")
+						.. "  ·  Ping : " .. (found.ping and (math.floor(found.ping) .. " ms") or "?")
+						.. "  ·  FPS : " .. (found.fps and math.floor(found.fps) or "?"),
+					"ID du serveur : " .. short(found.id),
+				}
+				if found.playing and found.max and found.playing >= found.max then
+					lines[#lines + 1] = "Serveur plein : la connexion peut échouer."
+				end
+				lines[#lines + 1] = "(Correspondance d'avatar : deux joueurs avec le même avatar peuvent se confondre.)"
+				return done("Joueur trouvé", table.concat(lines, "\n"), "Success")
+			end
+
+			if status == "rate" then
+				return done("Trop de requêtes", "Roblox limite temporairement les requêtes : attends une minute puis relance.", "Warning")
+			elseif status == "nogame" then
+				return done("Jeu introuvable", "Le PlaceId " .. placeId .. " n'a pas de serveurs publics lisibles (jeu privé, supprimé, ou ce n'est pas le lieu principal).", "Error")
+			elseif status == "api" then
+				return done("API Roblox indisponible", "Impossible de lire la liste des serveurs. Réessaie plus tard.", "Error")
+			end
+
+			local why = "« " .. canon .. " » n'est dans aucun des " .. scanned .. " serveurs publics vérifiés"
+			if cfg.pingMax > 0 then why ..= " (ping ≤ " .. cfg.pingMax .. " ms)" end
+			why ..= ". Il est peut-être hors ligne, dans un serveur privé, ou plus loin dans la liste : augmente « Pages à scanner »."
+			if failed > 0 then why ..= "\n" .. failed .. " requête(s) ont échoué : le résultat peut être incomplet." end
+			done("Joueur non trouvé", why, "Warning")
+		end)
+	end
+
+	local function stop()
+		if not state.running then return end
+		state.token += 1
+		state.running = false
+		setProgress(0, "")
+		setResult("Recherche arrêtée", "Tu peux relancer une recherche.")
+	end
+
+	-- API publique (facultative)
+	function Library:TrackerSearch(pseudo, placeId) run(pseudo, placeId) end
+	function Library:TrackerStop() stop() end
+
+	-- ===================== BLOC =====================
+	local blk = sub:CreateBlock({ Name = "Tracker", Side = "Left" })
+	blk:CreateParagraph({ Title = "Retrouver un joueur",
+		Content = "Pseudo EXACT du joueur (pas son nom d'affichage). Les serveurs publics du jeu sont fouillés en comparant les avatars. PlaceId vide = jeu actuel." })
+	blk:CreateInput({ Name = "Pseudo exact", Placeholder = "ex : Builderman",
+		Callback = function(t) cfg.name = trim(t) end })
+	blk:CreateInput({ Name = "PlaceId du jeu", Placeholder = "vide = jeu actuel", Numeric = true,
+		Callback = function(t) cfg.place = trim(t) end })
+	blk:CreateSlider({ Name = "Ping max (0 = tous)", Flag = "ui.home.tracker.ping", Min = 0, Max = 400, Step = 10,
+		Default = 0, Suffix = " ms", Callback = function(v) cfg.pingMax = tonumber(v) or 0 end })
+	blk:CreateSlider({ Name = "Pages à scanner (100 serveurs)", Flag = "ui.home.tracker.pages", Min = 1, Max = 30, Step = 1,
+		Default = 5, Callback = function(v) cfg.pages = math.max(1, math.floor(tonumber(v) or 5)) end })
+	blk:CreateDropdown({ Name = "Ordre de la liste", Flag = "ui.home.tracker.order", Search = false,
+		Items = { "Plus peuplés d'abord", "Moins peuplés d'abord" }, Default = "Plus peuplés d'abord",
+		Callback = function(v)
+			local val = type(v) == "table" and v[1] or v
+			cfg.order = (val == "Moins peuplés d'abord") and "Asc" or "Desc"
+		end })
+	blk:CreateButton({ Name = "Chercher le joueur", Favorite = false, Callback = function() run() end })
+	blk:CreateButton({ Name = "Arrêter la recherche", Favorite = false, Callback = stop })
+	progItem = blk:CreateProgress({ Name = "Progression", Min = 0, Max = 100, Suffix = " %" })
+	resItem = blk:CreateParagraph({ Title = "Résultat", Content = "Aucune recherche pour l'instant." })
+	blk:CreateButton({ Name = "Rejoindre le serveur trouvé", Favorite = false, Callback = function()
+		if not found then say("Tracker", "Aucun serveur trouvé : lance d'abord une recherche.", "Warning") return end
+		if found.id == game.JobId then say("Tracker", "Tu es déjà dans ce serveur.", "Info") return end
+		if ctx.joinId then ctx.joinId(found.id, "Tracker", found.place) end
+	end })
+	blk:CreateButton({ Name = "Copier l'ID du serveur trouvé", Favorite = false, Callback = function()
+		if not found then say("Tracker", "Aucun serveur trouvé.", "Warning") return end
+		if setclipboard then
+			setclipboard(found.id)
+			say("Tracker", "ID du serveur copié.", "Success")
+		else
+			say("Tracker", "setclipboard indisponible : " .. found.id, "Warning")
+		end
+	end })
 end
 
 -- ---------------------------------------------------------------------------
