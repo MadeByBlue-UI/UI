@@ -1752,33 +1752,18 @@ end
 -- Position du pointeur dans le MÊME repère que AbsolutePosition (les ScreenGui sont en IgnoreGuiInset = true).
 -- Souris : GetMouseLocation, moins le réglage manuel (Library.PointerOffset) et moins la correction APPRISE toute seule
 -- (Library._ptrLearn, voir Library._ptrCheck). Tactile : InputObject.Position décalé de l'inset.
-Library._ptrLearn = Library._ptrLearn or 0
--- FIX curseur : la correction apprise est maintenant mémorisée entre deux lancements (<ConfigFolder>/_pointer.json)
-Library._ptrSave = function()
-	pcall(function()
-		if writefile then
-			if makefolder and isfolder and not isfolder(Library.ConfigFolder) then makefolder(Library.ConfigFolder) end
-			writefile(Library.ConfigFolder .. "/_pointer.json", HttpService:JSONEncode({ learn = Library._ptrLearn or 0 }))
-		end
-	end)
-end
-Library._ptrLoad = function()
+-- CURSEUR (refait) : plus aucun apprentissage / vote / fichier. Le décalage éventuel entre l'écran et le ScreenGui de l'UI est
+-- MESURÉ en direct (voir Library._ptrAuto). Les anciens noms restent pour compatibilité (ne font plus rien).
+Library._ptrLearn = 0
+Library._ptrVotes = {}
+Library._ptrLoaded = true
+Library._ptrSave = function() end
+Library._ptrSet = function() end
+Library._ptrLoad = function()   -- supprime l'ancien _pointer.json (valeur apprise, parfois fausse, qui décalait tout)
 	pcall(function()
 		local f = Library.ConfigFolder .. "/_pointer.json"
-		if isfile and readfile and isfile(f) then
-			local d = HttpService:JSONDecode(readfile(f))
-			if type(d) == "table" and tonumber(d.learn) then
-				Library._ptrLearn = math.clamp(tonumber(d.learn), -120, 120)
-				Library._ptrLoaded = true
-			end
-		end
+		if isfile and delfile and isfile(f) then delfile(f) end
 	end)
-end
-Library._ptrSet = function(c, persist)
-	Library._ptrLoaded = true
-	if (Library._ptrLearn or 0) == c then return end
-	Library._ptrLearn = c   -- une valeur apprise / confirmée : la mesure automatique ne la touche plus
-	if persist ~= false then Library._ptrSave() end
 end
 -- FIX curseur : position de la souris dans le repère de l'UI (même correction que _pointerPos), pour placer / tester des éléments
 Library._mouse = function()
@@ -1811,71 +1796,34 @@ end
 -- Manuel : Library.PointerOffset (Paramètres > Fenêtre). Auto : Library._ptrLearn, appris à l'appui sur le carré / la barre
 -- de teinte / la barre d'opacité du color picker (voir Library._ptrCheck). Les deux s'additionnent.
 Library.PointerOffset = Library.PointerOffset or Vector2.new(0, 0)
-Library._ptrCorrect = function()
-	local man = Library.PointerOffset
-	return Vector2.new(man and man.X or 0, (man and man.Y or 0) + (Library._ptrLearn or 0))
-end
-
--- Auto-calibrage : un événement d'appui n'arrive QUE si le vrai pointeur est dans la zone cliquée. Si, avec la correction
--- actuelle, le pointeur calculé tombe hors de cette zone, le repère est décalé : on cherche la correction qui le remet
--- dedans (décalages connus : barre du haut 36 / 58 px, GetGuiInset), sinon on recale sur le centre de la zone.
--- Aucun effet tant que le pointeur calculé est bien dans la zone : un réglage qui marche déjà n'est jamais touché.
-Library._ptrCheck = function(gui)
-	local okT, last = pcall(function() return UIS:GetLastInputType() end)
-	if okT and last == Enum.UserInputType.Touch then return end
-	if not (gui and gui.Parent) then return end
-	local raw = UIS:GetMouseLocation()
-	local man = Library.PointerOffset
-	local base = raw.Y - (man and man.Y or 0)
-	local ap, as = gui.AbsolutePosition, gui.AbsoluteSize
-	local function inside(c) local y = base - c return y >= ap.Y - 1 and y <= ap.Y + as.Y + 1 end
-	if inside(Library._ptrLearn or 0) then return end
-	local ins = guiInset().Y
-	for _, c in ipairs({ 0, ins, 58, 36, -ins, -36, -58 }) do
-		if inside(c) then Library._ptrSet(c) return end
-	end
-	Library._ptrSet(base - (ap.Y + as.Y / 2), false)
-end
--- Calibrage par VOTES (appris à l'usage, sans rien régler) : à chaque appui sur un petit élément (onglet du menu, bouton, aperçu...),
--- le vrai pointeur y est forcément. Chaque correction candidate (0, ±inset, ±58, ±36) dont le pointeur calculé tombe dans l'élément
--- marque un point ; les éléments fins (~34 px) départagent vite (un pointeur décalé de 58 px tombe à côté). Dès qu'une correction
--- devance nettement l'actuelle, elle est adoptée : c'est ce qui rattrape un curseur trop haut / trop bas de 58 px.
-Library._ptrVotes = Library._ptrVotes or {}
-Library._ptrVote = function(gui, weight)
-	local okT, last = pcall(function() return UIS:GetLastInputType() end)
-	if okT and last == Enum.UserInputType.Touch then return end
-	if not (gui and gui.Parent) then return end
-	local ap, as = gui.AbsolutePosition, gui.AbsoluteSize
-	if as.Y < 4 or as.Y > 90 then return end   -- seulement les éléments fins : les grands ne départagent rien
-	local man = Library.PointerOffset
-	local base = UIS:GetMouseLocation().Y - (man and man.Y or 0)
-	local ins = guiInset().Y
-	local cands = { 0, ins, -ins, 58, -58, 36, -36 }
-	local V = Library._ptrVotes
-	local w = math.min(1, 34 / as.Y) * (weight or 1)
-	-- FIX curseur : on cherche quelles corrections (sans doublon) placent le pointeur DANS l'élément cliqué. Si une seule
-	-- convient (élément fin), c'est certain : bonus -> adoptée dès le premier clic au lieu d'attendre plusieurs clics.
-	local seen, fit, nfit = {}, nil, 0
-	for _, c in ipairs(cands) do
-		if not seen[c] then
-			seen[c] = true
-			local y = base - c
-			if y >= ap.Y and y <= ap.Y + as.Y then V[c] = (V[c] or 0) + w nfit = nfit + 1 fit = c end
+Library._ptrCache = { t = -1, k = 0 }
+Library._ptrAuto = function()
+	-- écart réel écran <-> ScreenGui de l'UI : normalement 0 (IgnoreGuiInset = true). Si la barre du haut est quand même
+	-- appliquée (36 / 58 px selon le menu Roblox), le ScreenGui est plus court que l'écran : la différence EST le décalage.
+	local c = Library._ptrCache
+	local now = os.clock()
+	if now - c.t < 0.25 then return c.k end
+	c.t = now
+	local g, cam = Library._ptrGui, workspace.CurrentCamera
+	if g and g.Parent and cam then
+		local gs, vs = g.AbsoluteSize, cam.ViewportSize
+		if gs.Y > 100 and vs.Y > 100 then
+			local k = vs.Y - gs.Y
+			c.k = (k > 4 and k < 100) and k or 0
 		end
 	end
-	if nfit == 1 and as.Y <= 40 then V[fit] = (V[fit] or 0) + 1.6 end
-	local cur = Library._ptrLearn or 0
-	local best, bv = cur, V[cur] or 0
-	for _, c in ipairs(cands) do
-		if (V[c] or 0) > bv then best, bv = c, V[c] end
-	end
-	if best ~= cur and bv >= (V[cur] or 0) + 1.5 then Library._ptrSet(best) end
+	return c.k
 end
+Library._ptrCorrect = function()
+	local man = Library.PointerOffset   -- réglage manuel facultatif (Paramètres > Fenêtre)
+	return Vector2.new(man and man.X or 0, (man and man.Y or 0) + Library._ptrAuto())
+end
+
+Library._ptrCheck = function() end
+Library._ptrVote = function() end
 function Library:ResetPointerCalibration()
-	Library._ptrLearn = 0
-	Library._ptrLoaded = false
-	table.clear(Library._ptrVotes)
-	Library._ptrSave()
+	Library._ptrCache.t = -1
+	Library._ptrLoad()
 end
 
 -- Échelle réelle de la fenêtre (UIScale + animation), pour convertir pixels écran <-> pixels UI
@@ -18820,21 +18768,18 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Tooltip = "Tant que l'interface est ouverte, W A S D et Espace n'agissent plus sur ton personnage (Library.BlockedKeys pour changer la liste). Rien n'est bloqué pendant la saisie de texte ou l'assignation d'une touche.",
 		Callback = function(v) Library:SetBlockGameKeys(v) end })
 	D:CreateSlider({ Name = "Décalage vertical du curseur", Flag = "ui.ptroffset", Min = -80, Max = 80, Default = 0, Step = 1, Suffix = " px",
-		Tooltip = "Le color picker se recale tout seul au premier clic. À régler seulement si, malgré ça, la poignée n'est pas pile sous ton curseur : positif = la poignée / le curseur monte, négatif = il descend (ex. -58 si le curseur est 58 px trop haut). Le calibrage se fait aussi tout seul en cliquant sur les onglets et les boutons. Laisse 0 sinon.",
+		Tooltip = "Le décalage est maintenant mesuré automatiquement en direct. À régler seulement si, malgré ça, la poignée n'est pas pile sous ton curseur : positif = la poignée / le curseur monte, négatif = il descend. Laisse 0 sinon.",
 		Callback = function(v)
 			local n = tonumber(v) or 0
 			if n ~= 0 and (Library.PointerOffset == nil or Library.PointerOffset.Y ~= n) then
-				-- réglage manuel : on repart de zéro pour ne pas additionner avec la correction apprise
-				Library._ptrLearn = 0
-				table.clear(Library._ptrVotes)
 			end
 			Library.PointerOffset = Vector2.new(0, n)
 		end })
 	D:CreateButton({ Name = "Recalibrer le curseur", Favorite = false,
-		Tooltip = "Efface la correction apprise (et mémorisée) du curseur : elle se réapprend toute seule en cliquant sur quelques boutons.",
+		Tooltip = "Supprime l'ancienne correction mémorisée (_pointer.json) et remesure le décalage du curseur.",
 		Callback = function()
 			Library:ResetPointerCalibration()
-			Library:Notify({ Title = "Curseur", Content = "Calibrage remis à zéro : clique sur quelques boutons, il se règle tout seul.", Duration = 3, Type = "Info" })
+			Library:Notify({ Title = "Curseur", Content = "Curseur remesuré.", Duration = 3, Type = "Info" })
 		end })
 	D:CreateToggle({ Name = "Verrouiller la position", Flag = "ui.lockpos", Default = Library.LockPosition == true,
 		Tooltip = "La fenêtre ne peut plus être déplacée ni redimensionnée à la souris (le double-clic pour réduire et Ctrl+R restent possibles).",
@@ -20891,29 +20836,10 @@ function Library:CreateWindow(cfg)
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
 	mount(gui)
 
-	-- FIX curseur : (1) valeur apprise lors d'un lancement précédent ; (2) sinon mesure de l'écart réel entre l'écran et le
-	-- ScreenGui (si l'inset de la barre du haut est appliqué malgré IgnoreGuiInset, sa taille est plus petite que l'écran :
-	-- la différence EST le décalage, 58 px sur le nouveau menu Roblox) ; (3) chaque clic sur n'importe quel bouton affine le
-	-- calibrage (vote), donc le décalage se règle tout seul, sans toucher au réglage manuel.
+	-- CURSEUR : ce ScreenGui sert de référence de mesure (Library._ptrAuto) ; ancien calibrage appris supprimé.
+	Library._ptrGui = gui
+	Library._ptrCache.t = -1
 	Library._ptrLoad()
-	task.delay(0.6, function()
-		pcall(function()
-			if Library._ptrLoaded or not gui.Parent then return end
-			local man = Library.PointerOffset
-			if man and man.Y ~= 0 then return end
-			local cam = workspace.CurrentCamera
-			if not cam then return end
-			local k = cam.ViewportSize.Y - gui.AbsoluteSize.Y
-			if k > 4 and k < 100 then Library._ptrSet(k, false) end
-		end)
-	end)
-	track(gui.DescendantAdded:Connect(function(d)
-		if d:IsA("GuiButton") then
-			d.InputBegan:Connect(function(i)
-				if isPress(i) then Library._ptrVote(d, 0.5) end
-			end)
-		end
-	end))
 
 	-- ------------------------------------------------------------------
 	-- Ciel : étoiles qui rebondissent sur les bords de l'écran, DERRIÈRE la fenêtre.
