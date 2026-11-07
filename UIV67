@@ -13680,6 +13680,12 @@ end
 Library.Version = "5.10.0"
 Library.AppName = "Invincible"
 Library.Changelog = {
+	{ Version = "5.12.0", Date = "2026-11-07", Title = "Serveurs : 20 et logs", Notes = {
+		"~ Home > Serveurs : l'historique passe de 5 à 20 serveurs (Library.ServerHistoryMax).",
+		"+ Chaque serveur garde l'ID du jeu et son nom : on retourne dans le bon jeu même si c'était un autre jeu.",
+		"+ Historique sauvegardé à chaque changement dans son propre fichier (server_history.json), sans config à enregistrer.",
+		"+ « Retrouver depuis les logs Roblox » : retrouve des serveurs où le script n'a pas tourné, si l'exécuteur laisse lire les logs.",
+	} },
 	{ Version = "5.11.0", Date = "2026-11-01", Title = "Console et recherche", Notes = {
 		"+ Nouvel élément Console (style CMD) : titre + description, lignes colorées par niveau, filtres, champ de commandes avec historique (flèches haut / bas) et sauvegarde optionnelle entre deux sessions.",
 		"+ Library:LogEvent(tag, texte, niveau) : écrit dans toutes les consoles créées avec Events = true.",
@@ -14547,19 +14553,26 @@ function Library:StartUpdateWatcher()
 end
 
 -- ============================================================================
--- HOME > « Serveurs » : changer de serveur, rejoindre par ID, revenir sur le même, historique des 5 derniers serveurs
---   • Historique : Library.ServerHistoryMax (5 par défaut) ; les plus anciens sont supprimés. Sauvegardé avec les réglages
---     (clé « ui.home.servers »), donc retrouvé au prochain lancement du script.
+-- HOME > « Serveurs » : changer de serveur, rejoindre par ID, revenir sur le même, historique des 20 derniers serveurs
+--   • Historique : Library.ServerHistoryMax (20 par défaut) ; les plus anciens sont supprimés. Chaque entrée garde l'ID du serveur
+--     (JobId), l'ID du JEU (PlaceId : on retourne donc dans le bon jeu même si c'était un autre jeu que celui d'aujourd'hui) et son nom.
+--   • Sauvegardé à chaque changement dans son propre fichier « <ConfigFolder>/server_history.json » (+ clé « ui.home.servers » des réglages) :
+--     il n'a pas besoin d'une config enregistrée. Pour qu'un serveur soit noté il faut que le script ait tourné dedans (auto-exécution
+--     de l'exécuteur = noté tout seul à chaque partie).
+--   • « Retrouver depuis les logs Roblox » : lit les journaux du client Roblox (ligne « Joining game '<JobId>' place <PlaceId> ») pour
+--     retrouver des serveurs où le script n'a PAS tourné. Ça ne marche que si l'exécuteur laisse lire hors de son dossier workspace ;
+--     sinon rien n'est lu (Library.ServerLogScan = false coupe la lecture automatique au lancement).
 --   • Le filtre de joueurs (clé « ui.home.servers.range ») est borné par Players.MaxPlayers du jeu.
---   • Un serveur est identifié par son JobId (ID de serveur public) ; on le rejoint avec TeleportToPlaceInstance.
+--   • On rejoint avec TeleportToPlaceInstance(PlaceId du serveur, JobId).
 -- ============================================================================
 function Library._buildHomeServers(sub)
 	local TeleportService = game:GetService("TeleportService")
-	local MAX = math.max(1, math.floor(tonumber(Library.ServerHistoryMax) or 5))
-	local history = {}      -- { { id = "GUID", t = os.time() }, ... } du plus récent au plus ancien
+	local MAX = math.max(1, math.floor(tonumber(Library.ServerHistoryMax) or 20))
+	local history = {}      -- { { id = "GUID", t = os.time(), place = PlaceId, name = "Nom du jeu", i = ordre }, ... } du plus récent au plus ancien
 	local slots = {}        -- boutons du panneau
 	local busy = false
 	local curPara
+	local seq = 0
 
 	local function placeMax()
 		local m = 0
@@ -14571,7 +14584,9 @@ function Library._buildHomeServers(sub)
 	end
 	local function short(id) return string.sub(id, 1, 8) .. "…" .. string.sub(id, -4) end
 	local function ago(t)
-		local d = math.max(os.time() - (tonumber(t) or 0), 0)
+		t = tonumber(t) or 0
+		if t <= 0 then return "date inconnue" end
+		local d = math.max(os.time() - t, 0)
 		if d < 60 then return "à l'instant" end
 		if d < 3600 then return "il y a " .. math.floor(d / 60) .. " min" end
 		if d < 86400 then return "il y a " .. math.floor(d / 3600) .. " h" end
@@ -14580,13 +14595,103 @@ function Library._buildHomeServers(sub)
 	local function say(title, text, kind)
 		Library:Notify({ Title = title, Content = text, Type = kind or "Info", Duration = 4 })
 	end
+	local function cleanName(n)
+		n = string.gsub(tostring(n or ""), "%c", "")
+		local l = utf8.len(n)
+		if l and l > 24 then n = string.sub(n, 1, utf8.offset(n, 24) - 1) .. "…" end
+		return n
+	end
+	local function clean(h)
+		if type(h) ~= "table" or not isId(h.id) then return nil end
+		local nm = (type(h.name) == "string" and h.name ~= "") and cleanName(h.name) or nil
+		return { id = h.id, t = tonumber(h.t) or 0, place = tonumber(h.place), name = nm }
+	end
+	local function histPath() return (Library.ConfigFolder or "Ui-Lib") .. "/server_history.json" end
 
-	local function refresh()
+	local refresh
+	local function save()
+		local out = {}
+		for i, h in ipairs(history) do out[i] = { id = h.id, t = h.t, place = h.place, name = h.name } end
+		Library.Flags["ui.home.servers"] = out
+		pcall(function()
+			if not writefile then return end
+			local f = Library.ConfigFolder or "Ui-Lib"
+			if makefolder and isfolder and not isfolder(f) then makefolder(f) end
+			writefile(histPath(), HttpService:JSONEncode(out))
+		end)
+	end
+	-- fusionne une liste (sans doublon) dans l'historique ; oldestFirst = la liste va du plus ancien au plus récent
+	local function merge(list, oldestFirst)
+		if type(list) ~= "table" then return 0 end
+		local byId, added = {}, 0
+		for _, h in ipairs(history) do byId[h.id] = h end
+		local n = #list
+		for k = 1, n do
+			local h = clean(list[oldestFirst and k or (n - k + 1)])
+			if h then
+				seq += 1
+				local e = byId[h.id]
+				if e then
+					e.t = math.max(e.t or 0, h.t)
+					e.place = e.place or h.place
+					e.name = e.name or h.name
+				else
+					h.i = seq
+					history[#history + 1] = h
+					byId[h.id] = h
+					added += 1
+				end
+			end
+		end
+		table.sort(history, function(a, b)
+			if (a.t or 0) ~= (b.t or 0) then return (a.t or 0) > (b.t or 0) end
+			return (a.i or 0) > (b.i or 0)
+		end)
+		while #history > MAX do table.remove(history) end
+		return added
+	end
+	local function loadFile()
+		pcall(function()
+			if readfile and isfile and isfile(histPath()) then
+				merge(HttpService:JSONDecode(readfile(histPath())), false)
+			end
+		end)
+	end
+	local function fetchName(e)
+		if not e or e.name or not e.place then return end
+		task.spawn(function()
+			local ok, info = pcall(function() return game:GetService("MarketplaceService"):GetProductInfo(e.place) end)
+			if ok and type(info) == "table" and info.Name then
+				e.name = cleanName(info.Name)
+				save()
+				refresh()
+			end
+		end)
+	end
+	local function record(id, place)
+		if not isId(id) then return nil end
+		seq += 1
+		local e
+		for i = #history, 1, -1 do
+			if history[i].id == id then e = table.remove(history, i) end
+		end
+		e = e or { id = id }
+		e.t, e.i = os.time(), seq
+		e.place = tonumber(place) or e.place
+		table.insert(history, 1, e)
+		while #history > MAX do table.remove(history) end
+		save()
+		refresh()
+		return e
+	end
+
+	refresh = function()
 		for i, s in ipairs(slots) do
 			local h = history[i]
 			if h then
 				s.Instance.Visible = true
-				s.SetText(s, i .. " · " .. short(h.id) .. "  (" .. ago(h.t) .. ")" .. (h.id == game.JobId and "  · actuel" or ""))
+				s.SetText(s, i .. " · " .. (h.name and (h.name .. " · ") or "") .. short(h.id) .. "  (" .. ago(h.t) .. ")"
+					.. (h.id == game.JobId and "  · actuel" or ""))
 			else
 				s.Instance.Visible = i == 1
 				if i == 1 then s.SetText(s, "Aucun serveur enregistré pour l'instant") end
@@ -14598,38 +14703,19 @@ function Library._buildHomeServers(sub)
 				.. "\nPlace " .. tostring(game.PlaceId) .. "  ·  max " .. placeMax() .. " joueurs" })
 		end
 	end
-	local function save()
-		local out = {}
-		for i, h in ipairs(history) do out[i] = { id = h.id, t = h.t } end
-		Library.Flags["ui.home.servers"] = out
-	end
-	local function record(id)
-		if not isId(id) then return end
-		for i = #history, 1, -1 do
-			if history[i].id == id then table.remove(history, i) end
-		end
-		table.insert(history, 1, { id = id, t = os.time() })
-		while #history > MAX do table.remove(history) end
-		save()
-		refresh()
-	end
+
+	loadFile()
 	Library.Flags["ui.home.servers"] = {}
 	Library.Defaults["ui.home.servers"] = {}
+	save()
 	Library.Items["ui.home.servers"] = {
 		Get = function()
 			local out = {}
-			for i, h in ipairs(history) do out[i] = { id = h.id, t = h.t } end
+			for i, h in ipairs(history) do out[i] = { id = h.id, t = h.t, place = h.place, name = h.name } end
 			return out
 		end,
 		Set = function(_, list)
-			table.clear(history)
-			if type(list) == "table" then
-				for _, h in ipairs(list) do
-					if type(h) == "table" and isId(h.id) and #history < MAX then
-						history[#history + 1] = { id = h.id, t = tonumber(h.t) or 0 }
-					end
-				end
-			end
+			merge(list, false)
 			save()
 			refresh()
 			if Library._serverEnsureCurrent then Library._serverEnsureCurrent() end
@@ -14637,10 +14723,18 @@ function Library._buildHomeServers(sub)
 	}
 	-- le serveur où l'on se trouve est le dernier serveur rejoint
 	Library._serverEnsureCurrent = function()
-		if game.JobId ~= "" and not (history[1] and history[1].id == game.JobId) then record(game.JobId) end
+		if game.JobId == "" then return end
+		local e = history[1]
+		if not (e and e.id == game.JobId) then
+			e = record(game.JobId, game.PlaceId)
+		elseif not e.place then
+			e.place = game.PlaceId
+			save()
+		end
+		fetchName(e)
 	end
 
-	local function joinId(id, why)
+	local function joinId(id, why, place)
 		id = string.gsub(tostring(id or ""), "%s", "")
 		if not isId(id) then
 			say("Serveurs", "ID de serveur invalide (format : xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).", "Error")
@@ -14649,9 +14743,10 @@ function Library._buildHomeServers(sub)
 		if busy then return end
 		busy = true
 		task.delay(8, function() busy = false end)
-		record(id)
+		local pid = tonumber(place) or game.PlaceId
+		fetchName(record(id, pid))
 		say("Serveurs", (why or "Connexion") .. " : " .. short(id) .. "…", "Info")
-		local ok, err = pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, id, LP) end)
+		local ok, err = pcall(function() TeleportService:TeleportToPlaceInstance(pid, id, LP) end)
 		if not ok then
 			busy = false
 			say("Serveurs", "Téléportation impossible : " .. tostring(err), "Error")
@@ -14663,6 +14758,76 @@ function Library._buildHomeServers(sub)
 			say("Serveurs", "Échec : " .. tostring(msg ~= "" and msg or result), "Error")
 		end)
 	end)
+
+	-- ----- lit les journaux du client Roblox : « Joining game '<JobId>' place <PlaceId> » (serveurs où le script n'a pas tourné)
+	local function readLogs()
+		local dirs = {}
+		pcall(function()
+			if listfiles then
+				for _, u in ipairs(listfiles("C:/Users")) do dirs[#dirs + 1] = tostring(u) .. "/AppData/Local/Roblox/logs" end -- Windows
+			end
+		end)
+		pcall(function()
+			if listfiles then
+				for _, u in ipairs(listfiles("/Users")) do dirs[#dirs + 1] = tostring(u) .. "/Library/Logs/Roblox" end -- macOS
+			end
+		end)
+		local files = {}
+		for _, d in ipairs(dirs) do
+			pcall(function()
+				for _, f in ipairs(listfiles(d)) do
+					local name = string.match(tostring(f), "([^/\\]+)$") or ""
+					if string.match(name, "%.log$") and string.find(name, "Player", 1, true) then
+						files[#files + 1] = { path = tostring(f), name = name }
+					end
+				end
+			end)
+		end
+		table.sort(files, function(a, b) return a.name < b.name end) -- le nom commence par la date : ordre chronologique
+		local off = os.time() - os.time(os.date("!*t"))
+		local found, pos = {}, {}
+		for k = math.max(1, #files - 24), #files do
+			local f = files[k]
+			local ok, c = pcall(readfile, f.path)
+			if ok and type(c) == "string" then
+				local y, mo, d, h, mi, s = string.match(f.name, "_(%d%d%d%d)(%d%d)(%d%d)T(%d%d)(%d%d)(%d%d)Z")
+				local t = 0
+				if y then
+					t = os.time({ year = tonumber(y), month = tonumber(mo), day = tonumber(d), hour = tonumber(h),
+						min = tonumber(mi), sec = tonumber(s) }) + off
+				end
+				for id, place in string.gmatch(c, "Joining game '(%x+%-%x+%-%x+%-%x+%-%x+)' place (%d+)") do
+					if isId(id) then
+						if pos[id] then table.remove(found, pos[id]) end -- on garde la dernière occurrence
+						found[#found + 1] = { id = id, t = t, place = tonumber(place) }
+						pos = {}
+						for q, e in ipairs(found) do pos[e.id] = q end
+					end
+				end
+			end
+		end
+		return found, #files
+	end
+	local function scanLogs(manual)
+		task.spawn(function()
+			local found, nfiles = readLogs()
+			if #found == 0 then
+				if manual then
+					say("Serveurs", nfiles == 0
+						and "Impossible de lire les logs Roblox : ton exécuteur bloque l'accès hors de son dossier (ou aucun log trouvé)."
+						or "Aucun serveur trouvé dans les logs Roblox.", "Warning")
+				end
+				return
+			end
+			local n = merge(found, true)
+			save()
+			refresh()
+			for _, h in ipairs(history) do fetchName(h) end
+			if n > 0 or manual then
+				say("Serveurs", n .. " serveur(s) retrouvé(s) dans les logs Roblox.", n > 0 and "Success" or "Info")
+			end
+		end)
+	end
 
 	-- ----- cherche un serveur public dont le nombre de joueurs est dans la plage demandée
 	local rangeItem
@@ -14745,9 +14910,10 @@ function Library._buildHomeServers(sub)
 	for i = 1, MAX do
 		slots[i] = hb:CreateButton({ Name = "—", Favorite = false, Callback = function()
 			local h = history[i]
-			if h then joinId(h.id, "Retour sur le serveur " .. i) end
+			if h then joinId(h.id, "Retour sur le serveur " .. i, h.place) end
 		end })
 	end
+	hb:CreateButton({ Name = "Retrouver depuis les logs Roblox", Favorite = false, Callback = function() scanLogs(true) end })
 	hb:CreateButton({ Name = "Vider l'historique", Favorite = false, Confirm = true, ConfirmText = "Vider ?", Callback = function()
 		table.clear(history)
 		save()
@@ -14757,6 +14923,7 @@ function Library._buildHomeServers(sub)
 	task.defer(function()
 		Library._serverEnsureCurrent()
 		refresh()
+		if Library.ServerLogScan ~= false then scanLogs(false) end
 	end)
 	refresh()
 end
