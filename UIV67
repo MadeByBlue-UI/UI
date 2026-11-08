@@ -13,6 +13,9 @@
 		  (plus de vote sur 2 clics ni de valeurs figées), et ça marche aussi au tactile / curseur virtuel.
 		  Library:ResetPointerCalibration() remet tout à zéro. L'aperçu 3D (et ses zones de membres) ne sert PAS de mesure : sa géométrie vient de la
 		  caméra et pouvait décaler le curseur vers le haut après un clic sur le personnage.
+		• « Recalibrer le curseur » (Paramètres > Fenêtre) est maintenant un CALIBRAGE GUIDÉ : 3 clics sur une barre blanche de 12 px (Échap annule) ;
+		  le décalage mesuré est verrouillé (seul un clic qui le contredit de plus de 14 px le change). « Copier le journal du curseur » liste qui a
+		  modifié la correction et de combien (Library:GetPointerLog()). Library:CalibratePointer() lance le calibrage par script.
 		• Recherche : le panneau de résultats suit le STYLE courant (vitre translucide en Verre / Givré, fond plein en Mat), reflet clair, lignes en 2 temps
 		  (nom + chemin onglet › bloc) avec pastille d'initiale, ↑ ↓ pour parcourir, Entrée pour ouvrir, ligne d'aide avec le nombre de résultats.
 
@@ -1767,7 +1770,9 @@ Library._ptrAuto = function()
 		local gs, vs = g.AbsoluteSize, cam.ViewportSize
 		if gs.Y > 100 and vs.Y > 100 then
 			local k = vs.Y - gs.Y
-			c.k = (k > 4 and k < 100) and k or 0
+			local nk = (k > 4 and k < 100) and k or 0
+			if nk ~= c.k and Library._ptrNote then Library._ptrNote("mesure auto", c.k, nk, "écran " .. vs.Y .. " / UI " .. gs.Y) end
+			c.k = nk
 		end
 	end
 	return c.k
@@ -1789,6 +1794,14 @@ Library._ptrVotesN = { d = nil, n = 0 }   -- (ancien système de votes : gardé 
 -- (un bouton de 30 px de haut suffit à exclure un décalage de 58 px). Si le décalage actuel n'est plus dans la fourchette, on prend le
 -- premier décalage « connu » (0, inset du moteur, 58, 36 et leurs opposés) qui y est, sinon le milieu quand elle est étroite.
 -- Plus de vote sur 2 clics, plus de liste fermée de valeurs : un seul appui cohérent suffit, et ça marche aussi au doigt / au curseur virtuel.
+-- journal des changements de la correction (Paramètres > Fenêtre > « Copier le journal du curseur ») : permet de voir QUI a bougé le curseur
+Library._ptrLog = {}
+Library._ptrNote = function(src, old, new, extra)
+	local L = Library._ptrLog
+	L[#L + 1] = string.format("[%.1f] %s : %s -> %s%s", os.clock() % 10000, tostring(src), tostring(old), tostring(new),
+		extra and ("  (" .. tostring(extra) .. ")") or "")
+	if #L > 60 then table.remove(L, 1) end
+end
 Library._ptrIv = { lo = -math.huge, hi = math.huge, t = 0 }    -- souris : y_vrai = GetMouseLocation.Y - décalage
 Library._ptrIvT = { lo = -math.huge, hi = math.huge, t = 0 }   -- tactile : y_vrai = Position.Y + décalage
 Library._ptrCheck = function(obj, pos)
@@ -1831,21 +1844,30 @@ Library._ptrCheck = function(obj, pos)
 	V.lo, V.hi, V.t = nlo, nhi, now
 
 	if cur >= nlo - 0.5 and cur <= nhi + 0.5 then return end         -- le décalage actuel est compatible avec tous les appuis récents
+	-- après un calibrage guidé (Paramètres > Fenêtre > Recalibrer le curseur) : un appui ne change la valeur que s'il la contredit nettement
+	-- (marge de 14 px pour les éléments qui bougent : ressorts, glissement de page...)
+	if Library._ptrLocked and cur >= nlo - 14 and cur <= nhi + 14 then return end
 	local pick
 	for _, d in ipairs(cands) do
 		if d >= nlo and d <= nhi then pick = d break end
 	end
 	if pick == nil and (nhi - nlo) <= 16 then pick = math.floor((nlo + nhi) / 2 + 0.5) end   -- milieu seulement d'une cible très fine (±8 px)
 	if pick == nil then return end
+	local who = obj:GetFullName()
+	if #who > 70 then who = "…" .. string.sub(who, -69) end
 	if touch then
+		Library._ptrNote("appui (tactile) sur " .. who, cur, pick, "fourchette " .. math.floor(nlo) .. " à " .. math.floor(nhi))
 		Library._ptrTouchE = pick
 	else
+		Library._ptrNote("appui sur " .. who, cur, pick, "fourchette " .. math.floor(nlo) .. " à " .. math.floor(nhi))
 		Library._ptrLearned = pick
 		Library._ptrCache.t = -1
 	end
 end
 Library._ptrVote = function() end
 function Library:ResetPointerCalibration()
+	Library._ptrNote("remise à zéro", Library._ptrLearned, nil)
+	Library._ptrLocked = nil
 	Library._ptrLearned = nil
 	Library._ptrTouchE = nil
 	Library._ptrIv.lo, Library._ptrIv.hi = -math.huge, math.huge
@@ -1853,6 +1875,128 @@ function Library:ResetPointerCalibration()
 	Library._ptrVotesN.d, Library._ptrVotesN.n = nil, 0
 	Library._ptrCache.t = -1
 	Library._ptrLoad()
+end
+
+-- CALIBRAGE GUIDÉ : trois clics sur une barre blanche très fine (12 px). Le moteur ne livre le clic que si le vrai pointeur est DANS la barre,
+-- ce qui donne le décalage à ±6 px dès le 1er clic, et à ±2 px en recoupant les trois (barres à des hauteurs différentes). La valeur obtenue
+-- remplace la mesure automatique et n'est ensuite modifiée que par un appui qui la contredit nettement (Library._ptrLocked).
+-- Échap annule. Appelé par Paramètres > Fenêtre > « Recalibrer le curseur ».
+function Library:CalibratePointer()
+	if Library._calGui and Library._calGui.Parent then return end
+	local g = Instance.new("ScreenGui")
+	g.Name = "SolarisPtrCal"
+	g.ResetOnSpawn = false
+	g.DisplayOrder = 2147483646
+	g.IgnoreGuiInset = true
+	g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	mount(g)
+	Library._calGui = g
+
+	local back = Instance.new("TextButton")
+	back.Size = UDim2.fromScale(1, 1)
+	back.BackgroundColor3 = Color3.new(0, 0, 0)
+	back.BackgroundTransparency = 0.4
+	back.BorderSizePixel = 0
+	back.Text = ""
+	back.AutoButtonColor = false
+	back.Active = true
+	back.Parent = g
+	local function txt(y, size, bold)
+		local l = Instance.new("TextLabel")
+		l.AnchorPoint = Vector2.new(0.5, 0.5)
+		l.Position = UDim2.new(0.5, 0, y, 0)
+		l.Size = UDim2.new(0.9, 0, 0, size + 8)
+		l.BackgroundTransparency = 1
+		l.TextColor3 = Color3.new(1, 1, 1)
+		l.TextSize = size
+		l.Font = bold and Enum.Font.GothamBold or Enum.Font.GothamMedium
+		l.TextWrapped = true
+		l.Parent = back
+		return l
+	end
+	local title = txt(0.14, 22, true)
+	local sub = txt(0.2, 14, false)
+	title.Text = "Calibrage du curseur"
+	local STEPS = { 0.32, 0.55, 0.78 }
+	local step, lo, hi, kind = 1, -math.huge, math.huge, nil
+	local bar = Instance.new("TextButton")
+	bar.AnchorPoint = Vector2.new(0.5, 0.5)
+	bar.Size = UDim2.fromOffset(420, 12)
+	bar.BackgroundColor3 = Color3.new(1, 1, 1)
+	bar.BorderSizePixel = 0
+	bar.Text = ""
+	bar.AutoButtonColor = false
+	bar.Active = true
+	bar.ZIndex = 5
+	bar.Parent = back
+	local function place()
+		bar.Position = UDim2.new(0.5, 0, STEPS[step], 0)
+		sub.Text = "Clique au CENTRE de la barre blanche  (" .. step .. " / " .. #STEPS .. ")   ·   Échap pour annuler"
+	end
+	place()
+
+	local conns = {}
+	local function close()
+		for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+		pcall(function() g:Destroy() end)
+		if Library._calGui == g then Library._calGui = nil end
+	end
+	conns[#conns + 1] = UIS.InputBegan:Connect(function(i)
+		if i.KeyCode == Enum.KeyCode.Escape then close() end
+	end)
+	task.delay(60, function() if g.Parent then close() end end)
+
+	conns[#conns + 1] = bar.InputBegan:Connect(function(i)
+		if not isPress(i) then return end
+		local touch = i.UserInputType == Enum.UserInputType.Touch
+		local k = touch and "touch" or "mouse"
+		if kind and kind ~= k then lo, hi = -math.huge, math.huge end   -- on change de périphérique : on repart de zéro
+		kind = k
+		local ap, as = bar.AbsolutePosition, bar.AbsoluteSize
+		local bx, by
+		if touch then
+			bx, by = i.Position.X, i.Position.Y
+		else
+			local man = Library.PointerOffset
+			local M = UIS:GetMouseLocation()
+			bx, by = M.X - (man and man.X or 0), M.Y - (man and man.Y or 0)
+		end
+		if bx < ap.X - 1 or bx > ap.X + as.X + 1 then return end
+		local l, h
+		if touch then l, h = ap.Y - by - 1, ap.Y + as.Y - by + 1 else l, h = by - ap.Y - as.Y - 1, by - ap.Y + 1 end
+		local nlo, nhi = math.max(lo, l), math.min(hi, h)
+		if nlo > nhi then nlo, nhi = l, h end   -- incohérent (clic à côté ?) : on repart de ce clic
+		lo, hi = nlo, nhi
+		if step < #STEPS then
+			step += 1
+			place()
+			return
+		end
+		local d = math.floor((lo + hi) / 2 + 0.5)
+		local now = os.clock()
+		if touch then
+			Library._ptrNote("calibrage guidé (tactile)", Library._ptrTouchE, d, "fourchette " .. math.floor(lo) .. " à " .. math.floor(hi))
+			Library._ptrTouchE = d
+			Library._ptrIvT.lo, Library._ptrIvT.hi, Library._ptrIvT.t = lo, hi, now
+		else
+			Library._ptrNote("calibrage guidé", Library._ptrLearned, d, "fourchette " .. math.floor(lo) .. " à " .. math.floor(hi))
+			Library._ptrLearned = d
+			Library._ptrIv.lo, Library._ptrIv.hi, Library._ptrIv.t = lo, hi, now
+			Library._ptrCache.t = -1
+		end
+		Library._ptrLocked = true
+		close()
+		Library:Notify({ Title = "Curseur", Content = "Calibré : décalage de " .. d .. " px.", Duration = 4, Type = "Success" })
+	end)
+end
+
+-- journal des changements de la correction du curseur (texte, copiable)
+function Library:GetPointerLog()
+	local man = Library.PointerOffset
+	local head = string.format("manuel = %s · appris = %s · tactile = %s · auto = %s · verrouillé = %s",
+		tostring(man and man.Y or 0), tostring(Library._ptrLearned), tostring(Library._ptrTouchE), tostring(Library._ptrAuto()),
+		tostring(Library._ptrLocked == true))
+	return head .. "\n" .. table.concat(Library._ptrLog, "\n")
 end
 
 -- Échelle réelle de la fenêtre (UIScale + animation), pour convertir pixels écran <-> pixels UI
@@ -20006,10 +20150,18 @@ function Window:CreateSettingsTab(name, icon, docked)
 			Library.PointerOffset = Vector2.new(0, n)
 		end })
 	D:CreateButton({ Name = "Recalibrer le curseur", Favorite = false,
-		Tooltip = "Supprime l'ancienne correction mémorisée (_pointer.json) et remesure le décalage du curseur.",
+		Tooltip = "Calibrage guidé : trois clics sur une barre blanche très fine. Le décalage est mesuré à quelques pixels près puis gardé ; plus rien ne le modifie sauf un clic qui le contredit nettement.",
 		Callback = function()
 			Library:ResetPointerCalibration()
-			Library:Notify({ Title = "Curseur", Content = "Curseur remesuré.", Duration = 3, Type = "Info" })
+			Library:CalibratePointer()
+		end })
+	D:CreateButton({ Name = "Copier le journal du curseur", Favorite = false,
+		Tooltip = "Copie la liste des derniers changements de la correction du curseur (qui l'a modifiée, de combien). Utile si le curseur se décale encore.",
+		Callback = function()
+			local t = Library:GetPointerLog()
+			local ok = pcall(function() setclipboard(t) end)
+			print("[Ui-Lib] journal du curseur :\n" .. t)
+			Library:Notify({ Title = "Curseur", Content = ok and "Journal copié (et affiché dans la console)." or "Journal affiché dans la console (pas de presse-papiers).", Duration = 4, Type = "Info" })
 		end })
 	D:CreateToggle({ Name = "Verrouiller la position", Flag = "ui.lockpos", Default = Library.LockPosition == true,
 		Tooltip = "La fenêtre ne peut plus être déplacée ni redimensionnée à la souris (le double-clic pour réduire et Ctrl+R restent possibles).",
