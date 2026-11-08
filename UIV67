@@ -2811,7 +2811,7 @@ end
 --       Un bouton « Modal » invisible (méthode native Roblox) + un rappel à chaque image pour les jeux qui reverrouillent la souris.
 --
 --  2. CURSEUR DESSINÉ : en 1re personne, Roblox / le jeu cache souvent l'icône native (même déverrouillée). L'UI dessine alors le sien,
---     à Library._mouse() (voir POINTEUR). Library.CursorStyle = "auto" (1re personne seulement) | "dot" (toujours) | "native" (jamais).
+--     à Library._mouse() (voir POINTEUR). Library.CursorStyle = "native" (curseur Roblox normal) | "force" (curseur Roblox FORCÉ : réaffiché même si le jeu le cache). Les anciens "auto" / "dot" sont convertis en "native".
 --       Library:SetCursorStyle(v) · Library:SetCursorOption(nom, valeur) · Library:PreviewCursor(secondes)
 --       Options (Library.CursorDefaults) : Shape "Point" | "Flèche Roblox" | "Cercle" | "Carré" | "Croix", Size 4-64, Color, Outline (Color3),
 --       OutlineSize, Opacity 0-1, UseAccent (bool), ClickShrink (bool).
@@ -2824,6 +2824,7 @@ do
 	local PASS, SINK = Enum.ContextActionResult.Pass, Enum.ContextActionResult.Sink
 	local KEYS_ACTION, STEP = "UiLibGameKeys", "UiLibCursor"
 
+	local F = { conns = {}, saved = nil, busy = false }   -- mode « forcé » (une seule local : limite des 200 variables)
 	local owners = {}                  -- nom -> "force" | "normal"
 	local freed, keysBound = false, false
 	local savedIcon = nil              -- MouseIconEnabled avant qu'on y touche
@@ -2976,13 +2977,7 @@ do
 	local function drawnWanted()
 		if Library.Pointer.kind() == "touch" then return false end   -- pas de souris : rien à dessiner
 		if (Library._cursorPreviewUntil or 0) > os.clock() then return true end
-		local style = Library.CursorStyle or "auto"
-		if style == "native" then return false end
-		if style == "dot" then return true end
-		-- auto : en 1re personne Roblox cache l'icône native
-		if LP and LP.CameraMode == Enum.CameraMode.LockFirstPerson then return true end
-		local cam = workspace.CurrentCamera
-		return cam ~= nil and (cam.CFrame.Position - cam.Focus.Position).Magnitude < 1.5
+		return false   -- modes « auto » et « toujours dessiné » retirés : seul l'aperçu dessine un curseur
 	end
 
 	-- place / met à jour le curseur dessiné ; renvoie true s'il est affiché
@@ -3006,7 +3001,42 @@ do
 	end
 
 	-- à chaque image tant que le curseur est libéré
+	-- mode forcé : icône native réactivée, image de curseur du jeu retirée, souris libre ; rappelé à chaque image ET
+	-- immédiatement quand le jeu modifie l'une de ces propriétés
+	function F.on() return Library.CursorStyle == "force" end
+
+	function F.enforce()
+		if F.busy or not freed or not F.on() then return end
+		F.busy = true
+		pcall(function()
+			if F.saved == nil then F.saved = UIS.MouseIcon end
+			if not UIS.MouseIconEnabled then UIS.MouseIconEnabled = true end
+			if UIS.MouseIcon ~= "" then UIS.MouseIcon = "" end
+			if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then UIS.MouseBehavior = Enum.MouseBehavior.Default end
+		end)
+		F.busy = false
+	end
+
+	function F.release()
+		for _, c in ipairs(F.conns) do pcall(function() c:Disconnect() end) end
+		table.clear(F.conns)
+		if F.saved ~= nil then
+			pcall(function() UIS.MouseIcon = F.saved end)
+			F.saved = nil
+		end
+	end
+
+	function F.arm()
+		if #F.conns > 0 then return end
+		for _, prop in ipairs({ "MouseIconEnabled", "MouseIcon", "MouseBehavior" }) do
+			local ok, c = pcall(function() return UIS:GetPropertyChangedSignal(prop):Connect(F.enforce) end)
+			if ok and c then F.conns[#F.conns + 1] = c end
+		end
+		F.conns[#F.conns + 1] = RunService.Heartbeat:Connect(F.enforce)
+	end
+
 	local function frameStep(dt)
+		if F.on() then F.arm() F.enforce() elseif #F.conns > 0 then F.release() end
 		if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then UIS.MouseBehavior = Enum.MouseBehavior.Default end
 		if updateDraw(dt) then
 			if UIS.MouseIconEnabled then UIS.MouseIconEnabled = false end   -- icône native masquée : on a le nôtre
@@ -3020,7 +3050,7 @@ do
 	-- ------------------------------------------------------------------
 	local function wantFree()
 		for _, mode in pairs(owners) do
-			if mode == "force" or Library.FreeCursor ~= false then return true end
+			if mode == "force" or Library.FreeCursor ~= false or F.on() then return true end
 		end
 		return false
 	end
@@ -3040,7 +3070,7 @@ do
 		if want then
 			if savedIcon == nil then savedIcon = UIS.MouseIconEnabled end
 			pcall(function()
-				RunService:BindToRenderStep(STEP, Enum.RenderPriority.Camera.Value + 10, function(dt)
+				RunService:BindToRenderStep(STEP, Enum.RenderPriority.Last.Value, function(dt)
 					local ok, err = pcall(frameStep, dt)
 					if not ok and not warned then
 						warned = true
@@ -3050,6 +3080,7 @@ do
 			end)
 		else
 			destroyDraw()
+			F.release()
 			if savedIcon ~= nil then
 				pcall(function() UIS.MouseIconEnabled = savedIcon end)
 				savedIcon = nil
@@ -3116,8 +3147,12 @@ do
 		end
 	end
 
-	function Library:SetCursorStyle(v)   -- "auto" | "dot" | "native"
-		Library.CursorStyle = (v == "dot" or v == "native") and v or "auto"
+	function Library:SetCursorStyle(v)   -- "native" | "force"  ("auto" / "dot" anciens -> "native")
+		Library.CursorStyle = (v == "force") and "force" or "native"
+		apply()
+		if freed then
+			pcall(frameStep, 1 / 60)
+		end
 	end
 	function Library:SetCursorOption(name, value)
 		if Library.CursorDefaults[name] == nil then return false end
@@ -20141,16 +20176,16 @@ function Window:CreateSettingsTab(name, icon, docked)
 	-- ───────────── Curseur ─────────────
 	do
 		local CD = Library.CursorDefaults
-		local MODE_NAMES = { auto = "Auto (1re personne)", dot = "Toujours dessiné", native = "Curseur Roblox" }
-		local MODE_KEYS = { ["Auto (1re personne)"] = "auto", ["Toujours dessiné"] = "dot", ["Curseur Roblox"] = "native" }
+		local MODE_NAMES = { native = "Curseur Roblox", force = "Curseur Roblox forcé" }
+		local MODE_KEYS = { ["Curseur Roblox"] = "native", ["Curseur Roblox forcé"] = "force" }
 		local function co(n) return function(v) Library:SetCursorOption(n, v) end end
 
 		local CA = BK("Curseur", { Name = "Affichage", Side = "Left" })
 		CA:CreateDropdown({ Name = "Mode", Flag = "ui.cursor.mode", Search = false, Favorite = false,
-			Items = { "Auto (1re personne)", "Toujours dessiné", "Curseur Roblox" },
-			Default = MODE_NAMES[Library.CursorStyle or "auto"],
-			Tooltip = "Auto : le curseur dessiné par l'UI n'apparaît qu'en vue à la première personne (là où Roblox cache l'icône). Toujours dessiné : visible partout tant que l'interface est ouverte. Curseur Roblox : jamais de curseur dessiné. Au tactile, rien n'est dessiné.",
-			Callback = function(v) Library:SetCursorStyle(MODE_KEYS[v] or "auto") end })
+			Items = { "Curseur Roblox", "Curseur Roblox forcé" },
+			Default = MODE_NAMES[Library.CursorStyle or "native"] or MODE_NAMES.native,
+			Tooltip = "Curseur Roblox : le curseur normal de Roblox, rendu libre tant que l'interface est ouverte. Curseur Roblox forcé : en plus, le curseur est réaffiché en permanence même si le jeu le cache (icône désactivée, image transparente, souris verrouillée) ; tout est rendu au jeu à la fermeture.",
+			Callback = function(v) Library:SetCursorStyle(MODE_KEYS[v] or "native") end })
 		CA:CreateDropdown({ Name = "Forme", Flag = "ui.cursor.shape", Search = false, Favorite = false,
 			Items = { "Point", "Flèche Roblox", "Cercle", "Carré", "Croix" }, Default = Library.CursorCfg.Shape,
 			Callback = co("Shape") })
@@ -20197,7 +20232,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 
 		local CP = BK("Curseur", { Name = "Aperçu", Side = "Left" })
 		CP:CreateParagraph({ Title = "Voir le résultat",
-			Content = "Le curseur dessiné n'apparaît qu'en 1re personne en mode Auto. « Aperçu » le force pendant 6 secondes : bouge la souris dans la fenêtre pour le voir avec tes réglages." })
+			Content = "« Aperçu » dessine un curseur avec tes réglages (forme, taille, couleurs) pendant 6 secondes : bouge la souris dans la fenêtre pour le voir." })
 		CP:CreateButton({ Name = "Aperçu (6 s)", Favorite = false, Callback = function() Library:PreviewCursor(6) end })
 		CP:CreateButton({ Name = "Réinitialiser le curseur", Favorite = false, Confirm = true,
 			Tooltip = "Remet mode, forme, taille, couleurs, contour et opacité par défaut.",
@@ -20206,7 +20241,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 					local it = Library.Items[flag]
 					if it and it.Set then pcall(it.Set, it, v) end
 				end
-				set("ui.cursor.mode", MODE_NAMES.auto)
+				set("ui.cursor.mode", MODE_NAMES.native)
 				set("ui.cursor.shape", CD.Shape)
 				set("ui.cursor.size", CD.Size)
 				set("ui.cursor.opacity", math.floor(CD.Opacity * 100 + 0.5))
