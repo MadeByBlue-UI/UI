@@ -7,6 +7,16 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.14 — CURSEUR REFAIT AU PROPRE (pointeur + curseur libre + curseur dessiné + réglages)
+		• Le calcul de la position du pointeur est réécrit : une seule règle (position brute + décalage mesuré − réglage manuel), un seul état par
+		  périphérique (souris / doigt), une seule fonction de mesure (Library._ptrProbe, appelée sur les clics et les survols). Plus de doublons,
+		  plus de champs « pour compatibilité ». Le réglage manuel est appliqué APRÈS la mesure : la mesure automatique ne le combat plus.
+		• Le curseur dessiné est reconstruit : une table de formes (Point, Flèche Roblox, Cercle, Carré, Croix), position arrondie au pixel,
+		  rétrécissement au clic indépendant du FPS, rien de dessiné au tactile, erreurs d'image signalées une seule fois dans la console.
+		• Correctif : la pipette pouvait prendre la couleur du curseur dessiné (SolarisCursorDot n'était pas dans sa liste d'exclusion).
+		• Paramètres > Curseur : nouveau bloc « Position » (décalage vertical, recalibrer, journal) — ces trois réglages quittent Paramètres > Fenêtre.
+		  Nouveautés d'API : Library:SetPointerRoot(gui), Library.Pointer (état), Library._ptrProbe / _ptrHover. Retirés : _ptrCheck, _ptrVote, _ptrAuto...
+
 	V9.12 — CURSEUR (color picker / aperçu) + RECHERCHE EN VERRE
 		• Curseur : le décalage entre le pointeur et l'UI (~58 px) se calcule maintenant par INTERSECTION des fourchettes données par chaque appui
 		  (le vrai pointeur est forcément dans l'élément cliqué : un bouton de 30 px suffit à exclure un décalage de 58 px). Un seul appui cohérent suffit
@@ -1713,70 +1723,304 @@ local function guiInset()
 end
 
 -- ============================================================================
--- POINTEUR  (V9.13 — refait de zéro)
--- But : dire « où est le pointeur » dans le repère des ScreenGui de l'UI (celui de AbsolutePosition), que ce soit une souris, un curseur
--- virtuel ou un doigt. TOUT passe par une seule fonction : Library._pointerPos(p)   (p = position d'un InputObject, facultative).
---   • Souris : UIS:GetMouseLocation() (position écran brute), moins le décalage de la souris.
---   • Tactile : position du dernier appui / glissement, suivie ici même (UIS.InputBegan / InputChanged). p = nil ou (0, 0) veut dire
---     « le pointeur maintenant ». Avant, un appel avec (0, 0) renvoyait toujours le même point en haut à gauche dès qu'on touchait l'écran :
---     le personnage de l'aperçu partait vers le HAUT au doigt, la poignée du color picker était décalée de ~58 px.
---   • Le décalage entre l'écran et le ScreenGui (barre du haut de Roblox, ~58 px, ou rien) est MESURÉ, pas supposé : chaque appui / survol d'un
---     élément donne une fourchette (le vrai pointeur est forcément dedans), voir Library._ptrCheck ; calibrage guidé : Library:CalibratePointer().
---     La souris et le tactile ont chacun leur propre décalage (Library._ptrLearned / Library._ptrTouchE).
--- Réglage manuel facultatif : Library.PointerOffset = Vector2.new(0, px).   Journal : Library:GetPointerLog().
+-- POINTEUR  (V9.14 — refait au propre)
+-- Une seule question : « où est le pointeur dans le repère des ScreenGui de l'UI ? »  (celui de AbsolutePosition)
+--   Library._pointerPos(p)  -> Vector2   p = Position d'un InputObject (facultative). nil ou (0, 0) = « le pointeur maintenant ».
+--   Library._mouse()        -> Vector2   raccourci : le pointeur maintenant (curseur dessiné, pipette, étincelles, molette...).
+--
+-- Position finale  =  position brute  +  décalage mesuré  −  réglage manuel
+--   • brute    : souris = UIS:GetMouseLocation() · doigt = dernière position tactile (suivie ici, InputBegan / InputChanged).
+--   • mesuré   : l'écart entre l'écran et le ScreenGui de l'UI (barre du haut de Roblox : 0, 36 ou 58 px) n'est JAMAIS supposé.
+--                Le moteur ne livre un clic / un survol à un élément que si le vrai pointeur est DANS son rectangle : chaque événement
+--                donne donc une fourchette de décalages possibles, et on garde l'INTERSECTION des fourchettes récentes.
+--                Avant la 1re mesure : écart écran / ScreenGui racine (souris) ou inset du moteur (doigt).
+--                La souris et le doigt ont chacun leur décalage.
+--   • manuel   : Library.PointerOffset = Vector2.new(0, px)  (Paramètres > Curseur > Position). Positif = le pointeur monte.
+--                Il est appliqué APRÈS la mesure : la mesure automatique ne le combat pas.
+-- Autres : Library:CalibratePointer() (calibrage guidé, 3 clics) · Library:ResetPointerCalibration() · Library:GetPointerLog()
+--          Library:SetPointerRoot(gui) (ScreenGui de référence, appelé par CreateWindow) · Library._ptrProbe(objet, position) (mesure sur un clic)
 -- ============================================================================
 Library.PointerOffset = Library.PointerOffset or Vector2.new(0, 0)
-Library._ptrCache = { t = -1, k = 0 }
-Library._ptrTouchPos = nil      -- dernière position tactile connue (repère InputObject)
-Library._ptrLearn = 0           -- (anciens champs gardés pour compatibilité)
-Library._ptrVotes = {}
-Library._ptrLoaded = true
-Library._ptrSave = function() end
-Library._ptrSet = function() end
-Library._ptrLoad = function()   -- supprime l'ancien _pointer.json (valeur apprise, parfois fausse, qui décalait tout)
-	pcall(function()
-		local f = Library.ConfigFolder .. "/_pointer.json"
-		if isfile and delfile and isfile(f) then delfile(f) end
-	end)
-end
 
--- suivi du doigt : la dernière position tactile est toujours connue, sans que l'appelant ait à la passer
 do
+	local P = {
+		root  = nil,                    -- ScreenGui racine de l'UI (référence de mesure)
+		touch = nil,                    -- dernière position tactile connue (repère InputObject)
+		calGui = nil,                   -- fenêtre du calibrage guidé, si ouverte
+		log   = {},                     -- journal des changements du décalage (copiable)
+		gap   = { t = -1, v = 0 },      -- cache : écart écran / ScreenGui racine
+		-- état par périphérique. shift = décalage ajouté à la position brute (nil = pas encore mesuré),
+		-- lo / hi = fourchette courante, t = date de la dernière mesure, locked = calibrage guidé fait
+		dev = {
+			mouse = { shift = nil, lo = -math.huge, hi = math.huge, t = 0, locked = false },
+			touch = { shift = nil, lo = -math.huge, hi = math.huge, t = 0, locked = false },
+		},
+	}
+	Library.Pointer = P
+
+	local function note(src, old, new, extra)
+		local L = P.log
+		L[#L + 1] = string.format("[%.1f] %s : %s -> %s%s", os.clock() % 10000, tostring(src), tostring(old), tostring(new),
+			extra and ("  (" .. tostring(extra) .. ")") or "")
+		if #L > 60 then table.remove(L, 1) end
+	end
+
+	-- « souris » ou « touch » : selon le dernier périphérique utilisé
+	local function kindNow()
+		local ok, last = pcall(function() return UIS:GetLastInputType() end)
+		return (ok and last == Enum.UserInputType.Touch) and "touch" or "mouse"
+	end
+	P.kind = kindNow
+
+	-- position BRUTE (avant tout décalage). p = position d'un InputObject, facultative. nil si le doigt n'a encore rien touché.
+	local function rawFor(kind, p)
+		if kind == "touch" then
+			if p ~= nil and (p.X ~= 0 or p.Y ~= 0) then return Vector2.new(p.X, p.Y) end
+			return P.touch
+		end
+		return UIS:GetMouseLocation()
+	end
+
+	-- écart entre l'écran et le ScreenGui racine (0 si IgnoreGuiInset est bien appliqué)
+	local function measuredGap()
+		local now = os.clock()
+		if now - P.gap.t < 0.25 then return P.gap.v end
+		P.gap.t = now
+		local g, cam = P.root, workspace.CurrentCamera
+		if g and g.Parent and cam then
+			local gs, vs = g.AbsoluteSize, cam.ViewportSize
+			if gs.Y > 100 and vs.Y > 100 then
+				local k = vs.Y - gs.Y
+				P.gap.v = (k > 4 and k < 100) and k or 0
+			end
+		end
+		return P.gap.v
+	end
+
+	-- décalage utilisé : celui qui a été mesuré, sinon une valeur de départ
+	local function shiftOf(kind)
+		local s = P.dev[kind].shift
+		if s ~= nil then return s end
+		if kind == "touch" then return guiInset().Y end   -- InputObject.Position ne compte pas la barre du haut
+		return -measuredGap()
+	end
+
+	Library._pointerPos = function(p)
+		local kind = kindNow()
+		local raw = rawFor(kind, p)
+		if raw == nil then kind, raw = "mouse", UIS:GetMouseLocation() end
+		local man = Library.PointerOffset
+		return Vector2.new(raw.X - (man and man.X or 0), raw.Y + shiftOf(kind) - (man and man.Y or 0))
+	end
+	Library._mouse = function() return Library._pointerPos(nil) end
+
+	-- suivi du doigt : la dernière position tactile est toujours connue, sans que l'appelant ait à la passer
 	local function onTouch(i)
 		if i.UserInputType == Enum.UserInputType.Touch then
-			Library._ptrTouchPos = Vector2.new(i.Position.X, i.Position.Y)
+			P.touch = Vector2.new(i.Position.X, i.Position.Y)
 		end
 	end
 	track(UIS.InputBegan:Connect(onTouch))
 	track(UIS.InputChanged:Connect(onTouch))
-end
 
--- « souris » ou « touch » : selon le dernier périphérique utilisé
-Library._ptrKind = function()
-	local ok, last = pcall(function() return UIS:GetLastInputType() end)
-	return (ok and last == Enum.UserInputType.Touch) and "touch" or "mouse"
-end
--- position BRUTE du pointeur (avant correction) et son type ; p = position d'un InputObject, facultative
-Library._ptrBase = function(p)
-	if Library._ptrKind() == "touch" then
-		local b
-		if p ~= nil and (p.X ~= 0 or p.Y ~= 0) then b = Vector2.new(p.X, p.Y) else b = Library._ptrTouchPos end
-		if b then return "touch", b end
+	-- ------------------------------------------------------------------
+	-- MESURE : un clic (ou un survol) sur un élément = le vrai pointeur est dedans
+	-- ------------------------------------------------------------------
+	local function candidates(kind, ins)
+		if kind == "touch" then return { ins, 0, 58, 36, -ins, -58, -36 } end
+		return { 0, -ins, -58, -36, ins, 58, 36 }
 	end
-	return "mouse", UIS:GetMouseLocation()
-end
-Library._pointerPos = function(p)
-	local kind, b = Library._ptrBase(p)
-	if kind == "touch" then
-		local e = Library._ptrTouchE   -- décalage CONSTATÉ au doigt (voir _ptrCheck), sinon l'inset du moteur
-		if e == nil then e = guiInset().Y end
-		return Vector2.new(b.X, b.Y + e)
+
+	local function probe(obj, pos)
+		if not (typeof(obj) == "Instance" and obj:IsA("GuiObject") and obj.Parent) then return end
+		-- jamais de mesure sur l'aperçu 3D (ViewportFrame et ses zones « Hit_ » posées d'après la caméra) : géométrie approximative
+		if obj:IsA("ViewportFrame") or obj:FindFirstAncestorWhichIsA("ViewportFrame") or string.sub(obj.Name, 1, 4) == "Hit_" then return end
+		local ap, as = obj.AbsolutePosition, obj.AbsoluteSize
+		if as.X < 4 or as.Y < 4 then return end
+		local kind = kindNow()
+		local raw = rawFor(kind, pos)
+		if raw == nil then return end
+		-- pas de décalage horizontal supposé : hors de l'objet en X = mesure peu fiable (objet qui bouge...), ignorée
+		if raw.X < ap.X - 1 or raw.X > ap.X + as.X + 1 then return end
+
+		local D, now = P.dev[kind], os.clock()
+		local lo, hi = ap.Y - raw.Y - 1, ap.Y + as.Y - raw.Y + 1   -- décalages pour lesquels (brut + décalage) tombe dans l'objet
+		if now - D.t > 25 then D.lo, D.hi = -math.huge, math.huge end   -- vieilles mesures oubliées
+		local cur = shiftOf(kind)
+		local nlo, nhi = math.max(D.lo, lo), math.min(D.hi, hi)
+		if nlo > nhi then nlo, nhi = lo, hi end                           -- incohérent : on repart de cet échantillon seul
+		if cur < lo - 14 or cur > hi + 14 then nlo, nhi = lo, hi end      -- contredit nettement la valeur actuelle : historique périmé
+		D.lo, D.hi, D.t = nlo, nhi, now
+
+		if cur >= nlo - 0.5 and cur <= nhi + 0.5 then return end          -- valeur actuelle compatible avec tout ce qu'on a vu
+		-- après un calibrage guidé : on ne change que si la valeur est nettement contredite (marge de 14 px : ressorts, glissement de page...)
+		if D.locked and cur >= nlo - 14 and cur <= nhi + 14 then return end
+
+		local pick
+		for _, d in ipairs(candidates(kind, guiInset().Y)) do
+			if d >= nlo and d <= nhi then pick = d break end
+		end
+		if pick == nil and (nhi - nlo) <= 16 then pick = math.floor((nlo + nhi) / 2 + 0.5) end   -- milieu seulement d'une cible très fine
+		if pick == nil then return end
+
+		local who = obj:GetFullName()
+		if #who > 70 then who = "…" .. string.sub(who, -69) end
+		note(kind .. " sur " .. who, cur, pick, "fourchette " .. math.floor(nlo) .. " à " .. math.floor(nhi))
+		D.shift = pick
 	end
-	local c = Library._ptrCorrect and Library._ptrCorrect() or Vector2.new(0, 0)
-	return b - c
+
+	-- à appeler sur l'appui (InputBegan) d'un bouton, d'une ligne, d'un onglet, du color picker...
+	Library._ptrProbe = function(obj, pos) pcall(probe, obj, pos) end
+
+	-- à appeler sur MouseMoved d'un élément : n'est livré que si le vrai pointeur est DANS l'élément (au plus ~12 fois / s).
+	-- Si le décalage change en cours de route (menu Roblox ouvert / fermé, barre du haut...), la correction suit toute seule.
+	local hoverT = 0
+	Library._ptrHover = function(obj)
+		local now = os.clock()
+		if now - hoverT < 0.08 then return end
+		hoverT = now
+		pcall(probe, obj)
+	end
+
+	-- ScreenGui de référence (celui de la fenêtre) ; supprime au passage l'ancien _pointer.json (valeur apprise parfois fausse)
+	function Library:SetPointerRoot(gui)
+		P.root = gui
+		P.gap.t = -1
+		pcall(function()
+			local f = Library.ConfigFolder .. "/_pointer.json"
+			if isfile and delfile and isfile(f) then delfile(f) end
+		end)
+	end
+
+	function Library:ResetPointerCalibration()
+		note("remise à zéro", P.dev.mouse.shift, nil)
+		for _, D in pairs(P.dev) do
+			D.shift, D.locked, D.lo, D.hi, D.t = nil, false, -math.huge, math.huge, 0
+		end
+		P.gap.t = -1
+	end
+
+	-- journal des changements du décalage (texte, copiable)
+	function Library:GetPointerLog()
+		local man, m, t = Library.PointerOffset, P.dev.mouse, P.dev.touch
+		local head = string.format("périphérique = %s · manuel = %s · souris = %s%s · tactile = %s%s · écart écran/UI = %s",
+			kindNow(), tostring(man and man.Y or 0),
+			tostring(m.shift), m.locked and " (verrouillé)" or "",
+			tostring(t.shift), t.locked and " (verrouillé)" or "",
+			tostring(measuredGap()))
+		return head .. "\n" .. table.concat(P.log, "\n")
+	end
+
+	-- ------------------------------------------------------------------
+	-- CALIBRAGE GUIDÉ : trois clics sur une barre blanche très fine (12 px). Le moteur ne livre le clic que si le vrai pointeur est
+	-- DANS la barre : le décalage est connu à ±6 px dès le 1er clic, à ±2 px en recoupant les trois (barres à des hauteurs différentes).
+	-- La valeur obtenue remplace la mesure automatique et n'est ensuite modifiée que par un appui qui la contredit nettement.
+	-- Échap annule. Appelé par Paramètres > Curseur > Position > « Recalibrer le curseur ».
+	-- ------------------------------------------------------------------
+	local function closeCal()
+		local g = P.calGui
+		P.calGui = nil
+		if g then pcall(function() g:Destroy() end) end
+	end
+	Library._destroyPointer = closeCal
+
+	function Library:CalibratePointer()
+		if P.calGui and P.calGui.Parent then return end
+		local g = Instance.new("ScreenGui")
+		g.Name = "SolarisPtrCal"
+		g.ResetOnSpawn = false
+		g.DisplayOrder = 2147483646
+		g.IgnoreGuiInset = true
+		g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		mount(g)
+		P.calGui = g
+
+		local back = Instance.new("TextButton")
+		back.Size = UDim2.fromScale(1, 1)
+		back.BackgroundColor3 = Color3.new(0, 0, 0)
+		back.BackgroundTransparency = 0.4
+		back.BorderSizePixel = 0
+		back.Text = ""
+		back.AutoButtonColor = false
+		back.Active = true
+		back.Parent = g
+
+		local function label(y, size, bold)
+			local l = Instance.new("TextLabel")
+			l.AnchorPoint = Vector2.new(0.5, 0.5)
+			l.Position = UDim2.new(0.5, 0, y, 0)
+			l.Size = UDim2.new(0.9, 0, 0, size + 8)
+			l.BackgroundTransparency = 1
+			l.TextColor3 = Color3.new(1, 1, 1)
+			l.TextSize = size
+			l.Font = bold and Enum.Font.GothamBold or Enum.Font.GothamMedium
+			l.TextWrapped = true
+			l.Parent = back
+			return l
+		end
+		local title, sub = label(0.14, 22, true), label(0.2, 14, false)
+		title.Text = "Calibrage du curseur"
+
+		local STEPS = { 0.32, 0.55, 0.78 }
+		local step, lo, hi, lastKind = 1, -math.huge, math.huge, nil
+
+		local bar = Instance.new("TextButton")
+		bar.AnchorPoint = Vector2.new(0.5, 0.5)
+		bar.Size = UDim2.fromOffset(420, 12)
+		bar.BackgroundColor3 = Color3.new(1, 1, 1)
+		bar.BorderSizePixel = 0
+		bar.Text = ""
+		bar.AutoButtonColor = false
+		bar.Active = true
+		bar.ZIndex = 5
+		bar.Parent = back
+
+		local function place()
+			bar.Position = UDim2.new(0.5, 0, STEPS[step], 0)
+			sub.Text = "Clique au CENTRE de la barre blanche  (" .. step .. " / " .. #STEPS .. ")   ·   Échap pour annuler"
+		end
+		place()
+
+		local esc
+		esc = UIS.InputBegan:Connect(function(i)
+			if i.KeyCode == Enum.KeyCode.Escape then
+				esc:Disconnect()
+				if P.calGui == g then closeCal() end
+			end
+		end)
+		g.Destroying:Connect(function() if esc then esc:Disconnect() end end)
+		task.delay(60, function() if P.calGui == g then closeCal() end end)
+
+		bar.InputBegan:Connect(function(i)
+			if not isPress(i) then return end
+			local touch = i.UserInputType == Enum.UserInputType.Touch
+			local kind = touch and "touch" or "mouse"
+			if lastKind and lastKind ~= kind then lo, hi = -math.huge, math.huge end   -- autre périphérique : on repart de zéro
+			lastKind = kind
+
+			local raw = touch and Vector2.new(i.Position.X, i.Position.Y) or UIS:GetMouseLocation()
+			local ap, as = bar.AbsolutePosition, bar.AbsoluteSize
+			if raw.X < ap.X - 1 or raw.X > ap.X + as.X + 1 then return end
+
+			local l, h = ap.Y - raw.Y - 1, ap.Y + as.Y - raw.Y + 1
+			local nlo, nhi = math.max(lo, l), math.min(hi, h)
+			if nlo > nhi then nlo, nhi = l, h end   -- incohérent (clic à côté ?) : on repart de ce clic
+			lo, hi = nlo, nhi
+			if step < #STEPS then
+				step += 1
+				place()
+				return
+			end
+
+			local d = math.floor((lo + hi) / 2 + 0.5)
+			local D = P.dev[kind]
+			note("calibrage guidé (" .. kind .. ")", D.shift, d, "fourchette " .. math.floor(lo) .. " à " .. math.floor(hi))
+			D.shift, D.lo, D.hi, D.t, D.locked = d, lo, hi, os.clock(), true
+			closeCal()
+			Library:Notify({ Title = "Curseur", Content = "Calibré : décalage de " .. (touch and d or -d) .. " px.", Duration = 4, Type = "Success" })
+		end)
+	end
 end
--- position du pointeur dans le repère de l'UI, « maintenant » (curseur dessiné, pipette, étincelles...)
-Library._mouse = function() return Library._pointerPos(nil) end
 
 Library._lastVP = Vector2.new(1280, 720)   -- (champ de Library : pas de variable locale en plus, limite de 200 locals)
 local function viewport()
@@ -1790,245 +2034,6 @@ local function viewport()
 		Library._lastVP = v
 	end
 	return v
-end
-
--- Correction du décalage entre GetMouseLocation et le repère réel des ScreenGui de l'UI.
--- Manuel : Library.PointerOffset (Paramètres > Fenêtre). Auto : Library._ptrLearn, appris à l'appui sur le carré / la barre
--- de teinte / la barre d'opacité du color picker (voir Library._ptrCheck). Les deux s'additionnent.
-Library.PointerOffset = Library.PointerOffset or Vector2.new(0, 0)
-Library._ptrCache = { t = -1, k = 0 }
-Library._ptrAuto = function()
-	-- écart réel écran <-> ScreenGui de l'UI : normalement 0 (IgnoreGuiInset = true). Si la barre du haut est quand même
-	-- appliquée (36 / 58 px selon le menu Roblox), le ScreenGui est plus court que l'écran : la différence EST le décalage.
-	local c = Library._ptrCache
-	local now = os.clock()
-	if now - c.t < 0.25 then return c.k end
-	c.t = now
-	local g, cam = Library._ptrGui, workspace.CurrentCamera
-	if g and g.Parent and cam then
-		local gs, vs = g.AbsoluteSize, cam.ViewportSize
-		if gs.Y > 100 and vs.Y > 100 then
-			local k = vs.Y - gs.Y
-			local nk = (k > 4 and k < 100) and k or 0
-			if nk ~= c.k and Library._ptrNote then Library._ptrNote("mesure auto", c.k, nk, "écran " .. vs.Y .. " / UI " .. gs.Y) end
-			c.k = nk
-		end
-	end
-	return c.k
-end
-Library._ptrCorrect = function()
-	local man = Library.PointerOffset   -- réglage manuel facultatif (Paramètres > Fenêtre)
-	-- Library._ptrLearned : décalage CONSTATÉ par un vrai clic (voir _ptrCheck) ; sinon la mesure de _ptrAuto
-	return Vector2.new(man and man.X or 0, (man and man.Y or 0) + (Library._ptrLearned ~= nil and Library._ptrLearned or Library._ptrAuto()))
-end
-
--- MESURE DU DÉCALAGE. À chaque appui (et pendant le survol) sur un élément, le VRAI pointeur est forcément dans son rectangle : le moteur ne
--- livre l'événement que dans ce cas. Chaque événement donne donc une fourchette [lo, hi] de décalages possibles ; on garde l'INTERSECTION des
--- fourchettes récentes (un bouton de 30 px suffit à exclure un décalage de 58 px). Si le décalage actuel n'y est plus, on prend le premier
--- décalage « connu » (0, inset du moteur, 58, 36 et leurs opposés) qui y est, sinon le milieu d'une fourchette très étroite (≤ 16 px).
--- Souris et tactile ont leurs propres fourchettes. Appelé par les lignes, boutons, onglets et le color picker (jamais par l'aperçu 3D).
--- journal : Paramètres > Fenêtre > « Copier le journal du curseur » (qui a changé la correction, de combien)
-Library._ptrLog = {}
-Library._ptrNote = function(src, old, new, extra)
-	local L = Library._ptrLog
-	L[#L + 1] = string.format("[%.1f] %s : %s -> %s%s", os.clock() % 10000, tostring(src), tostring(old), tostring(new),
-		extra and ("  (" .. tostring(extra) .. ")") or "")
-	if #L > 60 then table.remove(L, 1) end
-end
-Library._ptrVotesN = { d = nil, n = 0 }   -- (ancien système de votes : gardé pour compatibilité, plus utilisé)
-Library._ptrIv = { lo = -math.huge, hi = math.huge, t = 0 }    -- souris : y_vrai = position brute - décalage
-Library._ptrIvT = { lo = -math.huge, hi = math.huge, t = 0 }   -- tactile : y_vrai = position brute + décalage
-Library._ptrCheck = function(obj, pos)
-	if not (typeof(obj) == "Instance" and obj:IsA("GuiObject") and obj.Parent) then return end
-	-- jamais de mesure sur l'aperçu 3D (ViewportFrame et ses zones « Hit_ » posées d'après la caméra) : leur géométrie est approximative
-	if obj:IsA("ViewportFrame") or obj:FindFirstAncestorWhichIsA("ViewportFrame") or string.sub(obj.Name, 1, 4) == "Hit_" then return end
-	local ap, as = obj.AbsolutePosition, obj.AbsoluteSize
-	if as.X < 4 or as.Y < 4 then return end
-	local kind, base = Library._ptrBase(pos)
-	local touch = kind == "touch"
-	local now = os.clock()
-	local ins = guiInset().Y
-
-	local V, bx, by, cur, cands
-	if touch then
-		V, bx, by = Library._ptrIvT, base.X, base.Y
-		cur = Library._ptrTouchE
-		if cur == nil then cur = ins end
-		cands = { ins, 0, 58, 36, -ins, -58, -36 }
-	else
-		local man = Library.PointerOffset
-		V, bx, by = Library._ptrIv, base.X - (man and man.X or 0), base.Y - (man and man.Y or 0)
-		cur = Library._ptrLearned ~= nil and Library._ptrLearned or Library._ptrAuto()
-		cands = { 0, ins, 58, 36, -ins, -58, -36 }
-	end
-	-- pas de décalage horizontal supposé : un événement hors de l'objet en X = mesure peu fiable (objet qui bouge...), on l'ignore
-	if bx < ap.X - 1 or bx > ap.X + as.X + 1 then return end
-
-	local lo, hi
-	if touch then
-		lo, hi = ap.Y - by - 1, ap.Y + as.Y - by + 1
-	else
-		lo, hi = by - ap.Y - as.Y - 1, by - ap.Y + 1
-	end
-	if now - V.t > 25 then V.lo, V.hi = -math.huge, math.huge end   -- vieilles mesures oubliées
-	local nlo, nhi = math.max(V.lo, lo), math.min(V.hi, hi)
-	if nlo > nhi then nlo, nhi = lo, hi end                           -- incohérent : on repart de cet échantillon seul
-	if cur < lo - 14 or cur > hi + 14 then nlo, nhi = lo, hi end      -- cet échantillon contredit nettement la valeur actuelle : historique périmé
-	V.lo, V.hi, V.t = nlo, nhi, now
-
-	if cur >= nlo - 0.5 and cur <= nhi + 0.5 then return end         -- la valeur actuelle est compatible avec tout ce qu'on a vu
-	-- après un calibrage guidé : on ne change que si la valeur est nettement contredite (marge de 14 px : ressorts, glissement de page...)
-	if Library._ptrLocked and cur >= nlo - 14 and cur <= nhi + 14 then return end
-	local pick
-	for _, d in ipairs(cands) do
-		if d >= nlo and d <= nhi then pick = d break end
-	end
-	if pick == nil and (nhi - nlo) <= 16 then pick = math.floor((nlo + nhi) / 2 + 0.5) end   -- milieu seulement d'une cible très fine (±8 px)
-	if pick == nil then return end
-	local who = obj:GetFullName()
-	if #who > 70 then who = "…" .. string.sub(who, -69) end
-	if touch then
-		Library._ptrNote("tactile sur " .. who, cur, pick, "fourchette " .. math.floor(nlo) .. " à " .. math.floor(nhi))
-		Library._ptrTouchE = pick
-	else
-		Library._ptrNote("souris sur " .. who, cur, pick, "fourchette " .. math.floor(nlo) .. " à " .. math.floor(nhi))
-		Library._ptrLearned = pick
-		Library._ptrCache.t = -1
-	end
-end
-Library._ptrVote = function(obj, pos) pcall(Library._ptrCheck, obj, pos) end   -- onglets du menu, etc.
-function Library:ResetPointerCalibration()
-	Library._ptrNote("remise à zéro", Library._ptrLearned, nil)
-	Library._ptrLocked = nil
-	Library._ptrLearned = nil
-	Library._ptrTouchE = nil
-	Library._ptrIv.lo, Library._ptrIv.hi = -math.huge, math.huge
-	Library._ptrIvT.lo, Library._ptrIvT.hi = -math.huge, math.huge
-	Library._ptrVotesN.d, Library._ptrVotesN.n = nil, 0
-	Library._ptrCache.t = -1
-	Library._ptrLoad()
-end
-
--- CALIBRAGE GUIDÉ : trois clics sur une barre blanche très fine (12 px). Le moteur ne livre le clic que si le vrai pointeur est DANS la barre,
--- ce qui donne le décalage à ±6 px dès le 1er clic, et à ±2 px en recoupant les trois (barres à des hauteurs différentes). La valeur obtenue
--- remplace la mesure automatique et n'est ensuite modifiée que par un appui qui la contredit nettement (Library._ptrLocked).
--- Échap annule. Appelé par Paramètres > Fenêtre > « Recalibrer le curseur ».
-function Library:CalibratePointer()
-	if Library._calGui and Library._calGui.Parent then return end
-	local g = Instance.new("ScreenGui")
-	g.Name = "SolarisPtrCal"
-	g.ResetOnSpawn = false
-	g.DisplayOrder = 2147483646
-	g.IgnoreGuiInset = true
-	g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-	mount(g)
-	Library._calGui = g
-
-	local back = Instance.new("TextButton")
-	back.Size = UDim2.fromScale(1, 1)
-	back.BackgroundColor3 = Color3.new(0, 0, 0)
-	back.BackgroundTransparency = 0.4
-	back.BorderSizePixel = 0
-	back.Text = ""
-	back.AutoButtonColor = false
-	back.Active = true
-	back.Parent = g
-	local function txt(y, size, bold)
-		local l = Instance.new("TextLabel")
-		l.AnchorPoint = Vector2.new(0.5, 0.5)
-		l.Position = UDim2.new(0.5, 0, y, 0)
-		l.Size = UDim2.new(0.9, 0, 0, size + 8)
-		l.BackgroundTransparency = 1
-		l.TextColor3 = Color3.new(1, 1, 1)
-		l.TextSize = size
-		l.Font = bold and Enum.Font.GothamBold or Enum.Font.GothamMedium
-		l.TextWrapped = true
-		l.Parent = back
-		return l
-	end
-	local title = txt(0.14, 22, true)
-	local sub = txt(0.2, 14, false)
-	title.Text = "Calibrage du curseur"
-	local STEPS = { 0.32, 0.55, 0.78 }
-	local step, lo, hi, kind = 1, -math.huge, math.huge, nil
-	local bar = Instance.new("TextButton")
-	bar.AnchorPoint = Vector2.new(0.5, 0.5)
-	bar.Size = UDim2.fromOffset(420, 12)
-	bar.BackgroundColor3 = Color3.new(1, 1, 1)
-	bar.BorderSizePixel = 0
-	bar.Text = ""
-	bar.AutoButtonColor = false
-	bar.Active = true
-	bar.ZIndex = 5
-	bar.Parent = back
-	local function place()
-		bar.Position = UDim2.new(0.5, 0, STEPS[step], 0)
-		sub.Text = "Clique au CENTRE de la barre blanche  (" .. step .. " / " .. #STEPS .. ")   ·   Échap pour annuler"
-	end
-	place()
-
-	local conns = {}
-	local function close()
-		for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
-		pcall(function() g:Destroy() end)
-		if Library._calGui == g then Library._calGui = nil end
-	end
-	conns[#conns + 1] = UIS.InputBegan:Connect(function(i)
-		if i.KeyCode == Enum.KeyCode.Escape then close() end
-	end)
-	task.delay(60, function() if g.Parent then close() end end)
-
-	conns[#conns + 1] = bar.InputBegan:Connect(function(i)
-		if not isPress(i) then return end
-		local touch = i.UserInputType == Enum.UserInputType.Touch
-		local k = touch and "touch" or "mouse"
-		if kind and kind ~= k then lo, hi = -math.huge, math.huge end   -- on change de périphérique : on repart de zéro
-		kind = k
-		local ap, as = bar.AbsolutePosition, bar.AbsoluteSize
-		local bx, by
-		if touch then
-			bx, by = i.Position.X, i.Position.Y
-		else
-			local man = Library.PointerOffset
-			local M = UIS:GetMouseLocation()
-			bx, by = M.X - (man and man.X or 0), M.Y - (man and man.Y or 0)
-		end
-		if bx < ap.X - 1 or bx > ap.X + as.X + 1 then return end
-		local l, h
-		if touch then l, h = ap.Y - by - 1, ap.Y + as.Y - by + 1 else l, h = by - ap.Y - as.Y - 1, by - ap.Y + 1 end
-		local nlo, nhi = math.max(lo, l), math.min(hi, h)
-		if nlo > nhi then nlo, nhi = l, h end   -- incohérent (clic à côté ?) : on repart de ce clic
-		lo, hi = nlo, nhi
-		if step < #STEPS then
-			step += 1
-			place()
-			return
-		end
-		local d = math.floor((lo + hi) / 2 + 0.5)
-		local now = os.clock()
-		if touch then
-			Library._ptrNote("calibrage guidé (tactile)", Library._ptrTouchE, d, "fourchette " .. math.floor(lo) .. " à " .. math.floor(hi))
-			Library._ptrTouchE = d
-			Library._ptrIvT.lo, Library._ptrIvT.hi, Library._ptrIvT.t = lo, hi, now
-		else
-			Library._ptrNote("calibrage guidé", Library._ptrLearned, d, "fourchette " .. math.floor(lo) .. " à " .. math.floor(hi))
-			Library._ptrLearned = d
-			Library._ptrIv.lo, Library._ptrIv.hi, Library._ptrIv.t = lo, hi, now
-			Library._ptrCache.t = -1
-		end
-		Library._ptrLocked = true
-		close()
-		Library:Notify({ Title = "Curseur", Content = "Calibré : décalage de " .. d .. " px.", Duration = 4, Type = "Success" })
-	end)
-end
-
--- journal des changements de la correction du curseur (texte, copiable)
-function Library:GetPointerLog()
-	local man = Library.PointerOffset
-	local head = string.format("périphérique = %s · manuel = %s · appris (souris) = %s · tactile = %s · auto = %s · verrouillé = %s",
-		Library._ptrKind(), tostring(man and man.Y or 0), tostring(Library._ptrLearned), tostring(Library._ptrTouchE), tostring(Library._ptrAuto()),
-		tostring(Library._ptrLocked == true))
-	return head .. "\n" .. table.concat(Library._ptrLog, "\n")
 end
 
 -- Échelle réelle de la fenêtre (UIScale + animation), pour convertir pixels écran <-> pixels UI
@@ -2690,19 +2695,12 @@ end
 -- Effet de survol fluide sur une ligne
 local function hover(f, st, hit)
 	hit = hit or f
-	hit.InputBegan:Connect(function(i)   -- un vrai clic sur cet élément : sert à vérifier / corriger le décalage du curseur
+	hit.InputBegan:Connect(function(i)   -- un vrai clic sur cet élément : sert à vérifier le décalage du pointeur
 		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-			pcall(Library._ptrCheck, hit, i.Position)
+			Library._ptrProbe(hit, i.Position)
 		end
 	end)
-	-- mesure continue du décalage du curseur : MouseMoved n'est livré que si le vrai pointeur est DANS l'élément (au plus ~12 fois / s).
-	-- Si le décalage change en cours de route (menu Roblox ouvert / fermé, barre du haut...), la correction suit sans rien recalibrer.
-	hit.MouseMoved:Connect(function()
-		local now = os.clock()
-		if now - (Library._ptrHoverT or 0) < 0.08 then return end
-		Library._ptrHoverT = now
-		pcall(Library._ptrCheck, hit)
-	end)
+	hit.MouseMoved:Connect(function() Library._ptrHover(hit) end)   -- idem au survol (limité à ~12 fois / s)
 	hit.MouseEnter:Connect(function()
 		uiSnd("hover")
 		tween(f, { BackgroundTransparency = Sty.RowHot }, 0.2)
@@ -2801,26 +2799,41 @@ function Library:SetBlur(n)
 end
 
 -- ============================================================================
--- CURSEUR LIBRE + BLOCAGE DES TOUCHES DU JEU  (mécanisme PARTAGÉ)
---   Utilisé par la fenêtre, la Palette (Ctrl+K), la barre de recherche (Ctrl+T) et la pipette du color picker.
---   Library:AcquireCursor("nom", forcer)  : demande le curseur libre. forcer = true -> libre même si « Libérer le curseur »
---                                           est désactivé (palette, recherche, pipette ont besoin du curseur).
---   Library:ReleaseCursor("nom")          : rend le curseur au jeu quand plus personne ne le demande.
---   Library:SetFreeCursor(bool)           : réglage « Libérer le curseur » (concerne la fenêtre).
---   Library:SetBlockGameKeys(bool)        : réglage « Bloquer les touches du jeu » (Library.BlockedKeys = liste de KeyCode).
---   Library:IsCursorFree()
---   Un bouton « Modal » invisible (méthode native Roblox) + un rappel à chaque frame pour les jeux qui reverrouillent la souris.
---   (bloc isolé dans un do ... end : la librairie est proche de la limite de 200 variables locales)
+-- CURSEUR  (V9.14 — refait au propre)      Deux choses indépendantes, dans un seul bloc :
+--
+--  1. CURSEUR LIBRE + BLOCAGE DES TOUCHES DU JEU  (mécanisme PARTAGÉ : fenêtre, Palette Ctrl+K, recherche Ctrl+T, pipette du color picker)
+--       Library:AcquireCursor("nom", forcer)  demande le curseur libre. forcer = true -> libre même si « Libérer le curseur » est
+--                                             désactivé (palette, recherche, pipette ont besoin du curseur).
+--       Library:ReleaseCursor("nom")          le rend au jeu quand plus personne ne le demande.
+--       Library:SetFreeCursor(bool)           réglage « Libérer le curseur » (concerne la fenêtre).
+--       Library:IsCursorFree()
+--       Library:SetBlockGameKeys(bool)        réglage « Bloquer les touches du jeu » (Library:SetBlockedKeys({ Enum.KeyCode... })).
+--       Un bouton « Modal » invisible (méthode native Roblox) + un rappel à chaque image pour les jeux qui reverrouillent la souris.
+--
+--  2. CURSEUR DESSINÉ : en 1re personne, Roblox / le jeu cache souvent l'icône native (même déverrouillée). L'UI dessine alors le sien,
+--     à Library._mouse() (voir POINTEUR). Library.CursorStyle = "auto" (1re personne seulement) | "dot" (toujours) | "native" (jamais).
+--       Library:SetCursorStyle(v) · Library:SetCursorOption(nom, valeur) · Library:PreviewCursor(secondes)
+--       Options (Library.CursorDefaults) : Shape "Point" | "Flèche Roblox" | "Cercle" | "Carré" | "Croix", Size 4-64, Color, Outline (Color3),
+--       OutlineSize, Opacity 0-1, UseAccent (bool), ClickShrink (bool).
+--       Au tactile (pas de souris) rien n'est dessiné. Library.RobloxCursorHotspot (0-1) règle la pointe de la « Flèche Roblox ».
+--
+--  (bloc isolé dans un do ... end : la librairie est proche de la limite de 200 variables locales)
 -- ============================================================================
 do
 	local CAS = game:GetService("ContextActionService")
 	local PASS, SINK = Enum.ContextActionResult.Pass, Enum.ContextActionResult.Sink
-	local KEY_ACTION, STEP_NAME = "UiLibGameKeys", "UiLibCursor"
-	local owners, gui, btn, savedIcon = {}, nil, nil, nil
-	local freed, keysBound = false, false
-	local dotGui, dot, dotScale, dotCol = nil, nil, nil, nil
+	local KEYS_ACTION, STEP = "UiLibGameKeys", "UiLibCursor"
 
-	-- Réglages du curseur dessiné (sous-onglet Réglages > Curseur). Library:SetCursorOption(nom, valeur)
+	local owners = {}                  -- nom -> "force" | "normal"
+	local freed, keysBound = false, false
+	local savedIcon = nil              -- MouseIconEnabled avant qu'on y touche
+	local sink, sinkBtn = nil, nil     -- ScreenGui « SolarisCursor » + bouton Modal
+	local draw = nil                   -- curseur dessiné : { gui, root, scale, col }
+	local warned = false
+
+	-- ------------------------------------------------------------------
+	-- Réglages
+	-- ------------------------------------------------------------------
 	Library.CursorDefaults = { Shape = "Point", Size = 12, Color = Color3.new(1, 1, 1), Outline = Color3.new(0, 0, 0),
 		OutlineSize = 1.5, Opacity = 1, UseAccent = false, ClickShrink = true }
 	if type(Library.CursorCfg) ~= "table" then
@@ -2828,220 +2841,254 @@ do
 		for k, v in pairs(Library.CursorDefaults) do Library.CursorCfg[k] = v end
 	end
 
-	-- Curseur dessiné par l'UI : en 1re personne, Roblox / le jeu cache souvent le curseur natif
-	-- (même déverrouillé). Library.CursorStyle = "auto" (seulement en 1re personne) | "dot" (toujours) | "native".
-	local function useDot()
+	local function colorNow()
+		local c = Library.CursorCfg
+		return c.UseAccent and T.Accent or c.Color
+	end
+
+	-- ------------------------------------------------------------------
+	-- Formes : chaque forme se construit dans `root` (Frame centré sur la souris, de côté Size)
+	--   k = { S = taille, col = couleur, tr = transparence, ot = épaisseur du contour, ocol = couleur du contour,
+	--         outline = { color, thick, tr } }
+	-- ------------------------------------------------------------------
+	local function part(parent, o)
+		local f = Instance.new("Frame")
+		f.AnchorPoint = o.anchor or Vector2.new(0.5, 0.5)
+		f.Position = o.pos or UDim2.fromScale(0.5, 0.5)
+		f.Size = o.size
+		f.BackgroundColor3 = o.color or Color3.new(1, 1, 1)
+		f.BackgroundTransparency = o.bgTr or 1
+		f.BorderSizePixel = 0
+		f.Active = false
+		f.ZIndex = o.z or 2
+		if o.round then
+			local uc = Instance.new("UICorner")
+			uc.CornerRadius = UDim.new(1, 0)
+			uc.Parent = f
+		end
+		if o.stroke and o.stroke.thick > 0 then
+			local st = Instance.new("UIStroke")
+			st.Color = o.stroke.color
+			st.Thickness = o.stroke.thick
+			st.Transparency = o.stroke.tr
+			st.Parent = f
+		end
+		f.Parent = parent
+		return f
+	end
+
+	local SHAPES = {}
+
+	SHAPES["Point"] = function(root, k)
+		part(root, { size = UDim2.fromOffset(k.S, k.S), color = k.col, bgTr = k.tr, round = true, stroke = k.outline })
+	end
+
+	SHAPES["Carré"] = function(root, k)
+		part(root, { size = UDim2.fromOffset(k.S, k.S), color = k.col, bgTr = k.tr, stroke = k.outline })
+	end
+
+	-- anneau : trait coloré + liseré du contour de chaque côté
+	SHAPES["Cercle"] = function(root, k)
+		local t = math.max(2, math.floor(k.S / 6 + 0.5))
+		if k.ot > 0 then
+			local d = math.max(k.S - k.ot * 2, 2)
+			part(root, { size = UDim2.fromOffset(d, d), round = true, z = 1, stroke = { color = k.ocol, thick = t + k.ot * 2, tr = k.tr } })
+		end
+		part(root, { size = UDim2.fromOffset(k.S, k.S), round = true, stroke = { color = k.col, thick = t, tr = k.tr } })
+	end
+
+	-- quatre branches avec un trou au centre
+	SHAPES["Croix"] = function(root, k)
+		local gap = math.max(2, math.floor(k.S * 0.12 + 0.5))
+		local L = math.max(k.S / 2 - gap, 2)
+		local th = math.max(2, math.floor(k.S / 6 + 0.5))
+		local function arm(size, pos, anchor)
+			part(root, { size = size, pos = pos, anchor = anchor, color = k.col, bgTr = k.tr, stroke = k.outline })
+		end
+		arm(UDim2.fromOffset(th, L), UDim2.new(0.5, 0, 0.5, -gap), Vector2.new(0.5, 1))
+		arm(UDim2.fromOffset(th, L), UDim2.new(0.5, 0, 0.5, gap), Vector2.new(0.5, 0))
+		arm(UDim2.fromOffset(L, th), UDim2.new(0.5, -gap, 0.5, 0), Vector2.new(1, 0.5))
+		arm(UDim2.fromOffset(L, th), UDim2.new(0.5, gap, 0.5, 0), Vector2.new(0, 0.5))
+	end
+
+	-- vraie flèche du curseur Roblox (image native). La pointe (« point chaud ») est posée sous la souris ;
+	-- Library.RobloxCursorHotspot (0-1) à ajuster si elle n'est pas pile sur le clic.
+	SHAPES["Flèche Roblox"] = function(root, k)
+		local img = Instance.new("ImageLabel")
+		img.Name = "RobloxArrow"
+		img.AnchorPoint = Library.RobloxCursorHotspot or Vector2.new(0.3, 0.3)
+		img.Position = UDim2.fromScale(0.5, 0.5)
+		img.Size = UDim2.fromOffset(k.S * 3, k.S * 3)
+		img.BackgroundTransparency = 1
+		img.BorderSizePixel = 0
+		img.Active = false
+		img.Image = "rbxasset://textures/Cursors/KeyboardMouse/ArrowFarCursor.png"
+		img.ImageTransparency = k.tr
+		img.ZIndex = 2
+		img.Parent = root
+	end
+
+	-- ------------------------------------------------------------------
+	-- Curseur dessiné : construction, destruction, mise à jour à chaque image
+	-- ------------------------------------------------------------------
+	local function destroyDraw()
+		if draw and draw.gui then pcall(function() draw.gui:Destroy() end) end
+		draw = nil
+	end
+
+	local function build()
+		local c = Library.CursorCfg
+		local k = {
+			S = math.clamp(tonumber(c.Size) or 12, 4, 64),
+			col = colorNow(),
+			tr = 1 - math.clamp(tonumber(c.Opacity) or 1, 0, 1),
+			ot = math.max(tonumber(c.OutlineSize) or 0, 0),
+			ocol = c.Outline or Color3.new(0, 0, 0),
+		}
+		k.outline = { color = k.ocol, thick = k.ot, tr = k.tr }
+
+		local g = Instance.new("ScreenGui")
+		g.Name = "SolarisCursorDot"
+		g.ResetOnSpawn = false
+		g.DisplayOrder = 2147483647
+		g.IgnoreGuiInset = true
+		g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		mount(g)
+
+		local root = Instance.new("Frame")
+		root.Name = "Cursor"
+		root.AnchorPoint = Vector2.new(0.5, 0.5)
+		root.Size = UDim2.fromOffset(k.S, k.S)
+		root.BackgroundTransparency = 1
+		root.BorderSizePixel = 0
+		root.Active = false
+		root.Parent = g
+
+		local scale = Instance.new("UIScale")
+		scale.Parent = root
+
+		local make = SHAPES[c.Shape] or SHAPES["Point"]
+		make(root, k)
+		return { gui = g, root = root, scale = scale, col = k.col }
+	end
+
+	-- faut-il dessiner le curseur maintenant ?
+	local function drawnWanted()
+		if Library.Pointer.kind() == "touch" then return false end   -- pas de souris : rien à dessiner
 		if (Library._cursorPreviewUntil or 0) > os.clock() then return true end
 		local style = Library.CursorStyle or "auto"
 		if style == "native" then return false end
 		if style == "dot" then return true end
+		-- auto : en 1re personne Roblox cache l'icône native
 		if LP and LP.CameraMode == Enum.CameraMode.LockFirstPerson then return true end
 		local cam = workspace.CurrentCamera
 		return cam ~= nil and (cam.CFrame.Position - cam.Focus.Position).Magnitude < 1.5
 	end
 
-	local function destroyDot()
-		if dotGui then pcall(function() dotGui:Destroy() end) end
-		dotGui, dot, dotScale, dotCol = nil, nil, nil, nil
+	-- place / met à jour le curseur dessiné ; renvoie true s'il est affiché
+	local function updateDraw(dt)
+		if not drawnWanted() then
+			if draw then draw.root.Visible = false end
+			return false
+		end
+		if not (draw and draw.gui.Parent) or draw.col ~= colorNow() then   -- absent, détruit, ou couleur d'accent changée
+			destroyDraw()
+			draw = build()
+		end
+		local m = Library._mouse()
+		draw.root.Position = UDim2.fromOffset(math.floor(m.X + 0.5), math.floor(m.Y + 0.5))   -- pixels entiers : formes nettes
+		draw.root.Visible = true
+		local down = Library.CursorCfg.ClickShrink and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+		local goal = down and 0.7 or 1
+		local s = draw.scale.Scale
+		draw.scale.Scale = s + (goal - s) * (1 - math.exp(-(dt or 1 / 60) * 24))   -- rétrécit / revient, indépendant du FPS
+		return true
 	end
 
-	local function curColor()
-		local c = Library.CursorCfg
-		return c.UseAccent and T.Accent or c.Color
-	end
-
-	local function ensureDot()
-		local col = curColor()
-		if dot and dot.Parent and dotCol == col then return end
-		destroyDot()
-		dotCol = col
-		local c = Library.CursorCfg
-		local S = math.clamp(tonumber(c.Size) or 12, 4, 64)
-		local tr = 1 - math.clamp(tonumber(c.Opacity) or 1, 0, 1)
-		local ot = math.max(tonumber(c.OutlineSize) or 0, 0)
-		local ocol = c.Outline or Color3.new(0, 0, 0)
-		dotGui = Instance.new("ScreenGui")
-		dotGui.Name = "SolarisCursorDot"
-		dotGui.ResetOnSpawn = false
-		dotGui.DisplayOrder = 2147483647
-		dotGui.IgnoreGuiInset = true
-		dotGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-		mount(dotGui)
-		dot = Instance.new("Frame")
-		dot.Name = "Cursor"
-		dot.AnchorPoint = Vector2.new(0.5, 0.5)
-		dot.Size = UDim2.fromOffset(S, S)
-		dot.BackgroundTransparency = 1
-		dot.BorderSizePixel = 0
-		dot.Active = false
-		dot.Parent = dotGui
-		dotScale = Instance.new("UIScale")
-		dotScale.Parent = dot
-
-		local function strokeOn(f, thick, color)
-			if thick <= 0 then return end
-			local st = Instance.new("UIStroke")
-			st.Color = color
-			st.Thickness = thick
-			st.Transparency = tr
-			st.Parent = f
-		end
-		-- forme pleine (avec contour extérieur)
-		local function solid(size, pos, anchor, round, z)
-			local f = Instance.new("Frame")
-			f.AnchorPoint = anchor or Vector2.new(0.5, 0.5)
-			f.Position = pos or UDim2.fromScale(0.5, 0.5)
-			f.Size = size
-			f.BackgroundColor3 = col
-			f.BackgroundTransparency = tr
-			f.BorderSizePixel = 0
-			f.Active = false
-			f.ZIndex = z or 2
-			if round then
-				local uc = Instance.new("UICorner")
-				uc.CornerRadius = UDim.new(1, 0)
-				uc.Parent = f
-			end
-			strokeOn(f, ot, ocol)
-			f.Parent = dot
-			return f
-		end
-
-		local shape = c.Shape
-		if shape == "Cercle" then
-			-- anneau : trait coloré + liseré du contour de chaque côté
-			local t = math.max(2, math.floor(S / 6 + 0.5))
-			if ot > 0 then
-				local back = Instance.new("Frame")
-				back.AnchorPoint = Vector2.new(0.5, 0.5)
-				back.Position = UDim2.fromScale(0.5, 0.5)
-				back.Size = UDim2.fromOffset(math.max(S - ot * 2, 2), math.max(S - ot * 2, 2))
-				back.BackgroundTransparency = 1
-				back.BorderSizePixel = 0
-				back.Active = false
-				back.ZIndex = 1
-				local uc = Instance.new("UICorner")
-				uc.CornerRadius = UDim.new(1, 0)
-				uc.Parent = back
-				strokeOn(back, t + ot * 2, ocol)
-				back.Parent = dot
-			end
-			local ring = Instance.new("Frame")
-			ring.AnchorPoint = Vector2.new(0.5, 0.5)
-			ring.Position = UDim2.fromScale(0.5, 0.5)
-			ring.Size = UDim2.fromOffset(S, S)
-			ring.BackgroundTransparency = 1
-			ring.BorderSizePixel = 0
-			ring.Active = false
-			ring.ZIndex = 2
-			local uc = Instance.new("UICorner")
-			uc.CornerRadius = UDim.new(1, 0)
-			uc.Parent = ring
-			strokeOn(ring, t, col)
-			ring.Parent = dot
-		elseif shape == "Croix" then
-			local gap = math.max(2, math.floor(S * 0.12 + 0.5))
-			local L = math.max(S / 2 - gap, 2)
-			local th = math.max(2, math.floor(S / 6 + 0.5))
-			solid(UDim2.fromOffset(th, L), UDim2.new(0.5, 0, 0.5, -gap), Vector2.new(0.5, 1))
-			solid(UDim2.fromOffset(th, L), UDim2.new(0.5, 0, 0.5, gap), Vector2.new(0.5, 0))
-			solid(UDim2.fromOffset(L, th), UDim2.new(0.5, -gap, 0.5, 0), Vector2.new(1, 0.5))
-			solid(UDim2.fromOffset(L, th), UDim2.new(0.5, gap, 0.5, 0), Vector2.new(0, 0.5))
-		elseif shape == "Flèche Roblox" then
-			-- vraie flèche du curseur Roblox (image native). Le point chaud est placé sous la souris ;
-			-- ajuste Library.RobloxCursorHotspot (0-1) si la pointe n'est pas pile sur le clic.
-			local hs = Library.RobloxCursorHotspot or Vector2.new(0.3, 0.3)
-			local img = Instance.new("ImageLabel")
-			img.Name = "RobloxArrow"
-			img.AnchorPoint = hs
-			img.Position = UDim2.fromScale(0.5, 0.5)
-			img.Size = UDim2.fromOffset(S * 3, S * 3)
-			img.BackgroundTransparency = 1
-			img.BorderSizePixel = 0
-			img.Active = false
-			img.Image = "rbxasset://textures/Cursors/KeyboardMouse/ArrowFarCursor.png"
-			img.ImageTransparency = tr
-			img.ZIndex = 2
-			img.Parent = dot
-		elseif shape == "Carré" then
-			solid(UDim2.fromOffset(S, S), nil, nil, false)
-		else   -- "Point"
-			solid(UDim2.fromOffset(S, S), nil, nil, true)
+	-- à chaque image tant que le curseur est libéré
+	local function frameStep(dt)
+		if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then UIS.MouseBehavior = Enum.MouseBehavior.Default end
+		if updateDraw(dt) then
+			if UIS.MouseIconEnabled then UIS.MouseIconEnabled = false end   -- icône native masquée : on a le nôtre
+		else
+			if not UIS.MouseIconEnabled then UIS.MouseIconEnabled = true end
 		end
 	end
 
-	local function wantCursor()
+	-- ------------------------------------------------------------------
+	-- Curseur libre
+	-- ------------------------------------------------------------------
+	local function wantFree()
 		for _, mode in pairs(owners) do
 			if mode == "force" or Library.FreeCursor ~= false then return true end
 		end
 		return false
 	end
 
-	-- touche du jeu bloquée : seulement l'appui (le relâchement passe, sinon une touche tenue avant l'ouverture resterait coincée)
+	local function setFree(want)
+		if want and not (sink and sink.Parent) then
+			sink = new("ScreenGui", { Name = "SolarisCursor", ResetOnSpawn = false, DisplayOrder = 0, IgnoreGuiInset = true })
+			mount(sink)
+			sinkBtn = new("TextButton", { Name = "CursorFree", Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1,
+				Text = "", AutoButtonColor = false, Modal = true, BorderSizePixel = 0, Visible = false }, sink)
+		end
+		if sinkBtn then sinkBtn.Visible = want end
+		if want == freed then return end
+		freed = want
+
+		pcall(function() RunService:UnbindFromRenderStep(STEP) end)
+		if want then
+			if savedIcon == nil then savedIcon = UIS.MouseIconEnabled end
+			pcall(function()
+				RunService:BindToRenderStep(STEP, Enum.RenderPriority.Camera.Value + 10, function(dt)
+					local ok, err = pcall(frameStep, dt)
+					if not ok and not warned then
+						warned = true
+						warn("[Ui-Lib] curseur : " .. tostring(err))
+					end
+				end)
+			end)
+		else
+			destroyDraw()
+			if savedIcon ~= nil then
+				pcall(function() UIS.MouseIconEnabled = savedIcon end)
+				savedIcon = nil
+			end
+		end
+	end
+
+	-- ------------------------------------------------------------------
+	-- Touches du jeu bloquées : seulement l'appui (le relâchement passe, sinon une touche tenue avant l'ouverture resterait coincée)
+	-- ------------------------------------------------------------------
 	local function onKey(_, state)
 		if state ~= Enum.UserInputState.Begin then return PASS end
 		if Library._listening or UIS:GetFocusedTextBox() then return PASS end
 		return SINK
 	end
 
-	local function apply()
-		local want = wantCursor()
-		if want and not (gui and gui.Parent) then
-			gui = new("ScreenGui", { Name = "SolarisCursor", ResetOnSpawn = false, DisplayOrder = 0, IgnoreGuiInset = true })
-			mount(gui)
-			btn = new("TextButton", { Name = "CursorFree", Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1,
-				Text = "", AutoButtonColor = false, Modal = true, BorderSizePixel = 0, Visible = false }, gui)
+	local function syncKeys()
+		local want = Library.BlockGameKeys == true and next(owners) ~= nil
+		if want == keysBound then return end
+		keysBound = want
+		pcall(function() CAS:UnbindAction(KEYS_ACTION) end)
+		if not want then return end
+		local list = {}
+		for _, k in ipairs(Library.BlockedKeys or {}) do
+			if typeof(k) == "EnumItem" then list[#list + 1] = k end
 		end
-		if btn then btn.Visible = want end
-		if want ~= freed then
-			freed = want
-			pcall(function() RunService:UnbindFromRenderStep(STEP_NAME) end)
-			if want then
-				if savedIcon == nil then savedIcon = UIS.MouseIconEnabled end
-				pcall(function()
-					RunService:BindToRenderStep(STEP_NAME, Enum.RenderPriority.Camera.Value + 10, function()
-						if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then UIS.MouseBehavior = Enum.MouseBehavior.Default end
-						if useDot() then
-							-- curseur natif masqué + point dessiné à la position de la souris
-							if UIS.MouseIconEnabled then UIS.MouseIconEnabled = false end
-							ensureDot()
-							local m = Library._mouse and Library._mouse() or UIS:GetMouseLocation()
-							dot.Position = UDim2.fromOffset(m.X, m.Y)
-							dot.Visible = true
-							if dotScale then
-								local down = Library.CursorCfg.ClickShrink and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-								dotScale.Scale = dotScale.Scale + ((down and 0.7 or 1) - dotScale.Scale) * 0.35
-							end
-						else
-							if not UIS.MouseIconEnabled then UIS.MouseIconEnabled = true end
-							if dot then dot.Visible = false end
-						end
-					end)
-				end)
-			else
-				destroyDot()
-				if savedIcon ~= nil then
-					pcall(function() UIS.MouseIconEnabled = savedIcon end)
-					savedIcon = nil
-				end
-			end
-		end
-		local keys = Library.BlockGameKeys == true and next(owners) ~= nil
-		if keys ~= keysBound then
-			keysBound = keys
-			pcall(function() CAS:UnbindAction(KEY_ACTION) end)
-			if keys then
-				local list = {}
-				for _, k in ipairs(Library.BlockedKeys or {}) do
-					if typeof(k) == "EnumItem" then list[#list + 1] = k end
-				end
-				if #list > 0 then
-					pcall(function() CAS:BindActionAtPriority(KEY_ACTION, onKey, false, 2900, table.unpack(list)) end)
-				end
-			end
+		if #list > 0 then
+			pcall(function() CAS:BindActionAtPriority(KEYS_ACTION, onKey, false, 2900, table.unpack(list)) end)
 		end
 	end
 
+	local function apply()
+		setFree(wantFree())
+		syncKeys()
+	end
+
+	-- ------------------------------------------------------------------
+	-- API publique
+	-- ------------------------------------------------------------------
 	function Library:AcquireCursor(owner, force)
 		owners[owner or "default"] = force and "force" or "normal"
 		apply()
@@ -3051,25 +3098,7 @@ do
 		apply()
 	end
 	function Library:IsCursorFree() return freed end
-	function Library:SetCursorStyle(v)   -- "auto" | "dot" | "native"
-		Library.CursorStyle = (v == "dot" or v == "native") and v or "auto"
-	end
-	-- Shape ("Point" | "Flèche Roblox" | "Cercle" | "Carré" | "Croix"), Size (4-64), Color, Outline (Color3), OutlineSize, Opacity (0-1),
-	-- UseAccent (bool), ClickShrink (bool)
-	function Library:SetCursorOption(name, value)
-		if Library.CursorDefaults[name] == nil then return false end
-		Library.CursorCfg[name] = value
-		destroyDot()   -- reconstruit à la frame suivante
-		return true
-	end
-	function Library:PreviewCursor(seconds)   -- force le curseur dessiné quelques secondes pour voir les réglages
-		seconds = tonumber(seconds) or 6
-		Library._cursorPreviewUntil = os.clock() + seconds
-		Library:AcquireCursor("preview", true)
-		task.delay(seconds + 0.1, function()
-			if (Library._cursorPreviewUntil or 0) <= os.clock() then Library:ReleaseCursor("preview") end
-		end)
-	end
+
 	function Library:SetFreeCursor(v)
 		Library.FreeCursor = v and true or false
 		apply()
@@ -3083,18 +3112,34 @@ do
 		Library.BlockedKeys = list
 		if keysBound then
 			keysBound = false   -- on relie avec la nouvelle liste
-			apply()
+			syncKeys()
 		end
+	end
+
+	function Library:SetCursorStyle(v)   -- "auto" | "dot" | "native"
+		Library.CursorStyle = (v == "dot" or v == "native") and v or "auto"
+	end
+	function Library:SetCursorOption(name, value)
+		if Library.CursorDefaults[name] == nil then return false end
+		Library.CursorCfg[name] = value
+		destroyDraw()   -- reconstruit à l'image suivante
+		return true
+	end
+	function Library:PreviewCursor(seconds)   -- force le curseur dessiné quelques secondes pour voir les réglages
+		seconds = tonumber(seconds) or 6
+		Library._cursorPreviewUntil = os.clock() + seconds
+		Library:AcquireCursor("preview", true)
+		task.delay(seconds + 0.1, function()
+			if (Library._cursorPreviewUntil or 0) <= os.clock() then Library:ReleaseCursor("preview") end
+		end)
 	end
 
 	Library._destroyCursor = function()
 		table.clear(owners)
 		apply()
-		pcall(function() CAS:UnbindAction(KEY_ACTION) end)
-		keysBound = false
-		destroyDot()
-		if gui then pcall(function() gui:Destroy() end) end
-		gui, btn = nil, nil
+		destroyDraw()
+		if sink then pcall(function() sink:Destroy() end) end
+		sink, sinkBtn = nil, nil
 	end
 end
 
@@ -6469,7 +6514,7 @@ function Block:CreateButton(o)
 	trackStyled(b, st, "row")
 	hover(b, st)
 	self:_reg(b, o.Name)
-	b.InputBegan:Connect(function(i) if isPress(i) then Library._ptrVote(b, i.Position) end end)   -- calibrage du pointeur
+	b.InputBegan:Connect(function(i) if isPress(i) then Library._ptrProbe(b, i.Position) end end)   -- mesure du pointeur
 	local armed, armToken = false, 0
 	local baseText = o.Name or "Button"
 	-- V9.7 : Cooldown = secondes. Après un clic accepté, le bouton se grise, une barre de progression se vide et les clics sont
@@ -9373,7 +9418,7 @@ do
 	-- Clique sur un élément d'interface (couleur de fond) ou sur un objet du monde (couleur de la pièce / du terrain).
 	local pip
 	-- Library._pipDelta : décalage entre le repère de l'UI et celui de GetGuiObjectsAtPosition (mesuré avec la carte de la pipette)
-	Library._pipSkip = { SolarisPipette = true, SolarisCursor = true, SolarisKeySink = true, SolarisSound = true,
+	Library._pipSkip = { SolarisPipette = true, SolarisCursor = true, SolarisCursorDot = true, SolarisPtrCal = true, SolarisKeySink = true, SolarisSound = true,
 		SolarisNotifPlace = true, SolarisNotify = true }
 
 	-- FIX pipette : on mesure le vrai repère de GetGuiObjectsAtPosition avec la carte qui suit le curseur : on cherche à quel
@@ -9627,7 +9672,7 @@ function Block:CreateColorPicker(o)
 			BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, abar)
 		aHit.InputBegan:Connect(function(i)
 			if isPress(i) then
-				Library._ptrCheck(aHit, i.Position)
+				Library._ptrProbe(aHit, i.Position)
 				startDrag(function(p)
 					alpha = (norm(abar, p))
 					commit()
@@ -9734,7 +9779,7 @@ function Block:CreateColorPicker(o)
 
 	svHit.InputBegan:Connect(function(i)
 		if isPress(i) then
-			Library._ptrCheck(svHit, i.Position)
+			Library._ptrProbe(svHit, i.Position)
 			startDrag(function(p)
 				local nx, ny = norm(sv, p)
 				s, v = nx, 1 - ny
@@ -9744,7 +9789,7 @@ function Block:CreateColorPicker(o)
 	end)
 	hueHit.InputBegan:Connect(function(i)
 		if isPress(i) then
-			Library._ptrCheck(hueHit, i.Position)
+			Library._ptrProbe(hueHit, i.Position)
 			startDrag(function(p)
 				local nx = norm(hue, p)
 				h = math.min(nx, 0.999)
@@ -18393,7 +18438,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 		LayoutOrder = parentTab and ((#parentTab.Children + 1) * 2) or ((#self.Tabs + 1) * 2),
 	}, parentTab and parentTab:_childHolder() or self.Sidebar)
 	new("UICorner", { CornerRadius = UDim.new(0, 8) }, btn)
-	btn.InputBegan:Connect(function(i) if isPress(i) then Library._ptrVote(btn, i.Position) end end)   -- calibrage du pointeur (voir Library._ptrVote)
+	btn.InputBegan:Connect(function(i) if isPress(i) then Library._ptrProbe(btn, i.Position) end end)   -- mesure du pointeur
 	local bar = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
 		Size = UDim2.new(0, 3, 0, 0), BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, btn)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
@@ -20104,7 +20149,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		CA:CreateDropdown({ Name = "Mode", Flag = "ui.cursor.mode", Search = false, Favorite = false,
 			Items = { "Auto (1re personne)", "Toujours dessiné", "Curseur Roblox" },
 			Default = MODE_NAMES[Library.CursorStyle or "auto"],
-			Tooltip = "Auto : le curseur dessiné par l'UI n'apparaît qu'en vue à la première personne (là où Roblox cache l'icône). Toujours dessiné : visible partout tant que l'interface est ouverte. Curseur Roblox : jamais de curseur dessiné.",
+			Tooltip = "Auto : le curseur dessiné par l'UI n'apparaît qu'en vue à la première personne (là où Roblox cache l'icône). Toujours dessiné : visible partout tant que l'interface est ouverte. Curseur Roblox : jamais de curseur dessiné. Au tactile, rien n'est dessiné.",
 			Callback = function(v) Library:SetCursorStyle(MODE_KEYS[v] or "auto") end })
 		CA:CreateDropdown({ Name = "Forme", Flag = "ui.cursor.shape", Search = false, Favorite = false,
 			Items = { "Point", "Flèche Roblox", "Cercle", "Carré", "Croix" }, Default = Library.CursorCfg.Shape,
@@ -20128,6 +20173,27 @@ function Window:CreateSettingsTab(name, icon, docked)
 			Favorite = false, Callback = function(c) Library:SetCursorOption("Outline", c) end })
 		CC:CreateSlider({ Name = "Épaisseur du contour", Flag = "ui.cursor.outsize", Min = 0, Max = 4, Step = 0.5, Suffix = " px",
 			Default = Library.CursorCfg.OutlineSize, Favorite = false, Callback = co("OutlineSize") })
+
+		-- Position : où l'UI croit que se trouve le pointeur (voir POINTEUR). Normalement tout est mesuré tout seul.
+		local CO = BK("Curseur", { Name = "Position", Side = "Right" })
+		CO:CreateSlider({ Name = "Décalage vertical", Flag = "ui.ptroffset", Min = -80, Max = 80, Default = 0, Step = 1, Suffix = " px",
+			Favorite = false,
+			Tooltip = "Le décalage est mesuré automatiquement en direct. À régler seulement si, malgré ça, la poignée ou le curseur n'est pas pile sous ta souris : positif = il monte, négatif = il descend. Laisse 0 sinon.",
+			Callback = function(v) Library.PointerOffset = Vector2.new(0, tonumber(v) or 0) end })
+		CO:CreateButton({ Name = "Recalibrer le curseur", Favorite = false,
+			Tooltip = "Calibrage guidé : trois clics sur une barre blanche très fine. Le décalage est mesuré à quelques pixels près puis gardé ; plus rien ne le modifie sauf un clic qui le contredit nettement.",
+			Callback = function()
+				Library:ResetPointerCalibration()
+				Library:CalibratePointer()
+			end })
+		CO:CreateButton({ Name = "Copier le journal du curseur", Favorite = false,
+			Tooltip = "Copie la liste des derniers changements de la correction du curseur (qui l'a modifiée, de combien). Utile si le curseur se décale encore.",
+			Callback = function()
+				local t = Library:GetPointerLog()
+				local ok = pcall(function() setclipboard(t) end)
+				print("[Ui-Lib] journal du curseur :\n" .. t)
+				Library:Notify({ Title = "Curseur", Content = ok and "Journal copié (et affiché dans la console)." or "Journal affiché dans la console (pas de presse-papiers).", Duration = 4, Type = "Info" })
+			end })
 
 		local CP = BK("Curseur", { Name = "Aperçu", Side = "Left" })
 		CP:CreateParagraph({ Title = "Voir le résultat",
@@ -20181,28 +20247,6 @@ function Window:CreateSettingsTab(name, icon, docked)
 	D:CreateToggle({ Name = "Bloquer les touches du jeu", Flag = "ui.blockkeys", Default = Library.BlockGameKeys == true,
 		Tooltip = "Tant que l'interface est ouverte, W A S D et Espace n'agissent plus sur ton personnage (Library.BlockedKeys pour changer la liste). Rien n'est bloqué pendant la saisie de texte ou l'assignation d'une touche.",
 		Callback = function(v) Library:SetBlockGameKeys(v) end })
-	D:CreateSlider({ Name = "Décalage vertical du curseur", Flag = "ui.ptroffset", Min = -80, Max = 80, Default = 0, Step = 1, Suffix = " px",
-		Tooltip = "Le décalage est maintenant mesuré automatiquement en direct. À régler seulement si, malgré ça, la poignée n'est pas pile sous ton curseur : positif = la poignée / le curseur monte, négatif = il descend. Laisse 0 sinon.",
-		Callback = function(v)
-			local n = tonumber(v) or 0
-			if n ~= 0 and (Library.PointerOffset == nil or Library.PointerOffset.Y ~= n) then
-			end
-			Library.PointerOffset = Vector2.new(0, n)
-		end })
-	D:CreateButton({ Name = "Recalibrer le curseur", Favorite = false,
-		Tooltip = "Calibrage guidé : trois clics sur une barre blanche très fine. Le décalage est mesuré à quelques pixels près puis gardé ; plus rien ne le modifie sauf un clic qui le contredit nettement.",
-		Callback = function()
-			Library:ResetPointerCalibration()
-			Library:CalibratePointer()
-		end })
-	D:CreateButton({ Name = "Copier le journal du curseur", Favorite = false,
-		Tooltip = "Copie la liste des derniers changements de la correction du curseur (qui l'a modifiée, de combien). Utile si le curseur se décale encore.",
-		Callback = function()
-			local t = Library:GetPointerLog()
-			local ok = pcall(function() setclipboard(t) end)
-			print("[Ui-Lib] journal du curseur :\n" .. t)
-			Library:Notify({ Title = "Curseur", Content = ok and "Journal copié (et affiché dans la console)." or "Journal affiché dans la console (pas de presse-papiers).", Duration = 4, Type = "Info" })
-		end })
 	D:CreateToggle({ Name = "Verrouiller la position", Flag = "ui.lockpos", Default = Library.LockPosition == true,
 		Tooltip = "La fenêtre ne peut plus être déplacée ni redimensionnée à la souris (le double-clic pour réduire et Ctrl+R restent possibles).",
 		Callback = function(v) Library:SetLockPosition(v) end })
@@ -22258,10 +22302,8 @@ function Library:CreateWindow(cfg)
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true })
 	mount(gui)
 
-	-- CURSEUR : ce ScreenGui sert de référence de mesure (Library._ptrAuto) ; ancien calibrage appris supprimé.
-	Library._ptrGui = gui
-	Library._ptrCache.t = -1
-	Library._ptrLoad()
+	-- POINTEUR : ce ScreenGui sert de référence de mesure (voir POINTEUR)
+	Library:SetPointerRoot(gui)
 
 	-- ------------------------------------------------------------------
 	-- Ciel : étoiles qui rebondissent sur les bords de l'écran, DERRIÈRE la fenêtre.
@@ -25134,6 +25176,7 @@ function Library:Destroy()
 	pcall(function() RunService:UnbindFromRenderStep("UiLibWindowMouse") end)
 	Library._setCursorFree = nil
 	if Library._destroyCursor then pcall(Library._destroyCursor) end
+	if Library._destroyPointer then pcall(Library._destroyPointer) end
 	if Library._destroyPipette then pcall(Library._destroyPipette) end
 	do
 		local CASd = game:GetService("ContextActionService")
