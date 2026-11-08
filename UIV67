@@ -10,8 +10,9 @@
 	V9.12 — CURSEUR (color picker / aperçu) + RECHERCHE EN VERRE
 		• Curseur : le décalage entre le pointeur et l'UI (~58 px) se calcule maintenant par INTERSECTION des fourchettes données par chaque appui
 		  (le vrai pointeur est forcément dans l'élément cliqué : un bouton de 30 px suffit à exclure un décalage de 58 px). Un seul appui cohérent suffit
-		  (plus de vote sur 2 clics ni de valeurs figées), et ça marche aussi au tactile / curseur virtuel. Les zones du personnage de l'aperçu servent
-		  aussi de mesure. Library:ResetPointerCalibration() remet tout à zéro.
+		  (plus de vote sur 2 clics ni de valeurs figées), et ça marche aussi au tactile / curseur virtuel.
+		  Library:ResetPointerCalibration() remet tout à zéro. L'aperçu 3D (et ses zones de membres) ne sert PAS de mesure : sa géométrie vient de la
+		  caméra et pouvait décaler le curseur vers le haut après un clic sur le personnage.
 		• Recherche : le panneau de résultats suit le STYLE courant (vitre translucide en Verre / Givré, fond plein en Mat), reflet clair, lignes en 2 temps
 		  (nom + chemin onglet › bloc) avec pastille d'initiale, ↑ ↓ pour parcourir, Entrée pour ouvrir, ligne d'aide avec le nombre de résultats.
 
@@ -1792,6 +1793,8 @@ Library._ptrIv = { lo = -math.huge, hi = math.huge, t = 0 }    -- souris : y_vra
 Library._ptrIvT = { lo = -math.huge, hi = math.huge, t = 0 }   -- tactile : y_vrai = Position.Y + décalage
 Library._ptrCheck = function(obj, pos)
 	if not (typeof(obj) == "Instance" and obj:IsA("GuiObject") and obj.Parent) then return end
+	-- jamais de mesure sur l'aperçu 3D (ViewportFrame et ses zones « Hit_ » posées d'après la caméra) : leur géométrie est approximative
+	if obj:IsA("ViewportFrame") or obj:FindFirstAncestorWhichIsA("ViewportFrame") or string.sub(obj.Name, 1, 4) == "Hit_" then return end
 	local ap, as = obj.AbsolutePosition, obj.AbsoluteSize
 	if as.X < 4 or as.Y < 4 then return end
 	local okT, last = pcall(function() return UIS:GetLastInputType() end)
@@ -1832,7 +1835,7 @@ Library._ptrCheck = function(obj, pos)
 	for _, d in ipairs(cands) do
 		if d >= nlo and d <= nhi then pick = d break end
 	end
-	if pick == nil and (nhi - nlo) <= 60 then pick = math.floor((nlo + nhi) / 2 + 0.5) end
+	if pick == nil and (nhi - nlo) <= 16 then pick = math.floor((nlo + nhi) / 2 + 0.5) end   -- milieu seulement d'une cible très fine (±8 px)
 	if pick == nil then return end
 	if touch then
 		Library._ptrTouchE = pick
@@ -13452,7 +13455,6 @@ function Block:CreatePreview3D(o)
 			hf.InputBegan:Connect(function(i)
 				if isPress(i) then
 					hitSeen[n] = hitArea[n] or 1e9
-					pcall(Library._ptrCheck, hf, i.Position)   -- le vrai pointeur est dans cette zone : bonne mesure du décalage (zones étroites)
 				end
 			end)
 			hf.MouseEnter:Connect(function() ix.hitReady = true end)
@@ -14415,7 +14417,7 @@ function Block:CreatePreview3D(o)
 	vp.InputBegan:Connect(function(i)
 		if isPress(i) then
 			pressed, moved, pressT = true, 0, os.clock()
-			pcall(Library._ptrCheck, vp, i.Position)   -- le vrai pointeur est dans l'aperçu : si le calculé est dehors, on recale
+			-- (l'aperçu ne recale plus le curseur : trop grand, et ses zones viennent d'une projection caméra approximative)
 			pressPos = Library._pointerPos(i.Position)
 			ix.press(pressPos)   -- sur un membre / le torse : prise (voir plus haut) au lieu de tourner la caméra
 			tween(hint, { TextTransparency = 1 }, 0.2)
