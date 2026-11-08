@@ -16,6 +16,8 @@
 		• « Recalibrer le curseur » (Paramètres > Fenêtre) est maintenant un CALIBRAGE GUIDÉ : 3 clics sur une barre blanche de 12 px (Échap annule) ;
 		  le décalage mesuré est verrouillé (seul un clic qui le contredit de plus de 14 px le change). « Copier le journal du curseur » liste qui a
 		  modifié la correction et de combien (Library:GetPointerLog()). Library:CalibratePointer() lance le calibrage par script.
+		• Le décalage est aussi mesuré EN CONTINU quand la souris bouge sur un bouton / une ligne (MouseMoved, ~12 fois par seconde au plus) : si le
+		  décalage change en cours de route (menu Échap de Roblox ouvert ou fermé, barre du haut), la correction se remet à jour toute seule.
 		• Recherche : le panneau de résultats suit le STYLE courant (vitre translucide en Verre / Givré, fond plein en Mat), reflet clair, lignes en 2 temps
 		  (nom + chemin onglet › bloc) avec pastille d'initiale, ↑ ↓ pour parcourir, Entrée pour ouvrir, ligne d'aide avec le nombre de résultats.
 
@@ -1841,6 +1843,7 @@ Library._ptrCheck = function(obj, pos)
 	if now - V.t > 25 then V.lo, V.hi = -math.huge, math.huge end   -- vieilles mesures oubliées (fenêtre déplacée, menu Roblox ouvert...)
 	local nlo, nhi = math.max(V.lo, lo), math.min(V.hi, hi)
 	if nlo > nhi then nlo, nhi = lo, hi end                           -- incohérent : on repart de cet appui seul
+	if cur < lo - 14 or cur > hi + 14 then nlo, nhi = lo, hi end      -- cet échantillon contredit nettement la valeur actuelle : l'ancien historique est périmé
 	V.lo, V.hi, V.t = nlo, nhi, now
 
 	if cur >= nlo - 0.5 and cur <= nhi + 0.5 then return end         -- le décalage actuel est compatible avec tous les appuis récents
@@ -2662,6 +2665,14 @@ local function hover(f, st, hit)
 		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
 			pcall(Library._ptrCheck, hit, i.Position)
 		end
+	end)
+	-- mesure continue du décalage du curseur : MouseMoved n'est livré que si le vrai pointeur est DANS l'élément (au plus ~12 fois / s).
+	-- Si le décalage change en cours de route (menu Roblox ouvert / fermé, barre du haut...), la correction suit sans rien recalibrer.
+	hit.MouseMoved:Connect(function()
+		local now = os.clock()
+		if now - (Library._ptrHoverT or 0) < 0.08 then return end
+		Library._ptrHoverT = now
+		pcall(Library._ptrCheck, hit)
 	end)
 	hit.MouseEnter:Connect(function()
 		uiSnd("hover")
