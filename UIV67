@@ -7,6 +7,74 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.11 — API PRATIQUE : SetEnabled / Destroy SUR TOUS LES ÉLÉMENTS + UTILITAIRES
+		• Tous les éléments : item.SetEnabled(bool) / item.IsEnabled() (ligne grisée, clics ignorés ; CreateXxx({ Enabled = false }) la crée
+		  désactivée) · item.Destroy() (retire la ligne et son Flag).
+		• Library:GetItem / GetFlag / SetFlag(flag, valeur) · Library:Snapshot() / Restore(snapshot) · Library:WatchFlag(flag, fn(nouvelle, ancienne)) ·
+		  Library:Link(source, cible, transformation) · Library:WaitForFlag(flag, attendu, timeout) · Library:Every(secondes, fn) ·
+		  Library:Debounce(fn, attente) · Library:Throttle(fn, intervalle). Détails dans le bloc « API PRATIQUE » juste avant Library:Destroy.
+
+	V9.10 — MINUTEUR : blk:CreateTimer
+		• Nouvel élément : un temps affiché en grand + boutons Démarrer / Pause / Reprendre / Relancer et remise à zéro (↺). Compte à rebours avec
+		  une barre de progression : blk:CreateTimer({ Name = "Événement", Duration = 90, Callback = function(state, secondes) end }) ; sans Duration :
+		  chronomètre. Callback reçoit "start" | "pause" | "reset" | "finish" (la fin est déclenchée à l'heure exacte, même si l'UI est cachée).
+		  Tenths = false · AutoStart = true · Flag (mémorise le temps affiché) · item.Start() / Pause() / Toggle() / Reset() / Get() / GetElapsed() /
+		  IsRunning() / Set(secondes) / SetDuration(n) / item:OnChanged(fn).
+
+	V9.9 — PASTILLES : blk:CreateChips
+		• Nouvel élément : des pastilles cliquables qui passent à la ligne toutes seules (la ligne du bloc s'agrandit). Choix multiple par défaut :
+		  blk:CreateChips({ Name = "Armes", Items = { "Épée", "Arc", "Bâton" }, Default = { "Arc" }, Flag = "armes", Callback = function(v) end }).
+		  Multi = false : une seule pastille active (Get() renvoie un nom) · Max = n : limite le nombre de pastilles actives · AllowNone = true
+		  (choix unique) : recliquer désactive · item.Get() · item.Set(liste | nom) · item.Toggle(nom) · item.IsSelected(nom) · item.SelectAll() ·
+		  item.Clear() · item.SetItems(liste) · item:OnChanged(fn) · sauvegardé dans les configs comme les autres éléments (Flag).
+
+	V9.8 — NOUVELLE INTRO : MESSAGES + VOIX + ENVOL À GAUCHE
+		• L'ancienne intro « trou noir » (anneaux, étoiles, titre, barre de progression) est retirée. On garde le début : écran noir, interface
+		  Roblox masquée. À la place du « Hi. » : des phrases s'écrivent lettre par lettre avec un son de personne qui parle (bla bla) :
+		  « Slt , » -> « J'espère tu vas bien👌 » -> « Sur ce , Amuse toi bien :) ». Après la dernière, le chargement est fini : le noir se dissipe
+		  sur la fenêtre prête.
+		• Entre deux phrases : pas de fondu, le texte est envoyé valser sur la gauche (il accélère, tourne, sort de l'écran).
+		• Library.IntroMessages = { ... } (ou getgenv().UiLibIntroMessages) · Library.TalkSoundId (id du son de voix) · Library.TalkSound = false ·
+		  Library.TalkSoundVolume (0.6) · Library.TalkSoundPitch (1) · Library.IntroFlingTime (0.5) · Library.IntroHoldTime (0.75) ·
+		  Library.IntroLastHold (1). Library.IntroHi = false / getgenv().UiLibIntroHi = false : plus de phrases (écran noir seulement).
+
+	V9.7 — CIBLE JOUEUR · COOLDOWN · ONCHANGED MULTIPLE · GROUPES DE TOGGLES
+		• Cible joueur : blk:CreatePlayerPicker({ Name = "Cible", Multi = true }) — liste de joueurs qui se met à jour toute seule (arrivées,
+		  départs, changements de pseudo affiché). Get() renvoie des objets Player (une liste si Multi), pas des chaînes.
+		  IncludeLocal · Filter = function(p) · Avatars = false · item.Set(player | nom) · item.Clear() · item.GetNames().
+		• Aperçu du personnage : halo de la tête décalé plus haut (Library.PreviewHaloHeight, 0.88 par défaut — 0.55 avant) · carte d'infos du
+		  joueur ciblé (pseudo, PV + barre, équipe, distance, outil) : CreatePreview3D({ Info = true }) / pv:SetInfo(bool) · pv:BindPicker(picker) :
+		  l'aperçu suit le joueur choisi dans un CreatePlayerPicker (retour à ton avatar quand la sélection est vidée) · rechargement
+		  automatique quand le joueur ciblé réapparaît.
+		• Ragdoll refait (vraie physique Verlet) : le torse est saisi À L'ENDROIT cliqué (épaule, taille...), le corps pend, se plie et tourne
+		  autour de ce point ; au lâcher il garde sa vitesse (on peut le lancer), tombe, rebondit sur le sol / les bords de l'aperçu, puis se relève
+		  tout seul. Library.PreviewRagdollGravity (55) · Library.PreviewRagdollRecover = false · Library.PreviewRagdollGetUpTime (0.9 s) ·
+		  pv:Ragdoll([-1..1]) · pv:GetUp().
+		• Cooldown sur un bouton : blk:CreateButton({ Cooldown = 3 }) — le bouton se grise pendant 3 s avec une barre de progression
+		  (et le temps restant dans le texte, CooldownText = false pour le cacher) ; les clics sont ignorés pendant ce temps.
+		  item.IsCooling() · item.GetCooldown() · item.SetCooldown(n) · item.ResetCooldown().
+		• OnChanged multiple : item:OnChanged(fn) sur n'importe quel élément. Renvoie un handle (h:Disconnect(), h.Connected) ; plusieurs
+		  scripts peuvent écouter le même élément sans toucher au Callback d'origine. item.ClearChanged() retire tout.
+		• Groupes : Library:Group({ toggle1, toggle2 }, { Exclusive = true }) — active / coupe plusieurs toggles d'un coup (g.Set(bool),
+		  g.Toggle(), g.Select(x)). Exclusive = true : un seul toggle actif à la fois (modes de vol, de caméra, de grab...) ·
+		  AllowNone = false : un toggle reste toujours actif · g.Get() · g.GetActive() · g.OnChanged(fn).
+
+	V9.6 — API : BOUCLE DE TOGGLE, PROPRIÉTÉ DIRECTE, ÉLÉMENTS CONDITIONNELS, LISTES ENRICHIES · CLIC SUR L'APERÇU
+		• Toggle avec boucle intégrée : CreateToggle({ Name = "Vol", Loop = function(dt, item) ... end }) — tourne à chaque image tant que le
+		  toggle est activé et se coupe tout seul (désactivation, fermeture de l'UI). LoopEvent = "Heartbeat" | "RenderStepped" | "Stepped" ·
+		  LoopInterval = secondes entre deux appels · item.IsLooping().
+		• Bascule directe sur une propriété, zéro callback :
+		  CreateToggle({ Name = "Vitesse", Bind = { Target = function() return humanoid end, Property = "WalkSpeed", On = 50, Off = 16 } })
+		  Target : instance, fonction qui la renvoie, ou nom de service ("Lighting") · Off absent = valeur d'origine rétablie · Keep = true : la valeur
+		  est ré-imposée si le jeu la change · plusieurs propriétés : Properties = { WalkSpeed = 50, JumpPower = { On = 80, Off = 50 } } ou Bind = { {...}, {...} }.
+		• Éléments conditionnels : ShowIf / HideIf sur n'importe quel élément (élément, nom de Flag, fonction, { Item =, Equals / NotEquals / In /
+		  Contains / Min / Max }, liste de conditions). Library:RefreshConditions() force le recalcul.
+		• Liste déroulante enrichie : Items = { { Name = "Pistolet", Icon = "rbxassetid://...", Desc = "Dégâts : 20", Color = Color3 } } (les chaînes
+		  simples marchent toujours ; la recherche de la liste regarde aussi la description).
+		• Home > Mon personnage : prendre une partie du corps (bras, jambe, tête, torse) ne demande plus de viser ~58 px trop haut. La partie saisie est
+		  désormais désignée par de vrais cadres invisibles (le pointeur réel, sans conversion de coordonnées) et les mouvements de la prise sont
+		  relatifs au point d'appui. Library.PreviewPickOffset = Vector2.new(0, y) pour décaler les zones à la main si besoin.
+
 	V9.5 — TRACKER DE JOUEUR
 		• Home > Serveurs > « Tracker » : pseudo exact (+ PlaceId facultatif) -> cherche le joueur dans les serveurs PUBLICS du jeu en comparant
 		  les avatars (API games / thumbnails de Roblox). Serveur actuel vérifié d'abord, progression en direct, Arrêter, Rejoindre, Copier l'ID.
@@ -484,19 +552,22 @@ local Library = {
 }
 
 -- ============================================================================
--- INTRO DE CHARGEMENT  « Trou noir »
+-- INTRO DE CHARGEMENT  « Messages »
 -- S'affiche dès le début du chargement de la lib et reste tant que l'interface se construit.
---   • Un trou noir (anneaux lumineux qui tournent, étoiles qui spiralent et s'étirent vers le centre), le titre qui
---     apparaît lettre par lettre, une barre de progression RÉELLE (nombre d'éléments créés / total du lancement précédent,
---     mémorisé dans <ConfigFolder>/_intro.json) et un texte d'état qui change selon l'avancement.
---   • Fin : la barre se remplit, tout est aspiré dans le trou noir, deux ondes de choc partent du centre et le fond noir
---     se dissipe sur la fenêtre déjà prête.
+--   • Écran noir, interface Roblox masquée (chat, liste des joueurs, barre du haut...).
+--   • Des phrases s'écrivent lettre par lettre, avec un son de « personne qui parle » (bla bla) joué en même temps :
+--       « Slt , »  ->  « J'espère tu vas bien👌 »  ->  « Sur ce , Amuse toi bien :) »
+--   • Entre deux phrases, pas de fondu : le texte est ENVOYÉ VALSER vers la gauche (il accélère, tourne et sort de l'écran).
+--   • Après « Amuse toi bien » (une fois le script chargé), le fond noir se dissipe sur la fenêtre prête.
 --   • Pendant le chargement, new() laisse respirer le rendu (une image toutes les ~22 ms de travail) pour que l'animation
 --     ne se fige pas. Library.IntroYield = false : coupe ça (chargement un peu plus rapide, animation saccadée).
 --   • Clique sur l'écran pour passer l'intro (dès que la fenêtre existe).
---   API : Library:SetIntroEnabled(bool) · Library.IntroMinTime (s, défaut 2.2) · Library:HoldIntro(bool) (garde l'intro tant
---   que ton script charge des choses) · Library:FinishIntro() · getgenv().UiLibIntro = false (couper) ·
---   getgenv().UiLibIntroTitle = "MON NOM" (titre).
+--   API : Library:SetIntroEnabled(bool) · Library:HoldIntro(bool) (garde l'intro tant que ton script charge des choses) ·
+--   Library:FinishIntro() · getgenv().UiLibIntro = false (couper toute l'intro) ·
+--   Library.IntroMessages = { "phrase 1", "phrase 2", ... } (ou getgenv().UiLibIntroMessages) · Library.IntroHi = false (pas de phrases) ·
+--   Library.TalkSound = false (sans son) · Library.TalkSoundId (id du son de voix) · Library.TalkSoundVolume (0.6) ·
+--   Library.TalkSoundPitch (1) · Library.IntroFlingTime (0.5 s) · Library.IntroHoldTime (0.75 s entre deux phrases) ·
+--   Library.IntroLastHold (1 s minimum sur la dernière phrase).
 -- ============================================================================
 do
 	local genv = (getgenv and getgenv()) or {}
@@ -519,6 +590,15 @@ do
 	Library.IntroYield = true
 	Library.IntroMinTime = 2.2
 	Library.IntroActive = false
+	Library.IntroMessages = Library.IntroMessages or { "Slt ,", "J'espère tu vas bien👌", "Sur ce , Amuse toi bien :)" }
+	if Library.TalkSound == nil then Library.TalkSound = true end
+	-- Son de « voix » joué à chaque lettre (une sur deux, hauteur au hasard) : remplace-le par l'id de ton choix.
+	Library.TalkSoundId = Library.TalkSoundId or genv.UiLibTalkSoundId or "124532604975079"
+	Library.TalkSoundVolume = Library.TalkSoundVolume or 0.6
+	Library.TalkSoundPitch = Library.TalkSoundPitch or 1
+	Library.IntroFlingTime = Library.IntroFlingTime or 0.5
+	Library.IntroHoldTime = Library.IntroHoldTime or 0.75
+	Library.IntroLastHold = Library.IntroLastHold or 1.0
 	function Library:SetIntroEnabled(v)
 		Library.IntroEnabled = v and true or false
 		writeIntro()
@@ -548,9 +628,8 @@ do
 			if not okm or not gui.Parent then gui.Parent = LP:WaitForChild("PlayerGui") end
 
 			local WHITE = Color3.fromRGB(240, 240, 244)
-			local GREY  = Color3.fromRGB(150, 150, 160)
 			local BLACK = Color3.fromRGB(3, 3, 5)
-			local FBOLD, FREG = Enum.Font.GothamBold, Enum.Font.Gotham
+			local FBOLD = Enum.Font.GothamBold
 
 			local function mk(class, props, parent)
 				local o = Instance.new(class)
@@ -562,107 +641,67 @@ do
 			-- fond plein écran (avale aussi les clics pendant le chargement)
 			local root = mk("TextButton", { Name = "Root", Size = UDim2.fromScale(1, 1), BackgroundColor3 = BLACK,
 				BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, Active = true }, gui)
-			local content = mk("Frame", { Name = "Content", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromOffset(400, 430), BackgroundTransparency = 1 }, root)
-			local uiScale = mk("UIScale", { Scale = 1 }, content)
-			local CX, CY = 200, 150   -- centre du trou noir dans « content »
 
-			local function circle(d, props)
-				local f = mk("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(CX, CY),
-					Size = UDim2.fromOffset(d, d), BackgroundTransparency = 1, BorderSizePixel = 0 }, content)
-				for k, v in pairs(props or {}) do f[k] = v end
-				mk("UICorner", { CornerRadius = UDim.new(0.5, 0) }, f)
-				return f
-			end
-
-			-- anneaux : un reflet lumineux qui tourne le long du contour
-			local ringDefs = {
-				{ d = 112, th = 2.0, alpha = 0.90, spd = 150 },
-				{ d = 166, th = 1.5, alpha = 0.65, spd = -95 },
-				{ d = 228, th = 1.2, alpha = 0.45, spd = 60 },
-				{ d = 296, th = 1.0, alpha = 0.30, spd = -35 },
-			}
-			local rings = {}
-			for i, def in ipairs(ringDefs) do
-				local f = circle(def.d)
-				local st = mk("UIStroke", { Color = WHITE, Thickness = def.th, Transparency = 1,
-					ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, f)
-				local g = mk("UIGradient", { Rotation = i * 70, Transparency = NumberSequence.new({
-					NumberSequenceKeypoint.new(0, 0.92), NumberSequenceKeypoint.new(0.5, 0), NumberSequenceKeypoint.new(1, 0.92) }) }, st)
-				rings[i] = { f = f, st = st, g = g, def = def, rot = i * 70 }
-			end
-
-			local halo = circle(94)
-			local haloSt = mk("UIStroke", { Color = WHITE, Thickness = 7, Transparency = 1 }, halo)
-			local core = circle(70, { BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 1 })
-			local coreSt = mk("UIStroke", { Color = WHITE, Thickness = 2.5, Transparency = 1 }, core)
-
-			-- étoiles : spirale vers le centre, de plus en plus vite et de plus en plus étirées
-			local R0, RK = 150, 40
-			local rng = Random.new()
-			local parts = {}
-			local function respawn(p, first)
-				p.r = first and (RK + rng:NextNumber() * (R0 - RK)) or (R0 * (0.8 + rng:NextNumber() * 0.2))
-				p.th = rng:NextNumber() * math.pi * 2
-				p.v = rng:NextNumber() * 14
-				p.fade = first and 1 or 0
-			end
-			for i = 1, 52 do
-				local f = mk("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(2, 2),
-					BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0 }, content)
-				local p = { f = f }
-				respawn(p, true)
-				parts[i] = p
-			end
-
-			-- titre lettre par lettre
-			local TITLE = tostring(genv.UiLibIntroTitle or "INVINCIBLE")
-			local titleRow = mk("Frame", { Position = UDim2.fromOffset(0, 318), Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1 }, content)
-			mk("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Center,
-				VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 7), SortOrder = Enum.SortOrder.LayoutOrder }, titleRow)
-			local letters = {}
-			for _, cp in utf8.codes(string.upper(TITLE)) do
-				local ch = utf8.char(cp)
-				local n = #letters + 1
-				if ch == " " then
-					mk("Frame", { Size = UDim2.fromOffset(14, 2), BackgroundTransparency = 1, LayoutOrder = n }, titleRow)
-					letters[n] = false
-				else
-					letters[n] = mk("TextLabel", { Size = UDim2.fromOffset(0, 32), AutomaticSize = Enum.AutomaticSize.X,
-						BackgroundTransparency = 1, Text = ch, TextColor3 = WHITE, TextTransparency = 1, Font = FBOLD,
-						TextSize = 26, LayoutOrder = n }, titleRow)
+			-- phrases à écrire
+			local msgs = {}
+			do
+				local src = genv.UiLibIntroMessages or Library.IntroMessages
+				if type(src) == "string" then src = { src } end
+				if type(src) == "table" then
+					for _, s in ipairs(src) do msgs[#msgs + 1] = tostring(s) end
 				end
 			end
+			local msgOn = #msgs > 0 and Library.IntroHi ~= false and genv.UiLibIntroHi ~= false
 
-			local sub = mk("TextLabel", { Position = UDim2.fromOffset(0, 358), Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1,
-				Text = "", TextColor3 = GREY, TextTransparency = 1, Font = FREG, TextSize = 13 }, content)
-			local track = mk("Frame", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.fromOffset(200, 392), Size = UDim2.fromOffset(240, 3),
-				BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0 }, content)
-			mk("UICorner", { CornerRadius = UDim.new(0.5, 0) }, track)
-			local fill = mk("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0 }, track)
-			mk("UICorner", { CornerRadius = UDim.new(0.5, 0) }, fill)
-			local fillGrad = mk("UIGradient", { Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, GREY),
-				ColorSequenceKeypoint.new(0.5, Color3.new(1, 1, 1)), ColorSequenceKeypoint.new(1, GREY) }) }, fill)
-			local pct = mk("TextLabel", { Position = UDim2.fromOffset(0, 404), Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
-				Text = "0 %", TextColor3 = GREY, TextTransparency = 1, Font = FREG, TextSize = 11 }, content)
+			-- calendrier d'écriture de chaque phrase : instant d'apparition de chaque lettre (pause sur la ponctuation)
+			local sched = {}
+			for i, m in ipairs(msgs) do
+				local chars, times, acc = {}, {}, 0
+				for _, cp in utf8.codes(m) do
+					local ch = utf8.char(cp)
+					chars[#chars + 1] = ch
+					acc += (ch == " ") and 0.03 or 0.055
+					times[#times + 1] = acc
+					if ch == "," or ch == "." or ch == "!" or ch == "?" or ch == ":" then acc += 0.12 end
+				end
+				sched[i] = { chars = chars, times = times, dur = acc }
+			end
 
-			-- état
-			local I = { hold = false, force = false }
-			local state = "run"            -- run -> outro -> dead
-			local count, lastBuild, lastYield = 0, os.clock(), os.clock()
-			local t0 = os.clock()
-			local expected = tonumber(saved.total) or 0
-			if expected < 800 then expected = 4000 end
-			local disp, subBase, subA, lastPct = 0, "", 0, -1
-			local outroT0, shockDone = 0, false
-			local hb
+			local label = mk("TextLabel", { Name = "Msg", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.new(1, -40, 0, 100), BackgroundTransparency = 1, Text = "", TextColor3 = WHITE, Font = FBOLD,
+				TextSize = 44, TextWrapped = true, ZIndex = 10, Visible = msgOn }, root)
 
-			-- ===== moment « Hi. » : écran noir, interface Roblox masquée, « Hi. » + son au même instant =====
-			Library.HiSoundId = Library.HiSoundId or "130780071265356"
-			local HI_T = tonumber(Library.IntroHiTime) or 2.0
-			local hiOn = Library.IntroHi ~= false and genv.UiLibIntroHi ~= false and HI_T > 0
-			local hiDone, hiT0, hiTextT0 = not hiOn, os.clock(), nil
-			local hiLabel, hiScale, hiSnd, coreBackup
+			-- son de voix : un « blip » cloné à chaque 2e lettre, avec une hauteur au hasard (effet de quelqu'un qui parle)
+			local Debris = game:GetService("Debris")
+			local rng = Random.new()
+			local talkTpl
+			if msgOn and Library.TalkSound ~= false and tostring(Library.TalkSoundId or "") ~= "" then
+				pcall(function()
+					local id = tostring(Library.TalkSoundId)
+					if not string.find(id, "rbxassetid://", 1, true) and not string.find(id, "^https?://") then
+						id = "rbxassetid://" .. id
+					end
+					talkTpl = Instance.new("Sound")
+					talkTpl.Name = "Talk"
+					talkTpl.SoundId = id
+					talkTpl.Volume = tonumber(Library.TalkSoundVolume) or 0.6
+					talkTpl.Parent = gui
+					task.spawn(function() pcall(function() game:GetService("ContentProvider"):PreloadAsync({ talkTpl }) end) end)
+				end)
+			end
+			local function blip()
+				if not talkTpl then return end
+				pcall(function()
+					local s = talkTpl:Clone()
+					s.Pitch = (tonumber(Library.TalkSoundPitch) or 1) * (0.85 + rng:NextNumber() * 0.45)
+					s.Parent = gui
+					s:Play()
+					Debris:AddItem(s, 1.5)
+				end)
+			end
+
+			-- interface Roblox masquée pendant l'intro
+			local coreBackup
 			local StarterGui = game:GetService("StarterGui")
 			local function hideCore()
 				coreBackup = {}
@@ -680,69 +719,30 @@ do
 				coreBackup = nil
 				for ty, v in pairs(b) do pcall(StarterGui.SetCoreGuiEnabled, StarterGui, ty, v) end
 			end
-			if hiOn then
-				hiLabel = mk("TextLabel", { Name = "Hi", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-					Size = UDim2.fromOffset(400, 120), BackgroundTransparency = 1, Text = "Hi.", TextColor3 = WHITE,
-					TextTransparency = 1, Font = FBOLD, TextSize = 84, ZIndex = 10 }, root)
-				hiScale = mk("UIScale", { Scale = 0.9 }, hiLabel)
-				content.Visible = false
-				hideCore()
-				if Library.HiSound ~= false then
-					pcall(function()
-						hiSnd = Instance.new("Sound")
-						hiSnd.Name = "Hi"
-						hiSnd.SoundId = "rbxassetid://" .. tostring(Library.HiSoundId)
-						hiSnd.Volume = tonumber(Library.HiSoundVolume) or 1
-						hiSnd.Parent = gui
-						task.spawn(function() pcall(function() game:GetService("ContentProvider"):PreloadAsync({ hiSnd }) end) end)
-					end)
-				end
-			end
-			local function hiEase(a) return 1 - (1 - a) ^ 3 end
-			-- renvoie true tant que le « Hi. » est à l'écran (le reste de l'intro attend)
-			local function hiStep(now)
-				local ht = now - hiT0
-				root.Active = true
-				root.BackgroundTransparency = 1 - hiEase(math.min(ht / 0.35, 1))
-				if not hiTextT0 then
-					-- le texte et le son démarrent ensemble : dès que le son est chargé (ou après 1 s, au cas où il ne charge pas)
-					local ready = (not hiSnd) or hiSnd.IsLoaded or ht > 1.0
-					if ht >= 0.35 and ready then
-						hiTextT0 = now
-						if hiSnd then pcall(function() hiSnd:Play() end) end
-					end
-				end
-				local over = ht > 8 or (I.force and Library.Window ~= nil)
-				if hiTextT0 and not over then
-					local tt = now - hiTextT0
-					local a = hiEase(math.clamp(tt / 0.35, 0, 1))
-					local fo = 1 - math.clamp((tt - (HI_T - 0.4)) / 0.4, 0, 1)
-					hiLabel.TextTransparency = 1 - a * fo
-					hiScale.Scale = 0.9 + 0.1 * a + 0.04 * math.clamp(tt / HI_T, 0, 1)
-					over = tt >= HI_T
-				end
-				if over then
-					hiDone = true
-					restoreCore()
-					content.Visible = true
-					pcall(function() hiLabel:Destroy() end)
-					root.BackgroundTransparency = 0
-					return false
-				end
-				return true
-			end
+			if msgOn then hideCore() end
+
+			-- état
+			local I = { hold = false, force = false }
+			local state = "msg"            -- msg -> outro -> dead
+			local lastBuild, lastYield = os.clock(), os.clock()
+			local t0 = os.clock()
+			local outroT0 = 0
+			local hb
+			local idx = 1
+			local phase = msgOn and "fade" or "wait"   -- fade -> type -> hold -> fling -> gap -> type ... -> wait (sans phrases)
+			local phT0 = t0
+			local shown, talkCount = 0, 0
 
 			Library._intro = I
 			Library.IntroActive = true
 
-			-- appelé par new() à chaque élément créé : compte + laisse le rendu respirer
+			-- appelé par new() à chaque élément créé : laisse le rendu respirer
 			local isY = coroutine.isyieldable
 			function I.tick()
-				count += 1
 				local now = os.clock()
 				lastBuild = now
 				-- jamais pendant CreateWindow (fenêtre à moitié construite) : seulement une fois Library.Window posée
-				if state == "run" and Library.Window ~= nil and Library.IntroYield ~= false and now - lastYield > 0.022 then
+				if state == "msg" and Library.Window ~= nil and Library.IntroYield ~= false and now - lastYield > 0.022 then
 					if isY then
 						if isY() then task.wait() end
 					else
@@ -773,166 +773,112 @@ do
 
 			root.MouseButton1Click:Connect(function() I.force = true end)
 
-			local function phaseText(p, ready)
-				if ready then return "Prêt" end
-				if p < 0.2 then return "Initialisation" end
-				if p < 0.6 then return "Construction de l'interface" end
-				if p < 0.9 then return "Chargement des onglets" end
-				return "Dernières retouches"
-			end
-
-			local function spawnShock(delay, thick)
-				task.delay(delay, function()
-					if state == "dead" then return end
-					local f = circle(70)
-					f.ZIndex = 5
-					local st = mk("UIStroke", { Color = WHITE, Thickness = thick, Transparency = 0.1 }, f)
-					TweenService:Create(f, TweenInfo.new(1.0, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
-						{ Size = UDim2.fromOffset(2200, 2200) }):Play()
-					TweenService:Create(st, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-						{ Transparency = 1 }):Play()
-				end)
-			end
-
 			local function ease3(a) return 1 - (1 - a) ^ 3 end
 
-			local last = os.clock()
+			-- le script a-t-il fini de charger ? (fenêtre créée, plus rien de construit depuis un moment)
+			local function loadingReady(now)
+				local winOk = Library.Window ~= nil
+				local quiet = now - lastBuild
+				local t = now - t0
+				local done = winOk and quiet >= 0.7 and not I.hold
+				if I.force and winOk then done = true end
+				if t > 60 or (not winOk and quiet > 12 and t > 6) then done = true end   -- sécurité : ne jamais rester bloqué
+				return done
+			end
+
+			local function startOutro(now)
+				state = "outro"
+				outroT0 = now
+				label.Visible = false
+				restoreCore()
+				revealWindow()
+			end
+
 			local function step()
 				local now = os.clock()
-				local dt = math.min(now - last, 0.1)
-				last = now
-				if not hiDone then
-					if hiStep(now) then return end
-					t0 = now   -- la suite de l'intro repart de zéro après le « Hi. »
-				end
-				local t = now - t0
-
 				local ab = root.AbsoluteSize
-				uiScale.Scale = math.clamp(math.min(ab.X / 560, ab.Y / 560), 0.55, 1.35)
+				label.TextSize = math.clamp(math.floor(ab.X / 20), 26, 52)
 
-				-- fin de chargement ?
-				local u = 0
-				if state == "run" then
-					local winOk = Library.Window ~= nil
-					local quiet = now - lastBuild
-					local done = winOk and quiet >= 0.7 and t >= (hiOn and math.max(1.2, (Library.IntroMinTime or 2.2) - 1.0) or (Library.IntroMinTime or 2.2)) and not I.hold
-					if I.force and winOk then done = true end
-					if t > 60 or (not winOk and quiet > 12 and t > 6) then done = true end   -- sécurité : ne jamais rester bloqué
-					local target = 0.92 * (1 - math.exp(-2.6 * count / expected))
-					target = math.max(target, math.min(0.25, t * 0.06))
-					if winOk then target = math.max(target, 0.8) end
-					if done then target = 1 end
-					if target > disp then disp = disp + (target - disp) * math.min(1, dt * 5) end
-					if done and disp > 0.985 then
-						state = "outro"
-						outroT0 = now
-						disp = 1
-						saved.total = count
-						if count > 300 then writeIntro() end
+				if state == "outro" then
+					local u = now - outroT0
+					root.Active = u < 0.3
+					root.BackgroundTransparency = ease3(math.clamp(u / 0.5, 0, 1))
+					if u >= 0.65 then I.destroy() end
+					return
+				end
+
+				-- fondu d'entrée vers le noir
+				local ft = now - t0
+				root.BackgroundTransparency = 1 - ease3(math.min(ft / 0.35, 1))
+				root.Active = true
+
+				-- clic pour passer (dès que la fenêtre existe)
+				if I.force and Library.Window ~= nil then startOutro(now) return end
+
+				if phase == "fade" then
+					-- on attend que le noir soit là (et que le son soit chargé, ou 1,2 s au plus) avant de commencer à parler
+					local soundReady = (not talkTpl) or talkTpl.IsLoaded or ft > 1.2
+					if ft >= 0.35 and soundReady then
+						phase, phT0, shown, talkCount = "type", now, 0, 0
+						label.Text = ""
 					end
-				else
-					u = now - outroT0
-				end
 
-				-- opacités globales
-				local textA, fxA = 1, math.min(t / 0.7, 1)
-				fxA = ease3(fxA)
-				local rootTr = hiOn and 0 or (1 - ease3(math.min(t / 0.45, 1)))
-				if state == "outro" then
-					textA = 1 - math.min(u / 0.3, 1)
-					fxA = 1 - ease3(math.clamp((u - 0.7) / 0.5, 0, 1))
-					rootTr = ease3(math.clamp((u - 0.55) / 0.6, 0, 1))
-					root.Active = u < 0.9
-				end
-				root.BackgroundTransparency = rootTr
+				elseif phase == "type" then
+					local sc = sched[idx]
+					local tt = now - phT0
+					local n = 0
+					for k = 1, #sc.times do
+						if sc.times[k] <= tt then n = k else break end
+					end
+					if n ~= shown then
+						local doBlip = false
+						for k = shown + 1, n do
+							if sc.chars[k] ~= " " then
+								talkCount += 1
+								if talkCount % 2 == 1 then doBlip = true end
+							end
+						end
+						shown = n
+						label.Text = table.concat(sc.chars, "", 1, n)
+						if doBlip then blip() end
+					end
+					if tt >= sc.dur then phase, phT0 = "hold", now end
 
-				-- anneaux
-				local sRing = 1
-				if state == "outro" then
-					local a = math.min(u / 0.55, 1)
-					sRing = 1 - a * a * a
-				end
-				for i, rg in ipairs(rings) do
-					rg.rot = (rg.rot + rg.def.spd * dt) % 360
-					rg.g.Rotation = rg.rot
-					local d = rg.def.d * sRing * (1 + 0.012 * math.sin(t * 2 + i))
-					rg.f.Size = UDim2.fromOffset(d, d)
-					rg.st.Transparency = 1 - fxA * rg.def.alpha
-				end
-
-				-- cœur
-				local coreS = 1
-				if state == "outro" then
-					if u < 0.55 then
-						local a = u / 0.55
-						coreS = 1 + 0.4 * a * a
+				elseif phase == "hold" then
+					local held = now - phT0
+					if idx < #msgs then
+						if held >= (Library.IntroHoldTime or 0.75) then phase, phT0 = "fling", now end
 					else
-						coreS = 1.4 * (1 - ease3(math.min((u - 0.55) / 0.45, 1)))
+						-- dernière phrase : on la garde jusqu'à la fin du chargement du script
+						if held >= (Library.IntroLastHold or 1.0) and loadingReady(now) then phase, phT0 = "fling", now end
 					end
-				end
-				local br = 1 + 0.035 * math.sin(t * 3.2)
-				local cd = 70 * coreS * br
-				core.Size = UDim2.fromOffset(cd, cd)
-				core.BackgroundTransparency = 1 - fxA
-				coreSt.Transparency = 1 - fxA
-				local hd = 94 * coreS * (1 + 0.06 * math.sin(t * 3.2 + 1))
-				halo.Size = UDim2.fromOffset(hd, hd)
-				haloSt.Transparency = 1 - fxA * (0.16 + 0.1 * math.sin(t * 3.2))
 
-				-- ondes de choc
-				if state == "outro" and not shockDone and u >= 0.55 then
-					shockDone = true
-					revealWindow()
-					spawnShock(0, 3)
-					spawnShock(0.16, 1.5)
-				end
-
-				-- étoiles
-				for _, p in ipairs(parts) do
-					local rn = math.clamp(p.r / R0, 0, 1)
-					local q = 1 - rn
-					local w = 0.45 + 3.0 * q ^ 1.7
-					if state == "outro" then
-						p.r = p.r * math.exp(-dt * (2.5 + u * 12))
-					else
-						p.r = p.r - (5 + p.v + 62 * q ^ 1.25) * dt
-						if p.r < RK then respawn(p, false) end
+				elseif phase == "fling" then
+					-- pas de fondu : le texte part en accélérant vers la gauche, en tournant, et sort de l'écran
+					local a = math.clamp((now - phT0) / (Library.IntroFlingTime or 0.5), 0, 1)
+					local e = a ^ 2.2
+					label.Position = UDim2.new(0.5, -e * (ab.X * 0.5 + 600), 0.5, -e * 50)
+					label.Rotation = -24 * e
+					if a >= 1 then
+						label.Text = ""
+						label.Position = UDim2.fromScale(0.5, 0.5)
+						label.Rotation = 0
+						if idx >= #msgs then
+							startOutro(now)
+						else
+							idx += 1
+							phase, phT0 = "gap", now
+						end
 					end
-					p.th = p.th + w * dt
-					local r = p.r
-					q = 1 - math.clamp(r / R0, 0, 1)
-					p.fade = math.min(p.fade + dt * 1.6, 1)
-					local a = p.fade * math.clamp((r - RK) / 22, 0, 1) * fxA * 0.9
-					p.f.BackgroundTransparency = 1 - a
-					p.f.Size = UDim2.fromOffset(2 + 10 * q ^ 1.4, 2)
-					p.f.Rotation = math.deg(p.th) + 90
-					p.f.Position = UDim2.fromOffset(CX + math.cos(p.th) * r, CY + math.sin(p.th) * r)
-				end
 
-				-- titre
-				for i, l in ipairs(letters) do
-					if l then
-						local a = math.clamp((t - 0.45 - i * 0.06) / 0.5, 0, 1)
-						local wave = 0.12 + 0.38 * (0.5 + 0.5 * math.sin(t * 2.6 - i * 0.6))
-						l.TextTransparency = 1 - a * (1 - wave) * textA
+				elseif phase == "gap" then
+					if now - phT0 >= 0.15 then
+						phase, phT0, shown, talkCount = "type", now, 0, 0
 					end
+
+				else -- "wait" : aucune phrase à écrire, on attend simplement la fin du chargement
+					if ft >= 0.5 and loadingReady(now) then startOutro(now) end
 				end
-
-				-- état + barre
-				local want = phaseText(disp, state == "outro")
-				if want ~= subBase then subBase = want subA = 0 end
-				subA = math.min(subA + dt * 3.5, 1)
-				sub.Text = subBase .. "…"
-				sub.TextTransparency = 1 - 0.75 * subA * textA * math.clamp((t - 0.6) / 0.4, 0, 1)
-				track.BackgroundTransparency = 1 - 0.14 * textA * math.clamp((t - 0.5) / 0.4, 0, 1)
-				fill.BackgroundTransparency = 1 - textA * math.clamp((t - 0.5) / 0.4, 0, 1)
-				fill.Size = UDim2.new(math.clamp(disp, 0, 1), 0, 1, 0)
-				fillGrad.Offset = Vector2.new((t * 0.9) % 2 - 1, 0)
-				local pc = math.floor(disp * 100 + 0.5)
-				if pc ~= lastPct then lastPct = pc pct.Text = pc .. " %" end
-				pct.TextTransparency = 1 - 0.6 * textA * math.clamp((t - 0.6) / 0.4, 0, 1)
-
-				if state == "outro" and u >= 1.9 then I.destroy() end
 			end
 
 			hb = RunService.Heartbeat:Connect(function()
@@ -947,7 +893,7 @@ do
 			-- sans ça le script synchrone occuperait tout et le premier affichage arriverait en retard, sans fondu d'entrée
 			if Library.IntroYield ~= false and (not isY or isY()) then
 				local w0 = os.clock()
-				while state == "run" and os.clock() - w0 < 0.5 do task.wait() end
+				while state == "msg" and os.clock() - w0 < 0.5 do task.wait() end
 				lastYield = os.clock()
 			end
 		end)
@@ -1816,12 +1762,56 @@ Library._ptrAuto = function()
 end
 Library._ptrCorrect = function()
 	local man = Library.PointerOffset   -- réglage manuel facultatif (Paramètres > Fenêtre)
-	return Vector2.new(man and man.X or 0, (man and man.Y or 0) + Library._ptrAuto())
+	-- Library._ptrLearned : décalage CONSTATÉ par un vrai clic (voir _ptrCheck) ; sinon la mesure de _ptrAuto
+	return Vector2.new(man and man.X or 0, (man and man.Y or 0) + (Library._ptrLearned ~= nil and Library._ptrLearned or Library._ptrAuto()))
 end
 
-Library._ptrCheck = function() end
+-- V9.6 — CURSEUR DÉCALÉ (~58 px : barre du haut de Roblox) : test sur un VRAI clic. À l'appui sur un élément, le pointeur est forcément
+-- DANS son rectangle. Si la position corrigée actuelle n'y est pas, on essaie quelques décalages connus (0, 36, 58, l'inset du moteur,
+-- et leurs opposés) : si UN SEUL place le pointeur dans le rectangle, et que ça se répète à 2 clics de suite, il devient la correction
+-- (Library._ptrLearned). Aucun fichier, aucune supposition : un clic cohérent remet toujours le décalage à jour.
+-- Appelé à chaque appui sur une ligne / un bouton (hover) et sur le color picker. Souris seulement (le tactile a sa propre règle).
+Library._ptrVotesN = { d = nil, n = 0 }
+Library._ptrCheck = function(obj)
+	local okT, last = pcall(function() return UIS:GetLastInputType() end)
+	if okT and last == Enum.UserInputType.Touch then return end
+	if not (typeof(obj) == "Instance" and obj:IsA("GuiObject") and obj.Parent) then return end
+	local ap, as = obj.AbsolutePosition, obj.AbsoluteSize
+	if as.X < 4 or as.Y < 4 then return end
+	local man = Library.PointerOffset
+	local mx, my = man and man.X or 0, man and man.Y or 0
+	local M = UIS:GetMouseLocation()
+	local function inside(d)
+		local x, y = M.X - mx, M.Y - my - d
+		return x >= ap.X - 1 and x <= ap.X + as.X + 1 and y >= ap.Y - 1 and y <= ap.Y + as.Y + 1
+	end
+	local V = Library._ptrVotesN
+	local cur = Library._ptrLearned ~= nil and Library._ptrLearned or Library._ptrAuto()
+	if inside(cur) then V.d, V.n = nil, 0 return end   -- le pointeur corrigé est bien dans l'élément : rien à changer
+	local cands, seen = { 0, 36, 58, -36, -58 }, { [0] = true, [36] = true, [58] = true, [-36] = true, [-58] = true }
+	local ins = guiInset().Y
+	for _, d in ipairs({ ins, -ins }) do
+		if d ~= 0 and not seen[d] then seen[d] = true cands[#cands + 1] = d end
+	end
+	local fit
+	for _, d in ipairs(cands) do
+		if d ~= cur and inside(d) then
+			if fit ~= nil then V.d, V.n = nil, 0 return end   -- plusieurs décalages possibles (élément trop haut) : on ne conclut pas
+			fit = d
+		end
+	end
+	if fit == nil then V.d, V.n = nil, 0 return end
+	if V.d == fit then V.n += 1 else V.d, V.n = fit, 1 end
+	if V.n >= 2 then
+		Library._ptrLearned = fit
+		V.d, V.n = nil, 0
+		Library._ptrCache.t = -1
+	end
+end
 Library._ptrVote = function() end
 function Library:ResetPointerCalibration()
+	Library._ptrLearned = nil
+	Library._ptrVotesN.d, Library._ptrVotesN.n = nil, 0
 	Library._ptrCache.t = -1
 	Library._ptrLoad()
 end
@@ -2485,6 +2475,9 @@ end
 -- Effet de survol fluide sur une ligne
 local function hover(f, st, hit)
 	hit = hit or f
+	hit.InputBegan:Connect(function(i)   -- un vrai clic sur cet élément : sert à vérifier / corriger le décalage du curseur
+		if i.UserInputType == Enum.UserInputType.MouseButton1 then pcall(Library._ptrCheck, hit) end
+	end)
 	hit.MouseEnter:Connect(function()
 		uiSnd("hover")
 		tween(f, { BackgroundTransparency = Sty.RowHot }, 0.2)
@@ -6254,7 +6247,57 @@ function Block:CreateButton(o)
 	b.InputBegan:Connect(function(i) if isPress(i) then Library._ptrVote(b) end end)   -- calibrage du pointeur
 	local armed, armToken = false, 0
 	local baseText = o.Name or "Button"
+	-- V9.7 : Cooldown = secondes. Après un clic accepté, le bouton se grise, une barre de progression se vide et les clics sont
+	-- ignorés jusqu'à la fin. CooldownText = false cache le compte à rebours dans le texte. item.IsCooling() · item.GetCooldown()
+	-- (secondes restantes) · item.SetCooldown(n) (durée des prochains cooldowns) · item.ResetCooldown() (coupe le cooldown en cours).
+	local cdTotal, cdUntil, cdConn, cdTrack = math.max(tonumber(o.Cooldown) or 0, 0), 0, nil, false
+	local cdTrackBar, cdFillBar
+	local function cdLeft() return math.max(cdUntil - os.clock(), 0) end
+	local function cdEnd()
+		cdUntil = 0
+		if cdConn then cdConn:Disconnect() cdConn = nil end
+		if cdTrackBar then cdTrackBar.Visible = false end
+		if b.Parent then
+			b.Text = baseText
+			tween(b, { TextTransparency = 0 }, 0.25)
+		end
+	end
+	local function cdStart(sec)
+		if not sec or sec <= 0 then return end
+		cdUntil = os.clock() + sec
+		if not cdTrackBar then
+			cdTrackBar = new("Frame", { Name = "CooldownBar", AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 8, 1, -5),
+				Size = UDim2.new(1, -16, 0, 3), BackgroundColor3 = T.Off, BackgroundTransparency = 0.3, BorderSizePixel = 0,
+				ZIndex = 3 }, b)
+			corner(cdTrackBar, 2)
+			cdFillBar = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Accent, BorderSizePixel = 0, ZIndex = 4 }, cdTrackBar)
+			corner(cdFillBar, 2)
+		end
+		cdFillBar.Size = UDim2.fromScale(1, 1)
+		cdTrackBar.Visible = true
+		tween(b, { TextTransparency = 0.55 }, 0.2)
+		if not cdTrack then   -- une seule fois par bouton : nettoyé à la fermeture de l'UI
+			cdTrack = true
+			track({ Disconnect = function() if cdConn then cdConn:Disconnect() cdConn = nil end end })
+		end
+		if cdConn then cdConn:Disconnect() end
+		local lastShown = -1
+		cdConn = RunService.Heartbeat:Connect(function()
+			if not b.Parent then cdEnd() return end
+			local left = cdLeft()
+			if left <= 0 then cdEnd() return end
+			cdFillBar.Size = UDim2.fromScale(math.clamp(left / sec, 0, 1), 1)
+			if o.CooldownText ~= false then
+				local t10 = math.ceil(left * 10)
+				if t10 ~= lastShown then   -- texte mis à jour seulement quand le dixième change
+					lastShown = t10
+					b.Text = string.format("%s  ·  %.1fs", baseText, t10 / 10)
+				end
+			end
+		end)
+	end
 	b.MouseButton1Click:Connect(function()
+		if cdLeft() > 0 then return end   -- cooldown en cours : le clic est ignoré
 		if o.Confirm then
 			if not armed then
 				armed = true
@@ -6283,9 +6326,17 @@ function Block:CreateButton(o)
 		b.TextColor3 = T.Main
 		tween(b, { BackgroundColor3 = T.Element, BackgroundTransparency = Sty.RowTr, TextColor3 = T.Text }, 0.5)
 		fire(o.Callback)
+		cdStart(cdTotal)
 	end)
 	local item = {}
-	item.SetText = function(...) b.Text = tostring((unself(item, ...))) end
+	item.SetText = function(...)
+		baseText = tostring((unself(item, ...)))
+		if cdLeft() <= 0 then b.Text = baseText end
+	end
+	item.IsCooling = function() return cdLeft() > 0 end
+	item.GetCooldown = function() return cdLeft() end
+	item.SetCooldown = function(...) cdTotal = math.max(tonumber((unself(item, ...))) or 0, 0) end
+	item.ResetCooldown = function() if cdLeft() > 0 then cdEnd() end end
 	item.Instance = b
 	return item
 end
@@ -6695,17 +6746,143 @@ function Block:CreateToggle(o)
 		end
 		toggleSkins = keep
 	end
+	-- ---- V9.6 : boucle intégrée (Loop) + bascule directe sur une propriété (Bind) ----------------------------------------
+	--   Loop = function(dt, item) ... end : tourne à chaque image TANT QUE le toggle est activé, et se coupe toute seule à la
+	--     désactivation / à la destruction de l'UI (plus de RunService à gérer à la main). LoopEvent = "Heartbeat" (défaut) |
+	--     "RenderStepped" | "Stepped" | "PreSimulation" ... · LoopInterval = secondes entre deux appels (défaut : chaque image).
+	--   Bind = { Target = instance | function() return instance end | "Lighting", Property = "WalkSpeed", On = 50, Off = 16 }
+	--     (ou une liste de ces tables). Off absent = la valeur d'origine est rétablie. On absent = true. On / Off peuvent être des
+	--     fonctions. Keep = true : la valeur est ré-imposée si le jeu la change. Les propriétés sont rétablies à la fermeture de l'UI.
+	local item   -- déclaré ici : la boucle le passe à Loop(dt, item) (assigné plus bas)
+	local loopConn, loopAcc, loopErr = nil, 0, false
+	local binds, bindOrig, bindAcc = nil, {}, 0
+	do
+		local b = o.Bind
+		if type(b) == "table" then
+			binds = (b.Property ~= nil or b.Properties ~= nil or b.Target ~= nil) and { b } or b
+		end
+	end
+	local function bindTarget(b)
+		local t = b.Target
+		if type(t) == "function" then
+			local ok, r = pcall(t)
+			t = ok and r or nil
+		elseif type(t) == "string" then
+			local ok, r = pcall(function() return game:GetService(t) end)
+			t = ok and r or game:FindFirstChild(t, true)
+		end
+		return (typeof(t) == "Instance") and t or nil
+	end
+	local function bindVal(v, fallback)
+		if type(v) == "function" then
+			local ok, r = pcall(v)
+			return ok and r or fallback
+		end
+		if v == nil then return fallback end
+		return v
+	end
+	local function bindEach(fn)
+		if not binds then return end
+		for bi, b in ipairs(binds) do
+			local props = {}
+			if b.Properties then
+				for pn, pv in pairs(b.Properties) do
+					if type(pv) == "table" then props[#props + 1] = { pn, pv.On, pv.Off } else props[#props + 1] = { pn, pv, nil } end
+				end
+			elseif b.Property then
+				props[1] = { b.Property, b.On, b.Off }
+			end
+			local inst = bindTarget(b)
+			if inst then
+				for _, pr in ipairs(props) do fn(bi, b, inst, pr[1], pr[2], pr[3]) end
+			end
+		end
+	end
+	local function bindApply(on, force)
+		bindEach(function(bi, b, inst, prop, onV, offV)
+			local key = bi .. "|" .. prop
+			local ok, cur = pcall(function() return inst[prop] end)
+			if not ok then return end
+			local rec = bindOrig[key]
+			if on then
+				if not rec or rec.Inst ~= inst then bindOrig[key] = { Inst = inst, Val = cur } end
+				local want = bindVal(onV, true)
+				if force or cur ~= want then pcall(function() inst[prop] = want end) end
+			else
+				if rec then
+					local back
+					if offV ~= nil then back = bindVal(offV, rec.Val) else back = rec.Val end
+					if rec.Inst ~= inst then rec.Inst = inst end
+					if force or cur ~= back then pcall(function() inst[prop] = back end) end
+					if offV == nil then bindOrig[key] = nil end
+				elseif offV ~= nil then
+					local back = bindVal(offV, cur)
+					if cur ~= back then pcall(function() inst[prop] = back end) end
+				end
+			end
+		end)
+	end
+	local function stopLoop()
+		if loopConn then pcall(function() loopConn:Disconnect() end) loopConn = nil end
+	end
+	local function startLoop()
+		if loopConn or type(o.Loop) ~= "function" then return end
+		local evName = tostring(o.LoopEvent or "Heartbeat")
+		local okE, ev = pcall(function() return RunService[evName] end)
+		if not okE or typeof(ev) ~= "RBXScriptSignal" then ev, evName = RunService.Heartbeat, "Heartbeat" end
+		local every = tonumber(o.LoopInterval) or 0
+		loopAcc, loopErr = 0, false
+		loopConn = ev:Connect(function(a, b2)
+			local dt = (evName == "Stepped") and b2 or a   -- Stepped(temps, dt) · les autres : (dt)
+			if type(dt) ~= "number" then dt = 1 / 60 end
+			if not f.Parent then stopLoop() return end
+			if every > 0 then
+				loopAcc += dt
+				if loopAcc < every then return end
+				dt, loopAcc = loopAcc, 0
+			end
+			local ok, err = pcall(o.Loop, dt, item)
+			if not ok and not loopErr then
+				loopErr = true
+				warn("[Ui-Lib] Loop de « " .. tostring(o.Name) .. " » : " .. tostring(err))
+			end
+		end)
+	end
+	local function syncAuto(v)
+		if type(o.Loop) == "function" then
+			if v then startLoop() else stopLoop() end
+		end
+		if binds then bindApply(v, true) end
+	end
 	local function apply(v, silent)
 		if keyMode == "Always" then v = true end
 		state = v
 		if o.Flag then Library.Flags[o.Flag] = v end
 		paint(v)
+		syncAuto(v)
 		if Library._hudRefresh then Library._hudRefresh() end
 		if not silent then fire(o.Callback, v) end
 	end
-	local item = {}
+	item = {}
 	item.Set = function(...) apply((unself(item, ...)) and true or false) end
 	item.Get = function() return state end
+	item.IsLooping = function() return loopConn ~= nil end
+	if type(o.Loop) == "function" or binds then
+		-- nettoyage à la fermeture de l'UI (Library:Destroy) : boucle coupée, propriétés rétablies
+		track({ Disconnect = function()
+			stopLoop()
+			if binds and state then pcall(bindApply, false, true) end
+		end })
+		if binds and o.Keep then
+			track(RunService.Heartbeat:Connect(function(dt)
+				if not state or not f.Parent then return end
+				bindAcc += dt
+				if bindAcc < 0.2 then return end
+				bindAcc = 0
+				bindApply(true, false)
+			end))
+		end
+	end
 	f.ClipsDescendants = true
 	btn.MouseButton1Click:Connect(function() ripple(f) apply(not state) uiSnd(state and "on" or "off") end)
 
@@ -6863,6 +7040,7 @@ function Block:CreateToggle(o)
 	skin()
 	register(o.Flag, item, state)
 	if keyMode == "Always" then apply(true, true) end
+	if state then syncAuto(true) end   -- Default = true : la boucle / la propriété démarrent tout de suite
 	if Library.FireDefaults then fire(o.Callback, state) end
 	return item
 end
@@ -7521,13 +7699,35 @@ function Block:CreateDropdown(o)
 	o = o or {}
 	local multi = (o.Multi == true) or (o.MultiSelect == true) or (o.MultipleOptions == true)
 	local items = {}
+	-- V9.6 : une option peut être une table { Name = "Pistolet", Icon = "rbxassetid://...", Desc = "Dégâts : 20", Color = Color3 }
+	-- (Icon : image à gauche · Desc : petite ligne grise sous le nom · Color : teinte du nom). Les chaînes simples marchent comme avant.
+	local meta = {}   -- [texte de l'option] = { Icon, Desc, Color }
+	local function itemText(v)
+		if type(v) == "table" then
+			local t = v.Name or v.Text or v.Label or v.Value or v[1]
+			t = tostring(t)
+			local ic = v.Icon or v.Image
+			if type(ic) == "number" then ic = "rbxassetid://" .. ic end
+			local col = v.Color
+			if typeof(col) ~= "Color3" then col = nil end
+			local ds = v.Desc or v.Description
+			if ic or ds or col then
+				meta[t] = { Icon = ic and tostring(ic) or nil, Desc = ds ~= nil and tostring(ds) or nil, Color = col }
+			else
+				meta[t] = nil
+			end
+			return t
+		end
+		return tostring(v)
+	end
 	do
 		local seen = {}
 		for _, v in ipairs(o.Items or o.Options or {}) do
-			local t = tostring(v)
+			local t = itemText(v)
 			if not seen[t] then seen[t] = true items[#items + 1] = t end
 		end
 	end
+	local function rowH(text) return (meta[text] and meta[text].Desc) and 40 or 26 end
 
 	local selected, selSet = nil, {}
 	do
@@ -7752,7 +7952,8 @@ function Block:CreateDropdown(o)
 			local on = isOn(text)
 			if b.On ~= on then
 				b.On = on
-				tween(b.Btn, { BackgroundTransparency = on and 0.86 or 1, TextColor3 = on and T.Accent or T.ElementAccent }, 0.18)
+				local mc = meta[text] and meta[text].Color
+				tween(b.Btn, { BackgroundTransparency = on and 0.86 or 1, TextColor3 = mc or (on and T.Accent or T.ElementAccent) }, 0.18)
 				tween(b.Ind, { BackgroundTransparency = on and 0 or 1 }, 0.18)
 			end
 		end
@@ -7760,12 +7961,13 @@ function Block:CreateDropdown(o)
 
 	layout = function()
 		local q = string.lower(search.Text)
-		local count = 0
+		local count, totalH = 0, 0
 		for idx, text in ipairs(items) do
 			local b = btns[text]
 			if b then
 				local vis = q == "" or string.find(string.lower(text), q, 1, true) ~= nil
-				if vis then count = count + 1 end
+					or (meta[text] and meta[text].Desc and string.find(string.lower(meta[text].Desc), q, 1, true) ~= nil)
+				if vis then count = count + 1 totalH = totalH + b.H end
 				-- apparition / disparition fluide : la ligne grandit en se révélant, ou se replie en s'effaçant
 				if b.Shown ~= vis then
 					b.Shown = vis
@@ -7774,12 +7976,12 @@ function Block:CreateDropdown(o)
 					if vis then
 						row.Visible = true
 						if firstLayout then
-							row.Size = UDim2.new(1, 0, 0, 26)
+							row.Size = UDim2.new(1, 0, 0, b.H)
 							btn.TextTransparency = 0
 						else
 							row.Size = UDim2.new(1, 0, 0, 0)
 							btn.TextTransparency = 1
-							tween(row, { Size = UDim2.new(1, 0, 0, 26) }, 0.28)
+							tween(row, { Size = UDim2.new(1, 0, 0, b.H) }, 0.28)
 							tween(btn, { TextTransparency = 0 }, 0.22)
 						end
 					else
@@ -7797,7 +7999,7 @@ function Block:CreateDropdown(o)
 		local showSearch = (o.Search == true) or (o.Search ~= false and #items >= 7)
 		search.Visible = showSearch
 		local sh = showSearch and 36 or 0
-		local lh = math.clamp(math.max(count, 1) * 26 + 8, 34, 150)
+		local lh = math.clamp(math.max(totalH, 26) + 8, 34, 150)
 		list.Position = UDim2.new(0, 0, 0, sh)
 		tween(list, { Size = UDim2.new(1, 0, 0, lh) }, 0.28)
 		tween(panel, { Size = UDim2.new(1, 0, 0, sh + lh) }, 0.28)
@@ -7814,15 +8016,29 @@ function Block:CreateDropdown(o)
 			label(list, "(vide)", 12, { Size = UDim2.new(1, 0, 0, 24), TextColor3 = T.ElementAccent, TextXAlignment = CENTER })
 		end
 		for idx, text in ipairs(items) do
-			local row = new("Frame", { Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1,
+			local mt = meta[text]
+			local rh = rowH(text)
+			local row = new("Frame", { Size = UDim2.new(1, 0, 0, rh), BackgroundTransparency = 1,
 				BorderSizePixel = 0, LayoutOrder = idx, ClipsDescendants = true }, list)
 			local b = new("TextButton", {
-				Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
-				Text = text, TextColor3 = T.ElementAccent, TextSize = 12, Font = F_REG,
+				Size = UDim2.new(1, 0, 0, rh - 2), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
+				Text = text, TextColor3 = (mt and mt.Color) or T.ElementAccent, TextSize = 12, Font = F_REG,
 				TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd,
+				TextYAlignment = (mt and mt.Desc) and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center,
 				AutoButtonColor = false, BorderSizePixel = 0, ClipsDescendants = true,
 			}, row)
-			local pad = new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 26) }, b)
+			local pad = new("UIPadding", { PaddingLeft = UDim.new(0, mt and mt.Icon and 34 or 10), PaddingRight = UDim.new(0, 26),
+				PaddingTop = UDim.new(0, (mt and mt.Desc) and 4 or 0) }, b)
+			if mt and mt.Icon then   -- icône : posée dans la marge gauche (le padding décale aussi les enfants, d'où le -24)
+				new("ImageLabel", { Name = "Icon", BackgroundTransparency = 1, Image = mt.Icon, ScaleType = Enum.ScaleType.Fit,
+					AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, -24, (mt.Desc and 0.5 or 0.5), (mt.Desc and -2 or 0)),
+					Size = UDim2.fromOffset(18, 18), ImageColor3 = mt.Color or Color3.new(1, 1, 1) }, b)
+			end
+			if mt and mt.Desc then   -- description : petite ligne atténuée sous le nom
+				new("TextLabel", { Name = "Desc", BackgroundTransparency = 1, Text = mt.Desc, TextSize = 10, Font = F_REG,
+					TextColor3 = T.ElementAccent, TextTransparency = 0.35, TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd,
+					Position = UDim2.new(0, 0, 0, 15), Size = UDim2.new(1, 0, 0, 14), BorderSizePixel = 0 }, b)
+			end
 			new("UICorner", { CornerRadius = UDim.new(0, 5) }, b)
 			local ind
 			if multi then
@@ -7843,7 +8059,7 @@ function Block:CreateDropdown(o)
 				Visible = false, BorderSizePixel = 0 }, b)
 			new("UICorner", { CornerRadius = UDim.new(0, 4) }, tag)
 			new("UIPadding", { PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5) }, tag)
-			btns[text] = { Btn = b, Row = row, Ind = ind, Shown = true, Tag = tag, Pad = pad }
+			btns[text] = { Btn = b, Row = row, Ind = ind, Shown = true, Tag = tag, Pad = pad, H = rh }
 			b.MouseEnter:Connect(function()
 				if not isOn(text) then tween(b, { BackgroundTransparency = 0.93 }, 0.15) end
 			end)
@@ -7878,8 +8094,9 @@ function Block:CreateDropdown(o)
 		local nl = {}
 		do
 			local seen = {}
+			table.clear(meta)
 			for _, v in ipairs(newItems or {}) do
-				local t = tostring(v)
+				local t = itemText(v)
 				if not seen[t] then seen[t] = true nl[#nl + 1] = t end
 			end
 		end
@@ -7940,7 +8157,7 @@ function Block:CreateDropdown(o)
 		if b then
 			local sc = (list.Size.Y.Offset > 0 and list.AbsoluteSize.Y > 0) and (list.AbsoluteSize.Y / list.Size.Y.Offset) or 1
 			local top = (b.Btn.AbsolutePosition.Y - list.AbsolutePosition.Y) / sc + list.CanvasPosition.Y
-			local bottom = top + 24
+			local bottom = top + (b.H or 26) - 2
 			local view = list.AbsoluteSize.Y / sc
 			if top < list.CanvasPosition.Y then
 				list.CanvasPosition = Vector2.new(0, math.max(top - 4, 0))
@@ -10931,6 +11148,359 @@ function Block:CreateRadio(o)
 	return item
 end
 
+-- Pastilles (chips) : une rangée de petites pastilles cliquables qui passent à la ligne toutes seules.
+--   blk:CreateChips({ Name = "Armes", Items = { "Épée", "Arc", "Bâton" }, Default = { "Arc" }, Flag = "armes",
+--                     Multi = true, Max = 2, AllowNone = true, Callback = function(v) end })
+--   Multi (true par défaut) : plusieurs pastilles actives, Get() renvoie une liste. Multi = false : une seule active, Get() renvoie un nom.
+--   Max : nombre maximum de pastilles actives (Multi) · AllowNone (Multi = false) : recliquer sur la pastille active la désactive.
+--   item.Get() · item.Set(liste | nom) · item.Toggle(nom) · item.IsSelected(nom) · item.SelectAll() · item.Clear() · item.SetItems(liste)
+--   item:OnChanged(fn) marche comme sur les autres éléments.
+function Block:CreateChips(o)
+	o = o or {}
+	local items = {}
+	for _, it in ipairs(o.Items or o.Options or {}) do items[#items + 1] = tostring(it) end
+	local multi = o.Multi ~= false
+	local maxSel = tonumber(o.Max)
+	local allowNone = multi or o.AllowNone == true
+	local CH, GAP = 24, 6   -- hauteur d'une pastille, espace entre pastilles
+
+	local f, st = makeRow(self, 62, o.Name)
+	label(f, o.Name or "Pastilles", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -24, 0, 28) })
+	local holder = new("Frame", { Position = UDim2.new(0, 8, 0, 30), Size = UDim2.new(1, -16, 0, CH),
+		BackgroundTransparency = 1, BorderSizePixel = 0 }, f)
+	hover(f, st)
+
+	local sel = {}
+	local chips = {}
+	local lastW = -1
+
+	local function count()
+		local n = 0
+		for _ in pairs(sel) do n += 1 end
+		return n
+	end
+	local function value()
+		if multi then
+			local r = {}
+			for _, n in ipairs(items) do if sel[n] then r[#r + 1] = n end end
+			return r
+		end
+		for _, n in ipairs(items) do if sel[n] then return n end end
+		return nil
+	end
+	local function paint()
+		for _, c in ipairs(chips) do
+			local on = sel[c.name] == true
+			tween(c.btn, { BackgroundTransparency = on and 0.7 or 0.55, BackgroundColor3 = on and T.Accent or T.Off,
+				TextColor3 = on and T.Text or T.ElementAccent }, 0.18)
+			tween(c.st, { Transparency = on and 0.35 or 0.88 }, 0.18)
+		end
+	end
+	local function commit(silent)
+		paint()
+		local v = value()
+		if o.Flag then Library.Flags[o.Flag] = multi and v or (v or "") end
+		if not silent then fire(o.Callback, v) end
+	end
+	local function same(a, b)
+		for k in pairs(a) do if not b[k] then return false end end
+		for k in pairs(b) do if not a[k] then return false end end
+		return true
+	end
+
+	-- placement à la main : les pastilles passent à la ligne quand elles dépassent, la ligne du bloc s'agrandit
+	local function layout()
+		local W = holder.AbsoluteSize.X
+		if W <= 0 then W = 300 end
+		if W == lastW then return end
+		lastW = W
+		local x, y = 0, 0
+		for _, c in ipairs(chips) do
+			local w = math.min(c.w, W)
+			if x > 0 and x + w > W then x = 0 y += CH + GAP end
+			c.btn.Position = UDim2.fromOffset(x, y)
+			c.btn.Size = UDim2.fromOffset(w, CH)
+			x += w + GAP
+		end
+		local H = (#chips > 0) and (y + CH) or 0
+		holder.Size = UDim2.new(1, -16, 0, H)
+		f.Size = UDim2.new(1, 0, 0, 30 + math.max(H, CH) + 8)
+	end
+	holder:GetPropertyChangedSignal("AbsoluteSize"):Connect(layout)
+
+	local function toggle(name)
+		if not table.find(items, name) then return end
+		if multi then
+			if sel[name] then
+				sel[name] = nil
+			else
+				if maxSel and count() >= maxSel then return end
+				sel[name] = true
+			end
+		else
+			if sel[name] then
+				if not allowNone then return end
+				sel[name] = nil
+			else
+				sel = { [name] = true }
+			end
+		end
+		commit(false)
+	end
+
+	local function build()
+		for _, c in ipairs(chips) do pcall(function() c.btn:Destroy() end) end
+		table.clear(chips)
+		for _, name in ipairs(items) do
+			local w = math.ceil(measureText(name, 12, F_MED).X) + 22
+			local b = new("TextButton", { Size = UDim2.fromOffset(w, CH), BackgroundColor3 = T.Off, BackgroundTransparency = 0.55,
+				BorderSizePixel = 0, Text = name, TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED,
+				AutoButtonColor = false, TextTruncate = Enum.TextTruncate.AtEnd }, holder)
+			corner(b, 12)
+			local bs = stroke(b, 0.88)
+			b.MouseButton1Click:Connect(function() uiSnd("click") toggle(name) end)
+			chips[#chips + 1] = { btn = b, st = bs, name = name, w = w }
+		end
+		lastW = -1
+		layout()
+		paint()
+	end
+
+	-- valeur de départ
+	local function fromAny(v)
+		local r = {}
+		if type(v) == "table" then
+			for _, x in ipairs(v) do
+				local n = tostring(x)
+				if table.find(items, n) then r[n] = true end
+			end
+		elseif v ~= nil then
+			local n = tostring(v)
+			if table.find(items, n) then r[n] = true end
+		end
+		if not multi then
+			local keep
+			for _, n in ipairs(items) do if r[n] then keep = n break end end
+			r = keep and { [keep] = true } or {}
+		elseif maxSel then
+			local k, out = 0, {}
+			for _, n in ipairs(items) do
+				if r[n] and k < maxSel then out[n] = true k += 1 end
+			end
+			r = out
+		end
+		return r
+	end
+	sel = fromAny(o.Default)
+	if not multi and not allowNone and next(sel) == nil and items[1] then sel = { [items[1]] = true } end
+	build()
+	commit(true)
+
+	local item = {}
+	item.Get = function() return value() end
+	item.Set = function(...)
+		local new_ = fromAny((unself(item, ...)))
+		if not multi and not allowNone and next(new_) == nil then return end
+		if same(sel, new_) then return end
+		sel = new_
+		commit(false)
+	end
+	item.Toggle = function(...) toggle(tostring((unself(item, ...)))) end
+	item.IsSelected = function(...) return sel[tostring((unself(item, ...)))] == true end
+	item.SelectAll = function()
+		if not multi then return end
+		local new_ = fromAny(items)
+		if same(sel, new_) then return end
+		sel = new_
+		commit(false)
+	end
+	item.Clear = function()
+		if not allowNone or next(sel) == nil then return end
+		sel = {}
+		commit(false)
+	end
+	item.SetItems = function(...)
+		local list = unself(item, ...)
+		items = {}
+		for _, it in ipairs(type(list) == "table" and list or {}) do items[#items + 1] = tostring(it) end
+		local keep = {}
+		for n in pairs(sel) do keep[#keep + 1] = n end
+		sel = fromAny(keep)
+		if not multi and not allowNone and next(sel) == nil and items[1] then sel = { [items[1]] = true } end
+		build()
+		commit(false)
+	end
+	item.Instance = f
+	register(o.Flag, item, multi and value() or (value() or ""))
+	return item
+end
+
+-- Minuteur / chronomètre : un temps affiché en grand, un bouton Démarrer / Pause et un bouton de remise à zéro.
+--   blk:CreateTimer({ Name = "Prochain événement", Duration = 90, Callback = function(state, secondes) end })
+--   Duration > 0 : compte à rebours (barre de progression en bas) · absent : chronomètre qui compte vers le haut.
+--   Tenths = false : cache les dixièmes de seconde · AutoStart = true : démarre tout de suite · Flag : mémorise le temps affiché.
+--   Callback(state, secondes) : state = "start" | "pause" | "reset" | "finish" (fin du compte à rebours, même UI cachée).
+--   item.Start() · item.Pause() · item.Toggle() · item.Reset() · item.Get() (temps affiché) · item.GetElapsed() · item.IsRunning() ·
+--   item.Set(secondes) · item.SetDuration(n) · item:OnChanged(fn).
+function Block:CreateTimer(o)
+	o = o or {}
+	local dur = math.max(tonumber(o.Duration) or 0, 0)
+	local tenths = o.Tenths ~= false
+
+	local f, st = makeRow(self, 62, o.Name)
+	label(f, o.Name or "Minuteur", 13, { Position = UDim2.new(0, 12, 0, 4), Size = UDim2.new(1, -170, 0, 20) })
+	local tl = label(f, "", 22, { Position = UDim2.new(0, 12, 0, 26), Size = UDim2.new(1, -170, 0, 28), Font = F_BOLD })
+	hover(f, st)
+
+	local function mkBtn(text, w, x)
+		local b = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, x, 0.5, 0),
+			Size = UDim2.fromOffset(w, 28), BackgroundColor3 = T.Off, BackgroundTransparency = 0.45, BorderSizePixel = 0,
+			Text = text, TextColor3 = T.Text, TextSize = 12, Font = F_MED, AutoButtonColor = false }, f)
+		corner(b, 7)
+		stroke(b, 0.88)
+		b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0.25 }, 0.15) end)
+		b.MouseLeave:Connect(function() tween(b, { BackgroundTransparency = 0.45 }, 0.2) end)
+		return b
+	end
+	local resetBtn = mkBtn("↺", 32, -10)
+	local mainBtn = mkBtn("Démarrer", 92, -48)
+
+	-- barre de progression (compte à rebours seulement)
+	local bar, fill
+	local function ensureBar()
+		if dur > 0 and not bar then
+			bar = new("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 8, 1, -4), Size = UDim2.new(1, -16, 0, 2),
+				BackgroundColor3 = T.Off, BackgroundTransparency = 0.5, BorderSizePixel = 0 }, f)
+			corner(bar, 2)
+			fill = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.2,
+				BorderSizePixel = 0 }, bar)
+			corner(fill, 2)
+		elseif dur <= 0 and bar then
+			bar:Destroy()
+			bar, fill = nil, nil
+		end
+	end
+	ensureBar()
+
+	local running, base, t0, token = false, 0, 0, 0
+
+	local function elapsed()
+		return base + (running and (os.clock() - t0) or 0)
+	end
+	local function shown()
+		if dur > 0 then return math.max(dur - elapsed(), 0) end
+		return elapsed()
+	end
+	local function fmt(s)
+		s = math.max(s, 0)
+		local h = math.floor(s / 3600)
+		local m = math.floor(s / 60) % 60
+		local sec = math.floor(s) % 60
+		if h > 0 then return string.format("%d:%02d:%02d", h, m, sec) end
+		if tenths then return string.format("%02d:%02d.%d", m, sec, math.floor((s % 1) * 10)) end
+		return string.format("%02d:%02d", m, sec)
+	end
+	local function finished() return dur > 0 and elapsed() >= dur end
+
+	local function render()
+		local v = shown()
+		tl.Text = fmt(v)
+		if fill and dur > 0 then fill.Size = UDim2.new(math.clamp(v / dur, 0, 1), 0, 1, 0) end
+		mainBtn.Text = running and "Pause" or (finished() and "Relancer") or (elapsed() > 0 and "Reprendre") or "Démarrer"
+	end
+	local function store()
+		if o.Flag then Library.Flags[o.Flag] = shown() end
+	end
+	local function emit(state)
+		store()
+		fire(o.Callback, state, shown())
+	end
+
+	local function start()
+		if running then return end
+		if finished() then base = 0 end   -- compte à rebours terminé : on repart de zéro
+		running, t0 = true, os.clock()
+		token += 1
+		local my = token
+		if dur > 0 then
+			-- fin programmée à l'heure exacte (indépendante de l'affichage : l'UI peut être cachée)
+			task.delay(math.max(dur - base, 0), function()
+				if my ~= token or not running then return end
+				base, running = dur, false
+				token += 1
+				render()
+				emit("finish")
+			end)
+		end
+		render()
+		emit("start")
+	end
+	local function pause()
+		if not running then return end
+		base = elapsed()
+		running = false
+		token += 1
+		render()
+		emit("pause")
+	end
+	local function reset()
+		running, base = false, 0
+		token += 1
+		render()
+		emit("reset")
+	end
+
+	mainBtn.MouseButton1Click:Connect(function()
+		uiSnd("click")
+		if running then pause() else start() end
+	end)
+	resetBtn.MouseButton1Click:Connect(function()
+		uiSnd("click")
+		reset()
+	end)
+
+	-- rafraîchissement de l'affichage (dort tant que la ligne n'est pas visible)
+	track(Ticker.connect(function()
+		if running then render() end
+	end, { rate = 20, gate = f }))
+
+	render()
+	store()
+
+	local item = {}
+	item.Start = function() start() end
+	item.Pause = function() pause() end
+	item.Toggle = function() if running then pause() else start() end end
+	item.Reset = function() reset() end
+	item.Get = function() return shown() end
+	item.GetElapsed = function() return elapsed() end
+	item.IsRunning = function() return running end
+	item.Set = function(...)
+		local v = tonumber((unself(item, ...)))
+		if not v then return end
+		local wasRunning = running
+		running = false
+		token += 1
+		if dur > 0 then base = math.clamp(dur - v, 0, dur) else base = math.max(v, 0) end
+		render()
+		store()
+		if wasRunning then start() end
+	end
+	item.SetDuration = function(...)
+		local n = math.max(tonumber((unself(item, ...))) or 0, 0)
+		running = false
+		token += 1
+		dur, base = n, 0
+		ensureBar()
+		render()
+		emit("reset")
+	end
+	item.Instance = f
+	register(o.Flag, item, shown())
+	if o.AutoStart then start() end
+	return item
+end
+
 -- Tableau / liste triable (clic sur un en-tête = tri, clic sur une ligne = sélection)
 function Block:CreateTable(o)
 	o = o or {}
@@ -12832,15 +13402,333 @@ function Block:CreatePreview3D(o)
 			return best
 		end
 
+		-- ZONES CLIQUABLES RÉELLES (fix « il faut cliquer ~58 px trop haut ») : un cadre invisible par partie du corps, posé sur
+		-- la boîte écran de la pièce. Quelle partie est sous le curseur, c'est Roblox qui le dit (InputBegan du cadre, avec le VRAI
+		-- pointeur) : plus aucune conversion de coordonnées, donc plus de décalage (barre du haut, échelle de l'UI...).
+		-- Library.PreviewPickOffset = Vector2.new(0, y) (en pixels) décale encore les zones à la main si besoin.
+		local hitF, hitArea, hitSeen = {}, {}, {}
+		for _, n in ipairs(PARTS) do
+			local hf = new("Frame", { Name = "Hit_" .. n, BackgroundTransparency = 1, BorderSizePixel = 0, Active = false,
+				ZIndex = 3, Visible = false }, ov)
+			hitF[n] = hf
+			hf.InputBegan:Connect(function(i)
+				if isPress(i) then hitSeen[n] = hitArea[n] or 1e9 end
+			end)
+			hf.MouseEnter:Connect(function() ix.hitReady = true end)
+		end
+
+		function ix.layout()   -- appelé à chaque image par render : les cadres suivent le personnage (poses, ragdoll, rotation...)
+			local sc = vp.AbsoluteSize.Y / h
+			local ok = r6ok() and sc > 0.01
+			local po = Library.PreviewPickOffset
+			local ox, oy = (typeof(po) == "Vector2") and po.X or 0, (typeof(po) == "Vector2") and po.Y or 0
+			for _, n in ipairs(PARTS) do
+				local hf = hitF[n]
+				local part = ok and rig:FindFirstChild(n) or nil
+				if part and part:IsA("BasePart") then
+					local x0, y0, x1, y1 = screenBox(part)
+					if x0 == x0 and y0 == y0 and x1 == x1 and y1 == y1 and x1 > x0 and y1 > y0 and x1 - x0 < 4000 and y1 - y0 < 4000 then
+						local pad = 4
+						hf.Position = UDim2.fromOffset((x0 - pad + ox) / sc, (y0 - pad + oy) / sc)
+						hf.Size = UDim2.fromOffset((x1 - x0 + pad * 2) / sc, (y1 - y0 + pad * 2) / sc)
+						hf.Visible = true
+						hitArea[n] = (x1 - x0) * (y1 - y0)
+					else
+						hf.Visible = false
+						hitArea[n] = nil
+					end
+				else
+					hf.Visible = false
+					hitArea[n] = nil
+				end
+			end
+		end
+
 		function ix.press(absPos)
 			ix.p0 = absPos - vp.AbsolutePosition
 			ix.t0 = os.clock()
 			ix.pressed, ix.active = true, false
-			ix.part = ix.pick(ix.p0.X, ix.p0.Y)
+			ix.part, ix.pending = nil, true
+			table.clear(hitSeen)
+			-- les cadres reçoivent leur InputBegan en même temps que le ViewportFrame : on tranche juste après (la plus petite zone gagne)
+			task.defer(function()
+				ix.pending = false
+				if not ix.pressed then return end
+				local best, bestA
+				for n, a in pairs(hitSeen) do
+					if not bestA or a < bestA then best, bestA = n, a end
+				end
+				if best then
+					ix.hitReady = true
+				elseif not ix.hitReady then
+					-- repli : les cadres n'ont jamais rien reçu (exécuteur étrange) -> ancien calcul par coordonnées
+					local po = Library.PreviewPickOffset
+					best = ix.pick(ix.p0.X, ix.p0.Y - ((typeof(po) == "Vector2") and po.Y or 0))
+				end
+				ix.part = best
+			end)
 		end
 
 		function ix.release()
-			ix.pressed, ix.active, ix.part = false, false, nil
+			ix.pressed, ix.active, ix.part, ix.pending, ix.ang0 = false, false, nil, false, nil
+		end
+
+		-- =============================================================================================================
+		-- RAGDOLL V2 : vraie physique (Verlet / PBD) au lieu de pendules indépendants.
+		--   Le corps est simulé dans le plan de face du personnage (x = côté droit du rig, y = vertical) :
+		--     • torse = rectangle rigide (4 coins + 2 diagonales) · tête, bras et jambes = masses reliées au torse par une articulation
+		--       à longueur fixe et à amplitude limitée (épaules, hanches, cou) ;
+		--     • on saisit le torse À L'ENDROIT cliqué : par l'épaule le corps pend de travers, par la taille il se plie, etc. ;
+		--     • gravité, sol (contact + frottement + petit rebond), murs et plafond de l'aperçu ;
+		--     • au lâcher : le corps garde sa vitesse (on peut le LANCER), tombe, s'écrase au sol, puis se RELÈVE tout seul.
+		--   Réglages : Library.PreviewRagdollGravity (55) · Library.PreviewRagdollRecover = false (reste au sol, re-saisir pour le relever) ·
+		--   Library.PreviewRagdollGetUpTime (0.9 s). API : pv:Ragdoll([-1..1]) fait tomber le personnage (avec une poussée) · pv:GetUp().
+		-- =============================================================================================================
+		local RG = { sim = nil, acc = 0, Xr = Vector3.new(1, 0, 0), rigFor = nil }
+		local RGH = 1 / 240   -- pas fixe de la simulation
+		local function rgNum(name, def)
+			local v = Library[name]
+			if type(v) == "number" then return v end
+			return def
+		end
+		local function wrapA(a) return (a + math.pi) % (2 * math.pi) - math.pi end
+		local function bilin(u, v)   -- poids des 4 coins du torse (1 : haut-gauche, 2 : haut-droit, 3 : bas-droit, 4 : bas-gauche)
+			return { (1 - u) * (1 + v) / 4, (1 + u) * (1 + v) / 4, (1 + u) * (1 - v) / 4, (1 - u) * (1 - v) / 4 }
+		end
+		-- k = clé utilisée par ix.apply · amplitude relative au torse (rad) : 0 = le membre pend droit, > 0 = écarté vers le côté droit du rig
+		local LIMBSPEC = {
+			{ k = "rs", j = "Right Shoulder", part = "Right Arm", dx = 1,  dy = 0.5,  L = 1.5, lo = -0.12, hi = 3.1, r = 0.3,  m = 0.8, damp = 1.1 },
+			{ k = "ls", j = "Left Shoulder",  part = "Left Arm",  dx = -1, dy = 0.5,  L = 1.5, lo = -3.1,  hi = 0.12, r = 0.3, m = 0.8, damp = 1.1 },
+			{ k = "rh", j = "Right Hip",      part = "Right Leg", dx = 1,  dy = -1,   L = 2,   lo = -0.08, hi = 1.4, r = 0,    m = 1.3, damp = 1.2 },
+			{ k = "lh", j = "Left Hip",       part = "Left Leg",  dx = -1, dy = -1,   L = 2,   lo = -1.4,  hi = 0.08, r = 0,   m = 1.3, damp = 1.2 },
+		}
+		local function pivotPos(P, w)
+			return P[1].x * w[1] + P[2].x * w[2] + P[3].x * w[3] + P[4].x * w[4],
+				P[1].y * w[1] + P[2].y * w[2] + P[3].y * w[3] + P[4].y * w[4]
+		end
+		local function rgDist(P, i, j, d)   -- contrainte de distance entre deux particules (pondérée par les masses)
+			local a, b = P[i], P[j]
+			local dx, dy = b.x - a.x, b.y - a.y
+			local l = math.sqrt(dx * dx + dy * dy)
+			if l < 1e-6 then return end
+			local k = (l - d) / (l * (a.w + b.w))
+			a.x += dx * k * a.w
+			a.y += dy * k * a.w
+			b.x -= dx * k * b.w
+			b.y -= dy * k * b.w
+		end
+		local function rgPivot(P, ti, w, L)   -- la particule ti reste à la distance L d'un point du torse (articulation)
+			local t = P[ti]
+			local gx, gy = pivotPos(P, w)
+			local dx, dy = t.x - gx, t.y - gy
+			local l = math.sqrt(dx * dx + dy * dy)
+			if l < 1e-6 then return end
+			local nx, ny = dx / l, dy / l
+			local den = t.w
+			for q = 1, 4 do den += w[q] * w[q] * P[q].w end
+			local lam = (l - L) / den
+			t.x -= t.w * lam * nx
+			t.y -= t.w * lam * ny
+			for q = 1, 4 do
+				local c = P[q]
+				c.x += c.w * w[q] * lam * nx
+				c.y += c.w * w[q] * lam * ny
+			end
+		end
+		local function rgFrame(P)   -- centre du torse + inclinaison (rad, sens anti-horaire dans le plan du rig)
+			local cx = (P[1].x + P[2].x + P[3].x + P[4].x) / 4
+			local cy = (P[1].y + P[2].y + P[3].y + P[4].y) / 4
+			local ex = (P[2].x - P[1].x) + (P[3].x - P[4].x)
+			local ey = (P[2].y - P[1].y) + (P[3].y - P[4].y)
+			return cx, cy, math.atan2(ey, ex)
+		end
+		-- nouvelle simulation, démarrée sur la pose actuellement AFFICHÉE (centre cx, cy · inclinaison roll · angles relatifs ang)
+		local function rgNewSim(cx, cy, roll, ang)
+			local torso = rig and rig:FindFirstChild("Torso")
+			local hw = (torso and torso:IsA("BasePart")) and torso.Size.X / 2 or 1
+			local hh = (torso and torso:IsA("BasePart")) and torso.Size.Y / 2 or 1
+			local nv, headDist = hh, 0.5
+			do
+				local nj = avJoints["Neck"]
+				if nj then
+					nv = nj.C0.Position.Y
+					headDist = math.max(math.abs(nj.C1.Position.Y), 0.3)
+				end
+			end
+			local s = { hw = hw, hh = hh, P = {}, limbs = {}, state = "held", t = 0, calm = 0, g = 0, headDist = headDist,
+				floorY = -3, wallX = 6, topY = 6, gw = bilin(0, 0), goX = 0, goY = 0 }
+			local c, sn = math.cos(roll), math.sin(roll)
+			local function W(lx, ly) return cx + lx * c - ly * sn, cy + lx * sn + ly * c end
+			local function add(x, y, m, r, damp)
+				s.P[#s.P + 1] = { x = x, y = y, px = x, py = y, w = 1 / m, r = r, damp = damp }
+				return #s.P
+			end
+			for _, q in ipairs({ { -hw, hh }, { hw, hh }, { hw, -hh }, { -hw, -hh } }) do
+				local x, y = W(q[1], q[2])
+				add(x, y, 1.6, 0.04, 0.25)
+			end
+			local nx0, ny0 = W(0, nv)
+			local a = roll + ((ang and ang.nk) or 0)
+			s.head = add(nx0 - math.sin(a) * headDist, ny0 + math.cos(a) * headDist, 1.5, 0.55, 0.8)
+			s.nw = bilin(0, nv / hh)
+			for _, sp in ipairs(LIMBSPEC) do
+				local j, part = avJoints[sp.j], rig:FindFirstChild(sp.part)
+				local dx, dy, L = sp.dx, sp.dy, sp.L
+				if j then dx, dy = j.C0.Position.X, j.C0.Position.Y end
+				if j and part and part:IsA("BasePart") then L = math.max(part.Size.Y / 2 + math.abs(j.C1.Position.Y), 0.8) end
+				local px_, py_ = W(dx, dy)
+				local an = roll + ((ang and ang[sp.k]) or 0)
+				local idx = add(px_ + math.sin(an) * L, py_ - math.cos(an) * L, sp.m, sp.r, sp.damp)
+				s.limbs[#s.limbs + 1] = { k = sp.k, i = idx, L = L, w = bilin(dx / hw, dy / hh), lo = sp.lo, hi = sp.hi }
+			end
+			return s
+		end
+		local function rgRead(s)   -- -> centre x, y · inclinaison · angles relatifs au torse de chaque membre et du cou
+			local P = s.P
+			local cx, cy, roll = rgFrame(P)
+			local rel = {}
+			for _, lb in ipairs(s.limbs) do
+				local gx, gy = pivotPos(P, lb.w)
+				local t = P[lb.i]
+				rel[lb.k] = wrapA(math.atan2(t.x - gx, -(t.y - gy)) - roll)
+			end
+			local nx, ny = pivotPos(P, s.nw)
+			local hp = P[s.head]
+			rel.nk = wrapA(math.atan2(-(hp.x - nx), hp.y - ny) - roll)
+			return cx, cy, roll, rel
+		end
+		local function rgStep(s, dtS, tx, ty, holding)
+			local P = s.P
+			local g = rgNum("PreviewRagdollGravity", 55)
+			-- intégration de Verlet (inertie + frottement de l'air + gravité)
+			for _, p in ipairs(P) do
+				local d = math.exp(-dtS * p.damp)
+				local vx, vy = (p.x - p.px) * d, (p.y - p.py) * d
+				p.px, p.py = p.x, p.y
+				p.x += vx
+				p.y += vy - g * dtS * dtS
+			end
+			-- prise : le point saisi du torse est tiré vers le curseur (ressort ferme), le reste suit par inertie
+			if holding then
+				local gx, gy = pivotPos(P, s.gw)
+				local ex, ey = tx - gx, ty - gy
+				local m = math.sqrt(ex * ex + ey * ey)
+				if m > 3 then ex, ey = ex / m * 3, ey / m * 3 end   -- pas de téléportation si le curseur saute
+				local a = 1 - math.exp(-dtS * 36)
+				local den = 0
+				for q = 1, 4 do den += s.gw[q] * s.gw[q] end
+				for q = 1, 4 do
+					local c = P[q]
+					c.x += s.gw[q] * ex * a / den
+					c.y += s.gw[q] * ey * a / den
+				end
+			end
+			local w2, h2 = 2 * s.hw, 2 * s.hh
+			local diag = math.sqrt(w2 * w2 + h2 * h2)
+			for _ = 1, 6 do
+				rgDist(P, 1, 2, w2) rgDist(P, 3, 4, w2) rgDist(P, 2, 3, h2) rgDist(P, 4, 1, h2)
+				rgDist(P, 1, 3, diag) rgDist(P, 2, 4, diag)
+				for _, lb in ipairs(s.limbs) do rgPivot(P, lb.i, lb.w, lb.L) end
+				rgPivot(P, s.head, s.nw, s.headDist)
+				local _, _, roll = rgFrame(P)
+				-- amplitudes des articulations (le membre est ramené à la limite la plus proche)
+				for _, lb in ipairs(s.limbs) do
+					local t = P[lb.i]
+					local gx, gy = pivotPos(P, lb.w)
+					local dx, dy = t.x - gx, t.y - gy
+					local rel = wrapA(math.atan2(dx, -dy) - roll)
+					if rel > lb.hi or rel < lb.lo then
+						local c = (math.abs(wrapA(rel - lb.hi)) < math.abs(wrapA(rel - lb.lo))) and lb.hi or lb.lo
+						local l = math.sqrt(dx * dx + dy * dy)
+						t.x, t.y = gx + math.sin(roll + c) * l, gy - math.cos(roll + c) * l
+					end
+				end
+				do
+					local hp = P[s.head]
+					local nx, ny = pivotPos(P, s.nw)
+					local dx, dy = hp.x - nx, hp.y - ny
+					local rel = wrapA(math.atan2(-dx, dy) - roll)
+					if rel > 0.85 or rel < -0.85 then
+						local a = roll + math.clamp(rel, -0.85, 0.85)
+						local l = math.sqrt(dx * dx + dy * dy)
+						hp.x, hp.y = nx - math.sin(a) * l, ny + math.cos(a) * l
+					end
+				end
+				-- sol, plafond, murs de l'aperçu
+				for _, p in ipairs(P) do
+					local fy = s.floorY + p.r
+					if p.y < fy then p.y = fy end
+					if p.y > s.topY then p.y = s.topY end
+					if p.x < -s.wallX then p.x = -s.wallX elseif p.x > s.wallX then p.x = s.wallX end
+				end
+			end
+			-- réponse aux contacts : petit rebond + frottement au sol, rebond amorti contre les murs
+			local fr = math.exp(-dtS * 9)
+			for _, p in ipairs(P) do
+				if p.y <= s.floorY + p.r + 0.002 then
+					local vy = p.y - p.py
+					if vy < 0 then p.py = p.y + vy * 0.12 end
+					p.px = p.x - (p.x - p.px) * fr
+				end
+				local vx = p.x - p.px
+				if (p.x <= -s.wallX + 0.002 and vx < 0) or (p.x >= s.wallX - 0.002 and vx > 0) then p.px = p.x + vx * 0.3 end
+			end
+			-- tonus du cou : la tête revient doucement à la verticale du torse (sinon elle pendrait comme un sac)
+			do
+				local _, _, roll = rgFrame(P)
+				local hp = P[s.head]
+				local nx, ny = pivotPos(P, s.nw)
+				local dx, dy = hp.x - nx, hp.y - ny
+				local rel = wrapA(math.atan2(-dx, dy) - roll)
+				local a = roll + rel * math.exp(-dtS * 7)
+				local l = math.sqrt(dx * dx + dy * dy)
+				hp.x, hp.y = nx - math.sin(a) * l, ny + math.cos(a) * l
+			end
+		end
+		-- position du curseur (px dans l'aperçu) -> coordonnées de la simulation, par intersection du rayon avec le plan du personnage
+		local function cursorSim(px, py)
+			local s = vp.AbsoluteSize
+			local tanH = math.tan(math.rad(cam.FieldOfView) / 2)
+			local nx = (px / math.max(s.X, 1) - 0.5) * 2 * tanH * (s.X / math.max(s.Y, 1))
+			local ny = (0.5 - py / math.max(s.Y, 1)) * 2 * tanH
+			local origin = cam.CFrame.Position
+			local dir = cam.CFrame:VectorToWorldSpace(Vector3.new(nx, ny, -1)).Unit
+			local C, Xr = avBase.Position, RG.Xr
+			local nz = Xr:Cross(Vector3.new(0, 1, 0))
+			local dn = dir:Dot(nz)
+			local hit
+			if math.abs(dn) > 0.22 then
+				hit = origin + dir * ((C - origin):Dot(nz) / dn)
+			else
+				hit = planePoint(px, py, C)   -- vue presque de profil : repli sur le plan perpendiculaire à la caméra
+			end
+			local d = hit - C
+			return d:Dot(Xr), d.Y
+		end
+		local function rgSetAxis()
+			local xv = avBase.XVector
+			local xr = Vector3.new(xv.X, 0, xv.Z)
+			RG.Xr = (xr.Magnitude > 1e-3) and xr.Unit or Vector3.new(1, 0, 0)
+		end
+		-- pv:Ragdoll(sens) : fait tomber le personnage (sens -1..1 = direction de la poussée ; au hasard par défaut)
+		function ix.ragdollNow(dirx)
+			if not (r6ok() and avBase) then return false end
+			if RG.sim and RG.sim.state ~= "getup" then return true end
+			rgSetAxis()
+			local sim = rgNewSim(ix.off:Dot(RG.Xr), ix.off.Y, ix.roll, ix.rt)
+			sim.state, sim.t, sim.calm = "free", 0, 0
+			local dir = tonumber(dirx)
+			if not dir then dir = (math.random() < 0.5) and -1 or 1 end
+			dir = math.clamp(dir, -2, 2)
+			local topY0 = sim.P[1].y - 0.2
+			for _, p in ipairs(sim.P) do   -- coup d'épaule : le haut du corps part plus vite que le bas
+				p.px = p.x - dir * 5 * ((p.y > topY0) and 1.6 or 0.8) * RGH
+			end
+			RG.sim, RG.acc, RG.rigFor = sim, 0, rig
+			return true
+		end
+		function ix.getUp()
+			if RG.sim and RG.sim.state ~= "getup" then RG.sim.state, RG.sim.g = "getup", 0 end
 		end
 
 		function ix.step(dt)
@@ -12856,13 +13744,16 @@ function Block:CreatePreview3D(o)
 			if ix.pressed and ix.part and ok and torso and mp and not ix.active then
 				if (mp - ix.p0).Magnitude > 3 or os.clock() - ix.t0 > 0.18 then
 					ix.active = true
+					ix.ang0 = nil
 					if ix.part == "Torso" then
 						ix.rag = true
 						ix.anchor = torso.Position
-						ix.P0 = planePoint(ix.p0.X, ix.p0.Y, ix.anchor)
+						ix.G0x, ix.G0y = projPx(ix.anchor)   -- où le torse est à l'écran : le curseur ne sert plus qu'à mesurer un DÉPLACEMENT
 						ix.off0 = ix.off
 					else
 						ix.limb, ix.key = ix.part, KEY[ix.part]
+						local lp = rig:FindFirstChild(ix.part)
+						ix.G0x, ix.G0y = projPx((lp and lp:IsA("BasePart")) and lp.Position or torso.Position)
 					end
 				end
 			end
@@ -12876,12 +13767,20 @@ function Block:CreatePreview3D(o)
 				local j = avJoints[JOINT[ix.limb]]
 				if j and j.Part0 then
 					local S = j.Part0.CFrame * j.C0.Position
-					local v = torso.CFrame:VectorToObjectSpace(planePoint(mp.X, mp.Y, S) - S)
+					local gx, gy = ix.G0x or 0, ix.G0y or 0
+					local function vAt(dx, dy) return torso.CFrame:VectorToObjectSpace(planePoint(gx + dx, gy + dy, S) - S) end
+					local v = vAt(mp.X - ix.p0.X, mp.Y - ix.p0.Y)   -- point saisi + déplacement du curseur depuis l'appui
 					if ix.limb == "Head" then
+						local v0 = vAt(0, 0)
+						v = v - v0 + Vector3.new(0, 1.2, 0)         -- au repos : tête droite
 						ix.headT = CFrame.Angles(math.clamp((v.Y - 1.2) * 0.25, -0.5, 0.6), -math.clamp(v.X * 0.35, -0.9, 0.9), -math.clamp(v.X * 0.1, -0.3, 0.3))
 					else
 						local lim = LIMIT[ix.limb]
-						local goal = math.clamp(math.atan2(v.X, -v.Y), -lim, lim)
+						if not ix.ang0 then
+							local v0 = vAt(0, 0)
+							ix.ang0, ix.th0 = math.atan2(v0.X, -v0.Y), ix.th[ix.key]
+						end
+						local goal = math.clamp(ix.th0 + (math.atan2(v.X, -v.Y) - ix.ang0), -lim, lim)
 						ix.th[ix.key] += (goal - ix.th[ix.key]) * math.min(dt * 16, 1)
 					end
 				end
@@ -12892,53 +13791,93 @@ function Block:CreatePreview3D(o)
 			if ix.w < 0.003 and not limbOn then ix.w = 0 end
 			ix.headCF = ix.headCF:Lerp(ix.headT, math.min(dt * 14, 1))
 
-			-- ---- torse tenu : le personnage suit le curseur (borné à l'aperçu) ; relâché, il revient avec un petit rebond
-			if ix.rag and mp then
-				local cx = math.clamp(mp.X, 16, math.max(vp.AbsoluteSize.X - 16, 17))
-				local cy = math.clamp(mp.Y, 16, math.max(vp.AbsoluteSize.Y - 16, 17))
-				local tgt = ix.off0 + (planePoint(cx, cy, ix.anchor) - ix.P0)
-				local d = tgt - ix.off
-				ix.offV = d * 16
-				ix.off += d * math.min(dt * 16, 1)
-			elseif ix.off.Magnitude > 0.003 or ix.offV.Magnitude > 0.03 then
-				ix.offV += (-ix.off * 140 - ix.offV * 14) * dt
-				ix.off += ix.offV * dt
-			else
-				ix.off, ix.offV = Vector3.zero, Vector3.zero
+			-- ---- RAGDOLL V2 : simulation physique (voir « RAGDOLL V2 » plus haut)
+			local sim = RG.sim
+			local canSim = ok and avBase ~= nil and fit ~= nil
+			if not canSim or (sim and RG.rigFor ~= rig) then
+				RG.sim, sim = nil, nil
 			end
-			local vel = (ix.off - ix.prev) / dt
-			local acc = (vel - ix.pvel) / dt
-			ix.prev, ix.pvel = ix.off, vel
-			ix.velS += (vel:Dot(right) - ix.velS) * math.min(dt * 10, 1)
-			ix.accF += (acc:Dot(right) - ix.accF) * math.min(dt * 12, 1)
+			local holding = canSim and ix.rag and ix.active and mp ~= nil
+			if canSim then rgSetAxis() end
+			local Xr = RG.Xr
+			if limbOn and sim and sim.state ~= "getup" then sim.state, sim.g = "getup", 0 end   -- on saisit un membre : le corps se redresse
+			if holding and (not sim or sim.state ~= "held") then
+				-- (re)prise : la simulation repart de la pose actuellement affichée (aucune cassure, même en pleine remise debout)
+				sim = rgNewSim(ix.off:Dot(Xr), ix.off.Y, ix.roll, ix.rt)
+				RG.sim, RG.acc, RG.rigFor = sim, 0, rig
+				local hx, hy = cursorSim(ix.p0.X, ix.p0.Y)
+				local cs, sn = math.cos(ix.roll), math.sin(ix.roll)
+				local cx0, cy0 = rgFrame(sim.P)
+				local dx, dy = hx - cx0, hy - cy0
+				-- endroit saisi, exprimé dans le repère du torse (-1..1) : l'épaule, la taille, le côté... donnent des chutes différentes
+				local u = math.clamp((dx * cs + dy * sn) / sim.hw, -0.9, 0.9)
+				local v = math.clamp((-dx * sn + dy * cs) / sim.hh, -0.9, 0.9)
+				sim.gw = bilin(u, v)
+				local gx, gy = pivotPos(sim.P, sim.gw)
+				sim.goX, sim.goY = hx - gx, hy - gy
+				sim.state = "held"
+			elseif sim and sim.state == "held" and not holding then
+				sim.state, sim.t, sim.calm = "free", 0, 0   -- lâché : il garde sa vitesse (lancer) puis tombe
+			end
 
-			if ix.rag then ix.rw = math.min(1, ix.rw + dt * 9) else ix.rw = math.max(0, ix.rw - dt * 1.4) end
-
-			-- inclinaison du corps (les pieds traînent derrière) : positive = sens anti-horaire à l'écran
-			ix.roll += (((ix.rw > 0.01) and math.clamp(-ix.velS * 0.05, -0.8, 0.8) or 0) - ix.roll) * math.min(dt * 8, 1)
-			local mult = (avBase and avBase.ZVector:Dot(cam.CFrame.LookVector) < 0) and 1 or -1
-			ix.rollOut = mult * ix.roll
-
-			-- ---- pendules : bras, jambes, tête ballottent (gravité + accélération du torse)
-			if ix.rw > 0 and torso then
-				local g, ax = 26, math.clamp(ix.accF, -240, 240)
-				local s = (torso.CFrame.RightVector:Dot(right) >= 0) and 1 or -1   -- le côté « droit » du torse est-il à droite de l'écran ?
-				for k, L in pairs(LEN) do
-					local pd = ix.pd[k]
-					local h = dt / 2
-					for _ = 1, 2 do
-						local alpha = -(g * math.sin(pd[1]) + ax * math.cos(pd[1])) / L - 2.2 * pd[2]
-						pd[2] += alpha * h
-						pd[1] += pd[2] * h
-					end
-					local rel, lim = pd[1] - ix.roll, LIM2[k]
-					if rel > lim then pd[1], pd[2] = ix.roll + lim, math.min(pd[2], 0)
-					elseif rel < -lim then pd[1], pd[2] = ix.roll - lim, math.max(pd[2], 0) end
-					ix.rt[k] = s * (pd[1] - ix.roll)
+			if sim and sim.state ~= "getup" then
+				local dist = math.max((cam.CFrame.Position - avBase.Position).Magnitude, fit.dist or 0)
+				local tanH = math.tan(math.rad(cam.FieldOfView) / 2)
+				local asp = vp.AbsoluteSize.X / math.max(vp.AbsoluteSize.Y, 1)
+				sim.floorY = (fit.focus.Y - fit.size.Y / 2) - avBase.Position.Y   -- le sol du décor
+				sim.wallX = math.max(dist * tanH * asp - 1.6, 1.4)                 -- bords de l'aperçu
+				sim.topY = dist * tanH + (fit.focus.Y - avBase.Position.Y) - 1.3
+				local tx, ty
+				if holding then
+					local mx = math.clamp(mp.X, 16, math.max(vp.AbsoluteSize.X - 16, 17))
+					local my = math.clamp(mp.Y, 16, math.max(vp.AbsoluteSize.Y - 16, 17))
+					local qx, qy = cursorSim(mx, my)
+					tx, ty = qx - sim.goX, qy - sim.goY
 				end
-			elseif ix.rw <= 0 then
-				for k, pd in pairs(ix.pd) do pd[1], pd[2], ix.rt[k] = 0, 0, 0 end
+				RG.acc = math.min(RG.acc + dt, 0.06)
+				local n = 0
+				while RG.acc >= RGH and n < 14 do
+					rgStep(sim, RGH, tx or 0, ty or 0, holding)
+					RG.acc -= RGH
+					n += 1
+				end
+				if sim.state == "free" then
+					sim.t += dt
+					local mv = 0
+					for _, p in ipairs(sim.P) do
+						local vx, vy = p.x - p.px, p.y - p.py
+						mv = math.max(mv, math.sqrt(vx * vx + vy * vy) / RGH)
+					end
+					if mv < 4.5 then sim.calm += dt else sim.calm = 0 end
+					-- au repos au sol (ou trop long) : le personnage se relève tout seul
+					if Library.PreviewRagdollRecover ~= false and ((sim.t > 0.8 and sim.calm > 0.5) or sim.t > 6) then
+						sim.state, sim.g = "getup", 0
+					end
+				end
+			elseif sim and sim.state == "getup" then
+				sim.g += dt / math.max(rgNum("PreviewRagdollGetUpTime", 0.9), 0.15)
+				if sim.g >= 1 then RG.sim, sim = nil, nil end
 			end
+
+			-- pose affichée : l'état physique, fondu vers la pose debout pendant la remise sur pied
+			if sim then
+				local cx, cy, roll, rel = rgRead(sim)
+				local b = 1
+				if sim.state == "getup" then
+					local gg = math.clamp(sim.g, 0, 1)
+					b = 1 - gg * gg * (3 - 2 * gg)
+				end
+				ix.off = Xr * (cx * b) + Vector3.new(0, cy * b, 0)
+				ix.roll = roll * b
+				for k, v in pairs(rel) do ix.rt[k] = v * b end
+				ix.rw = math.min(1, ix.rw + dt * 10)
+			else
+				if ix.off ~= Vector3.zero then ix.off = Vector3.zero end
+				ix.roll = 0
+				for k in pairs(ix.rt) do ix.rt[k] = 0 end
+				ix.rw = math.max(0, ix.rw - dt * 3)
+			end
+			ix.rollOut = ix.roll
 		end
 
 		function ix.apply(B, t)
@@ -12954,7 +13893,7 @@ function Block:CreatePreview3D(o)
 			end
 			if ix.rw > 0 then
 				for k, th in pairs(ix.rt) do
-					B[k] = B[k]:Lerp(A(0, 0, k == "nk" and th * 0.5 or th), ix.rw)
+					B[k] = B[k]:Lerp(A(0, 0, th), ix.rw)
 				end
 			end
 		end
@@ -13170,7 +14109,7 @@ function Block:CreatePreview3D(o)
 			local cf = wf[w.s] * CFrame.Angles(0, 0, w.s * (a - math.pi / 2)) * CFrame.new(0, w.len / 2, w.z)
 			w.p.CFrame, w.g.CFrame = cf, cf
 		end
-		local hh = hd.Size.Y / 2 + 0.55 * k + math.sin(t * 1.6) * 0.06 * k
+		local hh = hd.Size.Y / 2 + (tonumber(Library.PreviewHaloHeight) or 0.88) * k + math.sin(t * 1.6) * 0.06 * k   -- V9.7 : plus haut (0.55 avant) · Library.PreviewHaloHeight
 		local hc2 = hcf * CFrame.new(0, hh, 0) * CFrame.Angles(-0.14, 0, math.sin(t * 1.1) * 0.04)
 		local gt = 0.72 + 0.1 * math.sin(t * 2.2)
 		for _, g in ipairs(angel.ring) do
@@ -13227,6 +14166,7 @@ function Block:CreatePreview3D(o)
 				rig:PivotTo(CFrame.new(ix.off) * avBase * CFrame.new(ex, y, 0) * CFrame.Angles(EMO.flip, EMO.spin, er + ix.rollOut))
 			end
 			angelStep(t)   -- thème Ange : halo + ailes (ne fait rien pour les autres thèmes)
+			ix.layout()    -- zones cliquables des parties du corps (suivent le personnage)
 			local em = (opt.Emotes and EMO.stage == 4) and Library.PreviewEmotes[EMO.idx] or nil
 			local lblTxt = em and ("Emote " .. EMO.idx .. "/" .. #Library.PreviewEmotes .. "  ·  " .. em.Name) or ""
 			if lblTxt ~= EMO.lbl then
@@ -13443,7 +14383,7 @@ function Block:CreatePreview3D(o)
 	track(UIS.InputChanged:Connect(function(i)
 		if pressed and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
 			moved += math.abs(i.Delta.X) + math.abs(i.Delta.Y)
-			if moved > 5 and not ix.part then dragging = true end
+			if moved > 5 and not ix.part and not ix.pending then dragging = true end
 			if dragging then
 				yaw -= i.Delta.X * 0.012
 				pitch = math.clamp(pitch - i.Delta.Y * 0.006, -1, 0.6)
@@ -13569,6 +14509,8 @@ function Block:CreatePreview3D(o)
 		end
 		if n and list[n] then EMO.force = n end
 	end
+	item.Ragdoll = function(...) return ix.ragdollNow((unself(item, ...))) end   -- pv:Ragdoll([-1..1]) : fait tomber le personnage (poussée à gauche / droite) ; il se relève seul
+	item.GetUp = function() ix.getUp() end
 	item.Welcome = function() welcomePending = true end   -- animation de bienvenue (2 sauts, bras levés), puis le coucou continue
 	item.Jump = function() jumpPending = true end   -- saut à la Mario (attend que la lib soit chargée et l'aperçu visible)
 	item.SetTarget = function(...)
@@ -13581,6 +14523,125 @@ function Block:CreatePreview3D(o)
 	item.Viewport = vp
 	item.Camera = cam
 	item.GetModel = function() return rig end
+
+	-- ---------------------------------------------------------------- V9.7 : carte d'infos du joueur ciblé + liaison avec un PlayerPicker
+	--   CreatePreview3D({ Info = true })  ou  pv:SetInfo(true) : petite carte en bas à gauche (pseudo, vie + barre, équipe, distance, outil en main).
+	--   pv:BindPicker(picker) : l'aperçu affiche le joueur choisi dans un CreatePlayerPicker (le premier si Multi) et revient à l'avatar
+	--   d'origine quand la sélection est vidée ou que le joueur part. La carte s'active toute seule (sauf Info = false).
+	--   Si le joueur ciblé réapparaît (mort / respawn), l'aperçu se recharge tout seul.
+	do
+		local infoOn = (o.Info == true)
+		local baseSrc = charSrc   -- cible d'origine (retour quand plus aucun joueur n'est choisi)
+		local card, nameL, subL, hpFill
+		local targetConn, targetTracked = nil, false
+		local WHITE = Color3.fromRGB(255, 255, 255)
+
+		local function ensureCard()
+			if card then return end
+			card = new("Frame", { Name = "PlayerInfo", BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.4,
+				BorderSizePixel = 0, AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 14, 1, -28),
+				Size = UDim2.fromOffset(158, 44), ZIndex = 6, Visible = false }, f)
+			corner(card, 8)
+			new("UIStroke", { Thickness = 1, Transparency = 0.75, Color = WHITE, ApplyStrokeMode = BORDER }, card)
+			nameL = new("TextLabel", { BackgroundTransparency = 1, Font = F_BOLD, TextSize = 12, TextColor3 = WHITE, TextXAlignment = LEFT,
+				TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(10, 5), Size = UDim2.new(1, -20, 0, 15), ZIndex = 7, Text = "" }, card)
+			subL = new("TextLabel", { BackgroundTransparency = 1, Font = F_REG, TextSize = 10, TextColor3 = Color3.fromRGB(190, 190, 198),
+				TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd, Position = UDim2.fromOffset(10, 20), Size = UDim2.new(1, -20, 0, 12),
+				ZIndex = 7, Text = "" }, card)
+			local track3 = new("Frame", { BackgroundColor3 = WHITE, BackgroundTransparency = 0.85, BorderSizePixel = 0,
+				Position = UDim2.new(0, 10, 1, -9), Size = UDim2.new(1, -20, 0, 3), ZIndex = 7 }, card)
+			corner(track3, 2)
+			hpFill = new("Frame", { BackgroundColor3 = Color3.fromRGB(80, 220, 120), BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), ZIndex = 8 }, track3)
+			corner(hpFill, 2)
+		end
+		local function targetPlayer()
+			if typeof(charSrc) == "Instance" and charSrc:IsA("Player") and charSrc.Parent then return charSrc end
+			return nil
+		end
+		local function updateCard()
+			if not infoOn then
+				if card then card.Visible = false end
+				return
+			end
+			ensureCard()
+			local pl = targetPlayer()
+			if not pl then card.Visible = false return end
+			card.Visible = true
+			local ch = pl.Character
+			local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+			nameL.Text = (pl.DisplayName ~= pl.Name) and (pl.DisplayName .. "  @" .. pl.Name) or pl.Name
+			local parts = {}
+			if hum then parts[#parts + 1] = tostring(math.ceil(hum.Health)) .. " PV" end
+			if pl.Team then parts[#parts + 1] = pl.Team.Name end
+			local mine = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+			local theirs = ch and ch:FindFirstChild("HumanoidRootPart")
+			if pl ~= LP and mine and theirs then
+				parts[#parts + 1] = tostring(math.floor((mine.Position - theirs.Position).Magnitude + 0.5)) .. " studs"
+			end
+			local tool = ch and ch:FindFirstChildOfClass("Tool")
+			if tool then parts[#parts + 1] = tool.Name end
+			subL.Text = #parts > 0 and table.concat(parts, "  ·  ") or "—"
+			local frac = (hum and hum.MaxHealth > 0) and math.clamp(hum.Health / hum.MaxHealth, 0, 1) or 1
+			tween(hpFill, { Size = UDim2.fromScale(frac, 1), BackgroundColor3 = Color3.fromRGB(235, 70, 70):Lerp(Color3.fromRGB(80, 220, 120), frac) }, 0.25)
+		end
+		task.spawn(function()   -- mise à jour ~2 fois par seconde, seulement quand l'aperçu est visible
+			while f.Parent do
+				if infoOn and isShown() then pcall(updateCard) end
+				task.wait(0.4)
+			end
+		end)
+
+		-- SetTarget : même comportement qu'avant + rechargement quand le joueur ciblé réapparaît + carte d'infos
+		local origSetTarget = item.SetTarget
+		item.SetTarget = function(...)
+			local v = unself(item, ...)
+			if targetConn then targetConn:Disconnect() targetConn = nil end
+			local r = origSetTarget(v)
+			local pl = (v == true) and LP or v
+			if typeof(pl) == "Instance" and pl:IsA("Player") then
+				if not targetTracked then
+					targetTracked = true
+					track({ Disconnect = function() if targetConn then targetConn:Disconnect() targetConn = nil end end })
+				end
+				targetConn = pl.CharacterAdded:Connect(function()
+					task.delay(1.5, function()
+						if vp.Parent and charSrc == pl then refresh(true) end
+					end)
+				end)
+			end
+			pcall(updateCard)
+			return r
+		end
+		item.SetInfo = function(...)
+			infoOn = (unself(item, ...)) and true or false
+			pcall(updateCard)
+		end
+		item.BindPicker = function(...)
+			local pk = unself(item, ...)
+			if type(pk) ~= "table" or type(pk.OnChanged) ~= "function" or type(pk.Get) ~= "function" then
+				warn("[Ui-Lib] Preview3D:BindPicker : un élément CreatePlayerPicker est attendu.")
+				return item
+			end
+			local function apply(v)
+				local pl = (type(v) == "table") and v[1] or v
+				if typeof(pl) == "Instance" and pl:IsA("Player") then
+					item.SetTarget(pl)
+				else
+					item.SetTarget(baseSrc)   -- plus de sélection : retour à l'avatar d'origine
+				end
+			end
+			pk.OnChanged(apply)
+			if o.Info == nil then infoOn = true end
+			local okG, cur = pcall(pk.Get)
+			if okG then
+				local first = (type(cur) == "table") and cur[1] or cur
+				if typeof(first) == "Instance" then apply(first) end
+			end
+			pcall(updateCard)
+			return item
+		end
+		if infoOn then pcall(updateCard) end
+	end
 	return item
 end
 Block.CreateESPPreview = Block.CreatePreview3D
@@ -13760,6 +14821,14 @@ end
 Library.Version = "5.10.0"
 Library.AppName = "Invincible"
 Library.Changelog = {
+	{ Version = "5.14.0", Date = "2026-11-08", Title = "API enrichie", Notes = {
+		"+ Toggle : Loop = function(dt, item) tourne tant que le toggle est activé et se coupe tout seul (LoopEvent, LoopInterval) — plus de RunService à gérer.",
+		"+ Toggle : Bind = { Target, Property, On, Off } bascule directement une propriété, sans callback (Off absent = valeur d'origine, Keep = true pour la ré-imposer).",
+		"+ ShowIf / HideIf sur n'importe quel élément : un réglage n'apparaît que si un autre est activé (élément, Flag, fonction, Equals / In / Contains / Min / Max).",
+		"+ Liste déroulante enrichie : chaque option peut avoir une icône (Icon), une description (Desc) et une couleur (Color).",
+		"Aperçu du personnage (Home) : prendre une partie du corps ne demande plus de cliquer ~58 px trop haut (zones cliquables réelles + mouvements relatifs).",
+		"Curseur décalé (~58 px, aussi dans le color picker) : à chaque clic sur une ligne / un bouton / le color picker, la position du pointeur est vérifiée dans le rectangle réellement cliqué ; si un décalage connu (36, 58, inset...) la place dedans 2 fois de suite, il est appliqué automatiquement à toute l'UI.",
+	} },
 	{ Version = "5.13.0", Date = "2026-11-07", Title = "Tracker de joueur", Notes = {
 		"+ Home > Serveurs > « Tracker » : retrouve un joueur à partir de son pseudo EXACT dans les serveurs publics d'un jeu (PlaceId au choix, jeu actuel par défaut).",
 		"+ Le serveur actuel est vérifié d'abord ; ensuite les serveurs publics sont parcourus page par page (barre de progression, bouton Arrêter).",
@@ -15472,6 +16541,13 @@ function Library:_buildHomeExplain(sub)
 	live2:CreateDropdown({ Name = "Liste déroulante", Items = { "Pomme", "Poire", "Cerise", "Fraise" }, Default = "Pomme" })
 	live2:CreateDropdown({ Name = "Liste à choix multiples", Items = { "Rouge", "Vert", "Bleu", "Jaune" }, Multi = true, Default = { "Rouge" } })
 	live2:CreateRadio({ Name = "Choix unique", Items = { "Classique", "Éclipse", "Carré" }, Default = "Classique" })
+	live2:CreateDropdown({ Name = "Liste enrichie", Items = {   -- chaque option : Icon (image) · Desc (ligne grise) · Color (teinte)
+		{ Name = "Pistolet", Desc = "Dégâts : 20", Color = Color3.fromRGB(255, 200, 90) },
+		{ Name = "Fusil", Desc = "Dégâts : 45 · lent", Color = Color3.fromRGB(255, 120, 120) },
+		{ Name = "Arc", Desc = "Silencieux", Color = Color3.fromRGB(130, 220, 150) },
+	}, Default = "Pistolet" })
+	local demoCond = live2:CreateToggle({ Name = "Réglage conditionnel (ShowIf)", Keybind = false })
+	live2:CreateSlider({ Name = "Visible si le toggle est activé", Min = 0, Max = 10, Default = 5, ShowIf = demoCond })
 	live2:CreateColorPicker({ Name = "Sélecteur de couleur", Default = Color3.fromRGB(150, 110, 255) })
 	live2:CreateTextArea({ Name = "Zone de texte", Height = 64, Placeholder = "Plusieurs lignes possibles..." })
 
@@ -16748,8 +17824,9 @@ local function applySearch(win, q)
 					end
 					if vis and mf then vis = Library:_isModifiedFrame(e.Frame) end
 				end
-				e.Frame.Visible = vis
-				if active and vis then n = n + 1 end
+				e.SearchVis = vis
+				e.Frame.Visible = vis and not e.CondHidden   -- ShowIf / HideIf (V9.6) : un élément masqué par sa condition reste masqué
+				if active and vis and not e.CondHidden then n = n + 1 end
 			end
 			local show = (not active) or n > 0 or (blockHit and not mf)
 			blk.Frame.Visible = show
@@ -16877,7 +17954,7 @@ function Library._updateSearchResults(win, q)
 	for _, tab in ipairs(win.Tabs) do
 		for _, blk in ipairs(tab:_allBlocks()) do
 			for _, e in ipairs(blk.Entries) do
-				if e.Name and e.Name ~= "" and e.Frame and not seen[e.Frame] then
+				if e.Name and e.Name ~= "" and e.Frame and not e.CondHidden and not seen[e.Frame] then
 					local pos = string.find(string.lower(e.Name), q, 1, true)
 					if pos then
 						seen[e.Frame] = true
@@ -22840,6 +23917,854 @@ function Library:CreateWindow(cfg)
 		Library._quietWin = false
 	end
 	return win
+end
+
+-- ============================================================================
+-- V9.7 : CIBLE JOUEUR · ONCHANGED MULTIPLE · GROUPES DE TOGGLES   (+ Cooldown sur CreateButton, voir plus haut)
+--
+--   CreatePlayerPicker({ Name = "Cible", Multi = true })
+--     Liste déroulante de joueurs qui se met à jour toute seule (arrivées, départs, changement de pseudo affiché).
+--     item.Get() renvoie des objets Player (un Player ou nil ; une liste de Player si Multi = true), pas des chaînes.
+--     Callback(player)  /  Callback({ player, ... }) reçoivent aussi des Player.
+--     Options : IncludeLocal = true (se montrer soi-même, faux par défaut) · Filter = function(player) return bool end ·
+--               Avatars = false (sans miniature) · Flag = "..." (la config sauvegarde les NOMS d'utilisateur).
+--     Méthodes : item.Get() · item.GetNames() · item.Set(player | nom | liste) · item.Clear() · item.Refresh() ·
+--                item.SetFilter(fn) · item.Open() / Close() · item.OnChanged(fn)
+--     Note : Library.Flags[flag] et Library.Items[flag] manipulent les NOMS (nécessaire pour les configs) ; l'élément renvoyé
+--     par CreatePlayerPicker, lui, manipule des Player.
+--
+--   item:OnChanged(fn)   (tous les éléments : bouton, toggle, curseur, liste, champ, touche...)
+--     Ajoute un écouteur sans toucher au Callback d'origine : plusieurs scripts peuvent écouter le même élément.
+--     Renvoie un handle : h:Disconnect() · h.Connected. item.ClearChanged() retire tous les écouteurs ajoutés.
+--     fn reçoit les mêmes arguments que Callback.
+--
+--   Library:Group({ toggle1, toggle2, ... }, { Exclusive = true, AllowNone = true, Default = toggle2 })
+--     (Exclusive / AllowNone / Default peuvent aussi être mis directement dans la liste : { t1, t2, Exclusive = true })
+--     Éléments acceptés : toggles, ou noms de Flag. Exclusive = true : un seul toggle actif à la fois (activer l'un coupe les autres) ;
+--     AllowNone = false : au moins un reste toujours actif (le dernier ne peut pas être coupé).
+--     g.Set(bool) (tout activer / tout couper ; en mode exclusif « true » garde l'actif ou prend le premier) · g.Toggle() ·
+--     g.Select(toggle | index | flag) · g.Get() (liste des actifs) · g.GetActive() (le premier actif) · g.Count() ·
+--     g.Add(toggle) · g.Remove(toggle) · g.OnChanged(function(actifs, toggle, etat) end) · g.Destroy()
+-- ============================================================================
+do
+	-- ---- 1) CIBLE JOUEUR ---------------------------------------------------------------------------------------------
+	function Block:CreatePlayerPicker(o)
+		o = o or {}
+		local multi = (o.Multi == true) or (o.MultiSelect == true)
+		local includeLocal = o.IncludeLocal == true
+		local avatars = o.Avatars ~= false
+		local filter = type(o.Filter) == "function" and o.Filter or nil
+		local emitCb = o.Callback
+		local dd, frame
+		local muted, pending = 0, false
+		local lastDisplay = {}
+		local leaving = setmetatable({}, { __mode = "k" })   -- joueurs en train de partir (encore dans GetPlayers() un instant)
+		local pconn = {}
+		local pk = {}
+
+		local function toPlayer(name)
+			if type(name) ~= "string" then return nil end
+			local p = Players:FindFirstChild(name)
+			if p and p:IsA("Player") and not leaving[p] then return p end
+			return nil
+		end
+		local function selectedNames()
+			local raw = dd.Get()
+			if multi then return raw end
+			return raw and { raw } or {}
+		end
+		local function value()
+			local names = selectedNames()
+			if multi then
+				local out = {}
+				for _, n in ipairs(names) do
+					local p = toPlayer(n)
+					if p then out[#out + 1] = p end
+				end
+				return out
+			end
+			return toPlayer(names[1])
+		end
+		local function emit() fire(emitCb, value()) end
+
+		local function listPlayers()
+			local out = {}
+			for _, p in ipairs(Players:GetPlayers()) do
+				if not leaving[p] and (includeLocal or p ~= LP) then
+					local pass = true
+					if filter then
+						local ok, r = pcall(filter, p)
+						pass = ok and r and true or false
+					end
+					if pass then out[#out + 1] = p end
+				end
+			end
+			table.sort(out, function(a, b) return string.lower(a.Name) < string.lower(b.Name) end)
+			return out
+		end
+		local function entries(list)
+			local t = {}
+			for _, p in ipairs(list) do
+				local e = { Name = p.Name }
+				if p.DisplayName ~= p.Name then e.Desc = p.DisplayName end   -- pseudo affiché (cherchable dans la liste)
+				if avatars then e.Icon = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(p.UserId) .. "&w=48&h=48" end
+				t[#t + 1] = e
+			end
+			return t
+		end
+
+		local function refresh()
+			if not dd or not (frame and frame.Parent) then return end
+			local before = selectedNames()
+			local list = listPlayers()
+			local present, nd, displayChanged = {}, {}, false
+			for _, p in ipairs(list) do
+				present[p.Name] = true
+				nd[p.Name] = p.DisplayName
+				local old = lastDisplay[p.Name]
+				if old ~= nil and old ~= p.DisplayName then displayChanged = true end
+			end
+			lastDisplay = nd
+			local keep = {}
+			for _, n in ipairs(before) do
+				if present[n] then keep[#keep + 1] = n end
+			end
+			muted += 1
+			if displayChanged then
+				-- le pseudo affiché d'un joueur a changé : reconstruction complète (clear = true vide la sélection, on la remet)
+				dd.Refresh(entries(list), true)
+				if multi then dd.Set(keep) else dd.Set(keep[1]) end
+			else
+				dd.SetItems(entries(list))   -- liste identique : rien n'est reconstruit
+			end
+			muted -= 1
+			if #keep ~= #before then emit() end   -- un joueur sélectionné est parti : le script est prévenu
+		end
+		local function schedule()
+			if pending then return end
+			pending = true
+			task.defer(function()
+				pending = false
+				refresh()
+			end)
+		end
+
+		local o2 = table.clone(o)
+		o2.ShowIf, o2.HideIf = nil, nil   -- gérés par l'enveloppe extérieure
+		o2.Multi, o2.MultiSelect, o2.MultipleOptions = multi, nil, nil
+		o2.Name = o.Name or "Joueur"
+		o2.Items, o2.Options = entries(listPlayers()), nil
+		o2.Default, o2.CurrentOption = nil, nil
+		o2.Keys = false   -- pas de touche par joueur
+		o2.UpdateList = nil
+		o2.Callback = function()
+			if muted > 0 or not dd then return end
+			emit()
+		end
+		local n0 = #self.Entries
+		dd = self:CreateDropdown(o2)
+		frame = self.Entries[n0 + 1] and self.Entries[n0 + 1].Frame
+		for _, p in ipairs(listPlayers()) do lastDisplay[p.Name] = p.DisplayName end
+
+		local function hook(p)
+			if pconn[p] then return end
+			pconn[p] = p:GetPropertyChangedSignal("DisplayName"):Connect(schedule)
+		end
+		for _, p in ipairs(Players:GetPlayers()) do hook(p) end
+		track(Players.PlayerAdded:Connect(function(p) hook(p) schedule() end))
+		track(Players.PlayerRemoving:Connect(function(p)
+			leaving[p] = true
+			if pconn[p] then pconn[p]:Disconnect() pconn[p] = nil end
+			schedule()
+		end))
+		track({ Disconnect = function()
+			for _, c in pairs(pconn) do c:Disconnect() end
+			table.clear(pconn)
+		end })
+
+		local function nameOf(x)
+			if typeof(x) == "Instance" and x:IsA("Player") then return x.Name end
+			if x ~= nil then return tostring(x) end
+			return nil
+		end
+		pk.Get = function() return value() end
+		pk.GetNames = function() return dd.Get() end
+		pk.Set = function(...)
+			local v = unself(pk, ...)
+			local names = {}
+			if type(v) == "table" then
+				for _, x in ipairs(v) do names[#names + 1] = nameOf(x) end
+			elseif v ~= nil then
+				names[1] = nameOf(v)
+			end
+			local ok = {}
+			for _, n in ipairs(names) do
+				if lastDisplay[n] ~= nil then ok[#ok + 1] = n end   -- seulement les joueurs actuellement listés
+			end
+			if multi then dd.Set(ok) else dd.Set(ok[1]) end
+		end
+		pk.Clear = function() if multi then dd.Set({}) else dd.Set(nil) end end
+		pk.Refresh = function() refresh() end
+		pk.SetFilter = function(...)
+			local fn = unself(pk, ...)
+			filter = type(fn) == "function" and fn or nil
+			refresh()
+		end
+		pk.Open = function() dd.Open() end
+		pk.Close = function() dd.Close() end
+		pk.Instance = frame
+		return pk
+	end
+
+	-- ---- 2) ONCHANGED MULTIPLE : enveloppe toutes les méthodes Block:Create* ---------------------------------------------
+	local wrapNames = {}
+	for k, fn in pairs(Block) do
+		if type(k) == "string" and string.sub(k, 1, 6) == "Create" and type(fn) == "function" then wrapNames[#wrapNames + 1] = k end
+	end
+	for _, k in ipairs(wrapNames) do
+		local orig = Block[k]
+		Block[k] = function(self, o, ...)
+			if type(o) ~= "table" or type(self) ~= "table" then return orig(self, o, ...) end
+			local listeners = {}
+			local userCb = o.Callback
+			local o2 = table.clone(o)   -- copie : une table d'options réutilisée ne partage pas ses écouteurs
+			o2.Callback = function(...)
+				if type(userCb) == "function" then fire(userCb, ...) end
+				if #listeners == 0 then return end
+				for _, l in ipairs(table.clone(listeners)) do
+					if l.Connected then fire(l.Fn, ...) end
+				end
+			end
+			local a, b, c = orig(self, o2, ...)
+			if type(a) == "table" then
+				a.OnChanged = function(...)
+					local fn = unself(a, ...)
+					if type(fn) ~= "function" then error("OnChanged : une fonction est attendue", 2) end
+					local h = { Connected = true, Fn = fn }
+					h.Disconnect = function()
+						h.Connected = false
+						local i = table.find(listeners, h)
+						if i then table.remove(listeners, i) end
+					end
+					h.disconnect = h.Disconnect
+					listeners[#listeners + 1] = h
+					return h
+				end
+				a.ClearChanged = function()
+					for _, l in ipairs(table.clone(listeners)) do l.Disconnect() end
+				end
+			end
+			return a, b, c
+		end
+	end
+
+	-- ---- 3) GROUPES DE TOGGLES -------------------------------------------------------------------------------------------
+	function Library.Group(...)
+		local items, opts = unself(Library, ...)   -- Library:Group(...) ET Library.Group(...)
+		if type(items) ~= "table" then error("Library:Group : une liste de toggles est attendue", 2) end
+		if type(opts) ~= "table" then opts = {} end
+		local exclusive = (opts.Exclusive == true) or (items.Exclusive == true)
+		local allowNone = not (opts.AllowNone == false or items.AllowNone == false)
+		local default = opts.Default
+		if default == nil then default = items.Default end
+
+		local list, hooks, listeners = {}, {}, {}
+		local busy = false
+		local g = {}
+
+		local function resolve(x)
+			if type(x) == "string" then x = Library.Items[x] end
+			if type(x) == "table" and type(x.Get) == "function" and type(x.Set) == "function" then return x end
+			return nil
+		end
+		local function isOn(it)
+			local ok, v = pcall(it.Get)
+			return ok and v == true
+		end
+		local function active()
+			local out = {}
+			for _, it in ipairs(list) do
+				if isOn(it) then out[#out + 1] = it end
+			end
+			return out
+		end
+		local function notify(it, state)
+			if #listeners == 0 then return end
+			local act = active()
+			for _, l in ipairs(table.clone(listeners)) do
+				if l.Connected then fire(l.Fn, act, it, state) end
+			end
+		end
+		local function setItem(it, v)   -- changement fait par le groupe lui-même : ses propres écouteurs sont mis en pause
+			busy = true
+			pcall(it.Set, v)
+			busy = false
+		end
+		local function onlyOne(keep)
+			for _, it in ipairs(list) do
+				if it ~= keep and isOn(it) then setItem(it, false) end
+			end
+		end
+
+		local function hook(it)
+			if type(it.OnChanged) ~= "function" then
+				warn("[Ui-Lib] Library:Group : un élément n'a pas OnChanged (un toggle créé avec CreateToggle est attendu).")
+				return
+			end
+			hooks[it] = it.OnChanged(function(v)
+				if busy then return end
+				v = v and true or false
+				if exclusive then
+					if v then
+						onlyOne(it)
+					elseif not allowNone and #active() == 0 then
+						setItem(it, true)   -- au moins un toggle doit rester actif
+						return
+					end
+				end
+				notify(it, v)
+			end)
+		end
+
+		g.Add = function(...)
+			local it = resolve((unself(g, ...)))
+			if not it then warn("[Ui-Lib] Library:Group.Add : élément invalide") return end
+			if table.find(list, it) then return end
+			list[#list + 1] = it
+			hook(it)
+			if exclusive and isOn(it) and #active() > 1 then setItem(it, false) end
+		end
+		g.Remove = function(...)
+			local it = resolve((unself(g, ...)))
+			local i = it and table.find(list, it)
+			if not i then return end
+			table.remove(list, i)
+			if hooks[it] then hooks[it].Disconnect() hooks[it] = nil end
+		end
+		g.Get = function() return active() end
+		g.GetActive = function() return active()[1] end
+		g.Count = function() return #active() end
+		g.Set = function(...)
+			local v = (unself(g, ...)) and true or false
+			if exclusive then
+				if v then
+					local cur = active()[1]
+					if cur then onlyOne(cur) elseif list[1] then setItem(list[1], true) end
+				else
+					for _, it in ipairs(list) do
+						if isOn(it) then setItem(it, false) end
+					end
+				end
+			else
+				for _, it in ipairs(list) do
+					if isOn(it) ~= v then setItem(it, v) end
+				end
+			end
+			notify(nil, v)
+		end
+		g.Toggle = function() g.Set(#active() == 0) end
+		g.Select = function(...)
+			local x = unself(g, ...)
+			local it = (type(x) == "number") and list[x] or resolve(x)
+			if not it or not table.find(list, it) then return end
+			if exclusive then onlyOne(it) end
+			if not isOn(it) then setItem(it, true) end
+			notify(it, true)
+		end
+		g.OnChanged = function(...)
+			local fn = unself(g, ...)
+			if type(fn) ~= "function" then error("Group.OnChanged : une fonction est attendue", 2) end
+			local h = { Connected = true, Fn = fn }
+			h.Disconnect = function()
+				h.Connected = false
+				local i = table.find(listeners, h)
+				if i then table.remove(listeners, i) end
+			end
+			listeners[#listeners + 1] = h
+			return h
+		end
+		g.Destroy = function()
+			for it, h in pairs(hooks) do h.Disconnect() hooks[it] = nil end
+			for _, l in ipairs(table.clone(listeners)) do l.Disconnect() end
+			table.clear(list)
+		end
+
+		for _, x in ipairs(items) do g.Add(x) end
+		-- état de départ cohérent
+		if exclusive then
+			local first = (default ~= nil and ((type(default) == "number") and list[default] or resolve(default))) or active()[1]
+			if first and table.find(list, first) then
+				onlyOne(first)
+				if not isOn(first) then setItem(first, true) end
+			elseif not allowNone and list[1] then
+				setItem(list[1], true)
+			end
+		elseif default ~= nil then
+			local it = (type(default) == "number") and list[default] or resolve(default)
+			if it and table.find(list, it) and not isOn(it) then setItem(it, true) end
+		end
+		return g
+	end
+end
+
+-- ============================================================================
+-- V9.6 : ÉLÉMENTS CONDITIONNELS  (ShowIf / HideIf sur n'importe quel élément : toggle, slider, liste, bouton, section...)
+--   local avance = blk:CreateToggle({ Name = "Réglages avancés" })
+--   blk:CreateSlider({ Name = "Précision", Min = 1, Max = 10, ShowIf = avance })             -- visible seulement si « avance » est activé
+--   blk:CreateSlider({ Name = "Vitesse",   Min = 1, Max = 10, HideIf = avance })             -- l'inverse
+--   ShowIf accepte :
+--     • un élément (toggle : activé · liste : un choix fait · curseur : valeur ≠ 0)              ShowIf = avance
+--     • le nom d'un Flag                                                                        ShowIf = "avance"
+--     • une fonction qui renvoie true / false (testée ~10 fois par seconde)                     ShowIf = function() return game.PlaceId == 123 end
+--     • une table de comparaison : { Item = liste, Equals = "Pistolet" } · NotEquals · In = { "a", "b" } · Contains = "x" (liste multiple)
+--       · Min / Max (curseurs) · Not = true                                                      ShowIf = { Item = arme, In = { "Pistolet", "Fusil" } }
+--     • une liste de conditions (toutes vraies ; Any = true : une seule suffit)                  ShowIf = { avance, { Flag = "mode", Equals = "Pro" } }
+--   Un élément masqué n'apparaît ni dans la recherche ni dans la mise en page. Library:RefreshConditions() force le recalcul.
+-- ============================================================================
+do
+	local list = {}   -- { Entries = { entrées du bloc }, Cond = condition, Neg = bool, Hidden = bool }
+	local function truthy(v)
+		if v == nil or v == false or v == "" or v == 0 then return false end
+		if type(v) == "table" and next(v) == nil then return false end
+		return true
+	end
+	local function readSource(x)
+		if type(x) == "function" then
+			local ok, r = pcall(x)
+			return ok and r or nil
+		elseif type(x) == "string" then
+			return Library.Flags[x]
+		elseif type(x) == "table" and type(x.Get) == "function" then
+			local ok, r = pcall(x.Get, x)
+			return ok and r or nil
+		end
+		return nil
+	end
+	local function has(v, x)   -- v == x, ou x fait partie de v (liste à choix multiples)
+		if v == x then return true end
+		if type(v) == "table" then return table.find(v, x) ~= nil end
+		return false
+	end
+	local evalCond
+	evalCond = function(c)
+		local tc = type(c)
+		if tc == "function" or tc == "string" then return truthy(readSource(c)) end
+		if tc ~= "table" then return c ~= false and c ~= nil end
+		if type(c.Get) == "function" then return truthy(readSource(c)) end   -- un élément
+		local src = c.Item
+		if src == nil then src = c.Element end
+		if src == nil then src = c.Flag end
+		if src == nil then src = c.Source end
+		if src ~= nil then
+			local v, r = readSource(src), nil
+			if c.Equals ~= nil then
+				r = has(v, c.Equals)
+			elseif c.NotEquals ~= nil then
+				r = not has(v, c.NotEquals)
+			elseif type(c.In) == "table" then
+				r = false
+				if type(v) == "table" then
+					for _, x in ipairs(v) do if table.find(c.In, x) then r = true break end end
+				else
+					r = table.find(c.In, v) ~= nil
+				end
+			elseif c.Contains ~= nil then
+				if type(v) == "string" then r = string.find(v, tostring(c.Contains), 1, true) ~= nil else r = has(v, c.Contains) end
+			elseif c.Min ~= nil or c.Max ~= nil then
+				v = tonumber(v)
+				r = v ~= nil and (c.Min == nil or v >= c.Min) and (c.Max == nil or v <= c.Max)
+			else
+				r = truthy(v)
+			end
+			if c.Not then r = not r end
+			return r and true or false
+		end
+		if c[1] ~= nil then   -- liste : toutes vraies (Any = true : une seule)
+			local any = c.Any == true
+			for _, sub in ipairs(c) do
+				local r = evalCond(sub)
+				if any and r then return true end
+				if not any and not r then return false end
+			end
+			return not any
+		end
+		return true
+	end
+
+	local function setHidden(rec, hidden)
+		rec.Hidden = hidden
+		for _, e in ipairs(rec.Entries) do
+			e.CondHidden = hidden or nil
+			if e.Frame and e.Frame.Parent then
+				e.Frame.Visible = (not hidden) and e.SearchVis ~= false   -- la recherche en cours garde la main si elle filtre déjà la ligne
+			end
+		end
+		if Library._hudRefresh then Library._hudRefresh() end
+	end
+	local function evalAll(force)
+		for i = #list, 1, -1 do
+			local rec = list[i]
+			local e1 = rec.Entries[1]
+			if not (e1 and e1.Frame and e1.Frame.Parent) then
+				table.remove(list, i)   -- élément détruit
+			else
+				local ok, show = pcall(evalCond, rec.Cond)
+				if not ok then show = true end
+				if rec.Neg then show = not show end
+				if force or rec.Hidden ~= (not show) then setHidden(rec, not show) end
+			end
+		end
+	end
+	Library._evalShowIf = evalAll
+	function Library:RefreshConditions() evalAll(true) end
+
+	local conn, acc = nil, 0
+	local function ensureWatcher()
+		if conn and conn.Connected then return end
+		acc = 0
+		conn = track(RunService.Heartbeat:Connect(function(dt)
+			acc += dt
+			if acc < 0.1 then return end
+			acc = 0
+			if #list > 0 then evalAll(false) end
+		end))
+	end
+
+	-- enveloppe toutes les méthodes Block:Create* : si les options contiennent ShowIf / HideIf, les lignes créées sont suivies
+	local names = {}
+	for k, fn in pairs(Block) do
+		if type(k) == "string" and string.sub(k, 1, 6) == "Create" and type(fn) == "function" then names[#names + 1] = k end
+	end
+	for _, k in ipairs(names) do
+		local orig = Block[k]
+		Block[k] = function(self, o, ...)
+			local cond, neg
+			if type(o) == "table" and type(self) == "table" and self.Entries then
+				if o.ShowIf ~= nil then cond = o.ShowIf elseif o.HideIf ~= nil then cond, neg = o.HideIf, true end
+			end
+			if cond == nil then return orig(self, o, ...) end
+			local n0 = #self.Entries
+			local a, b, c = orig(self, o, ...)
+			local ents = {}
+			for i = n0 + 1, #self.Entries do ents[#ents + 1] = self.Entries[i] end
+			if #ents > 0 then
+				local rec = { Entries = ents, Cond = cond, Neg = neg }
+				list[#list + 1] = rec
+				local ok, show = pcall(evalCond, cond)
+				if not ok then show = true end
+				if neg then show = not show end
+				setHidden(rec, not show)   -- état initial tout de suite (pas de clignotement)
+				ensureWatcher()
+			end
+			return a, b, c
+		end
+	end
+end
+
+-- ============================================================================
+-- API PRATIQUE  (V9.11)
+--   Sur TOUS les éléments (bouton, toggle, curseur, liste, pastilles, minuteur...) :
+--     item.SetEnabled(bool) · item.IsEnabled()   grise la ligne et ignore les clics (CreateXxx({ Enabled = false }) la crée désactivée)
+--     item.Destroy()                              retire la ligne (et son Flag) du bloc
+--   Sur Library (Library:Xxx(...) ou Library.Xxx(...)) :
+--     Library:GetItem(flag) · Library:GetFlag(flag) · Library:SetFlag(flag, valeur)  -> true si l'élément existe
+--     Library:Snapshot() -> table de tous les Flags (copie)  ·  Library:Restore(snapshot) -> nombre d'éléments modifiés
+--     Library:WatchFlag(flag, fn, { Immediate = true }) -> h   fn(nouvelle, ancienne) à chaque changement (même si l'élément n'existe pas encore)
+--     Library:Link(source, cible, transformation)    quand « source » change, « cible » est mis à jour (transformation = fonction(v) -> valeur
+--                                                    ou table de correspondance) ; source / cible = élément ou nom de Flag déjà créé
+--     Library:WaitForFlag(flag, attendu, timeout)    attend (sans bloquer le jeu) que le Flag vaille « attendu » (valeur, fonction(v) -> bool,
+--                                                    ou rien = « vrai ») ; renvoie la valeur, ou nil si le délai est dépassé
+--     Library:Every(secondes, fn, immediate) -> h    appelle fn(h) toutes les N secondes, coupé tout seul quand l'UI est détruite
+--     Library:Debounce(fn, attente)                  renvoie une fonction qui n'appelle fn qu'après `attente` s de calme (0.3 par défaut)
+--     Library:Throttle(fn, intervalle)               renvoie une fonction qui appelle fn au plus une fois par `intervalle` s (0.2 par défaut)
+--   Les handles (WatchFlag, Link, Every) ont h:Disconnect() et h.Connected.
+-- ============================================================================
+do
+	local function resolve(x)
+		if type(x) == "string" then return Library.Items[x] end
+		if type(x) == "table" then return x end
+		return nil
+	end
+	local function deepEq(a, b)
+		if a == b then return true end
+		if type(a) ~= "table" or type(b) ~= "table" then return false end
+		for k, v in pairs(a) do if not deepEq(v, b[k]) then return false end end
+		for k in pairs(b) do if a[k] == nil then return false end end
+		return true
+	end
+
+	-- ---- 1) MÉTHODES COMMUNES À TOUS LES ÉLÉMENTS : SetEnabled / IsEnabled / Destroy ------------------------------------
+	local names = {}
+	for k, fn in pairs(Block) do
+		if type(k) == "string" and string.sub(k, 1, 6) == "Create" and type(fn) == "function" then names[#names + 1] = k end
+	end
+	for _, k in ipairs(names) do
+		local orig = Block[k]
+		Block[k] = function(self, o, ...)
+			if type(o) ~= "table" or type(self) ~= "table" or not self.Entries then return orig(self, o, ...) end
+			local n0 = #self.Entries
+			local a, b, c = orig(self, o, ...)
+			if type(a) ~= "table" then return a, b, c end
+			local ents = {}
+			for i = n0 + 1, #self.Entries do ents[#ents + 1] = self.Entries[i] end
+			if #ents == 0 then return a, b, c end
+
+			local enabled = true
+			local overlays = {}
+			if a.SetEnabled == nil then
+				a.SetEnabled = function(...)
+					local v = not (unself(a, ...) == false)
+					if v == enabled then return end
+					enabled = v
+					for _, e in ipairs(ents) do
+						local fr = e.Frame
+						if fr and fr.Parent then
+							local ov = overlays[e]
+							if not enabled then
+								if not (ov and ov.Parent) then
+									ov = Instance.new("TextButton")
+									ov.Name = "DisabledOverlay"
+									ov.Size = UDim2.new(1, 0, 1, 0)
+									ov.BackgroundColor3 = Color3.new(0, 0, 0)
+									ov.BackgroundTransparency = 1
+									ov.BorderSizePixel = 0
+									ov.Text = ""
+									ov.AutoButtonColor = false
+									ov.ZIndex = 50
+									local uc = Instance.new("UICorner")
+									uc.CornerRadius = UDim.new(0, 8)
+									uc.Parent = ov
+									ov.Parent = fr
+									overlays[e] = ov
+								end
+								ov.Active = true   -- avale les clics destinés à la ligne
+								tween(ov, { BackgroundTransparency = 0.55 }, 0.2)
+							elseif ov then
+								ov.Active = false
+								tween(ov, { BackgroundTransparency = 1 }, 0.2)
+								task.delay(0.25, function()
+									if enabled then
+										if overlays[e] == ov then overlays[e] = nil end
+										pcall(function() ov:Destroy() end)
+									end
+								end)
+							end
+						end
+					end
+				end
+				a.IsEnabled = function() return enabled end
+				if o.Enabled == false or o.Disabled == true then a.SetEnabled(false) end
+			end
+			if a.Destroy == nil then
+				a.Destroy = function()
+					for _, e in ipairs(ents) do
+						local i = table.find(self.Entries, e)
+						if i then table.remove(self.Entries, i) end
+						if e.Frame then pcall(function() e.Frame:Destroy() end) end
+					end
+					if o.Flag and Library.Items[o.Flag] == a then
+						Library.Items[o.Flag] = nil
+						Library.Flags[o.Flag] = nil
+						Library.Defaults[o.Flag] = nil
+					end
+				end
+			end
+			return a, b, c
+		end
+	end
+
+	-- ---- 2) FLAGS : lecture / écriture / instantané ----------------------------------------------------------------------
+	function Library.GetItem(...)
+		return Library.Items[(unself(Library, ...))]
+	end
+	function Library.GetFlag(...)
+		return copyVal(Library.Flags[(unself(Library, ...))])
+	end
+	function Library.SetFlag(...)
+		local flag, value = unself(Library, ...)
+		local it = Library.Items[flag]
+		if not (it and type(it.Set) == "function") then return false end
+		local ok = pcall(it.Set, value)
+		return ok
+	end
+	function Library.Snapshot(...)
+		local snap = {}
+		for flag, v in pairs(Library.Flags) do
+			if string.sub(tostring(flag), 1, 3) ~= "ui." then snap[flag] = copyVal(v) end
+		end
+		return snap
+	end
+	function Library.Restore(...)
+		local snap = unself(Library, ...)
+		if type(snap) ~= "table" then return 0 end
+		local n = 0
+		for flag, v in pairs(snap) do
+			local it = Library.Items[flag]
+			if it and type(it.Set) == "function" and not deepEq(Library.Flags[flag], v) then
+				if pcall(it.Set, copyVal(v)) then n += 1 end
+			end
+		end
+		return n
+	end
+
+	-- ---- 3) SURVEILLER UN FLAG ---------------------------------------------------------------------------------------------
+	function Library.WatchFlag(...)
+		local flag, fn, opts = unself(Library, ...)
+		if type(flag) ~= "string" or type(fn) ~= "function" then
+			error("Library:WatchFlag(flag, fn) : un nom de Flag et une fonction sont attendus", 2)
+		end
+		local h = { Connected = true }
+		local inner, poll
+		local last = copyVal(Library.Flags[flag])
+		local function attach(it)
+			if type(it.OnChanged) ~= "function" then
+				warn("[Ui-Lib] WatchFlag : l'élément « " .. flag .. " » n'a pas OnChanged")
+				h.Connected = false
+				return
+			end
+			last = copyVal(Library.Flags[flag])
+			inner = it.OnChanged(function(v)
+				if not h.Connected then return end
+				local cur = Library.Flags[flag]
+				if cur == nil then cur = v end
+				local old = last
+				last = copyVal(cur)
+				fire(fn, cur, old)
+			end)
+			if type(opts) == "table" and opts.Immediate then fire(fn, Library.Flags[flag], nil) end
+		end
+		h.Disconnect = function()
+			h.Connected = false
+			if inner then pcall(function() inner.Disconnect() end) inner = nil end
+			if poll then poll:Disconnect() poll = nil end
+		end
+		h.disconnect = h.Disconnect
+		local it = Library.Items[flag]
+		if it then
+			attach(it)
+		else
+			-- l'élément n'existe pas encore : on attend sa création
+			poll = track(Ticker.connect(function()
+				local it2 = Library.Items[flag]
+				if it2 then
+					if poll then poll:Disconnect() poll = nil end
+					attach(it2)
+				end
+			end, { rate = 4 }))
+		end
+		return h
+	end
+
+	-- ---- 4) LIER DEUX ÉLÉMENTS ---------------------------------------------------------------------------------------------
+	function Library.Link(...)
+		local src, dst, map = unself(Library, ...)
+		local s, d = resolve(src), resolve(dst)
+		if not (s and type(s.OnChanged) == "function") then
+			error("Library:Link : élément source introuvable (élément ou nom de Flag déjà créé attendu)", 2)
+		end
+		if not (d and type(d.Set) == "function") then
+			error("Library:Link : élément cible introuvable (élément ou nom de Flag déjà créé attendu)", 2)
+		end
+		return s.OnChanged(function(v)
+			local out = v
+			if type(map) == "function" then
+				local ok, r = pcall(map, v)
+				if not ok then warn("[Ui-Lib] Link : " .. tostring(r)) return end
+				out = r
+			elseif type(map) == "table" then
+				out = map[v]
+				if out == nil then return end
+			end
+			pcall(d.Set, out)
+		end)
+	end
+
+	-- ---- 5) ATTENDRE UN FLAG (sans bloquer) --------------------------------------------------------------------------------
+	function Library.WaitForFlag(...)
+		local flag, want, timeout = unself(Library, ...)
+		if type(flag) ~= "string" then error("Library:WaitForFlag(flag, attendu, timeout) : un nom de Flag est attendu", 2) end
+		local function ok(v)
+			if type(want) == "function" then
+				local good, r = pcall(want, v)
+				return good and r and true or false
+			end
+			if want == nil then return v ~= nil and v ~= false end
+			return deepEq(v, want)
+		end
+		local cur = Library.Flags[flag]
+		if ok(cur) then return cur end
+		local co = coroutine.running()
+		local resumed = false
+		local h
+		local function resume(v)
+			if resumed then return end
+			resumed = true
+			if h then h.Disconnect() end
+			task.spawn(co, v)
+		end
+		h = Library.WatchFlag(flag, function(v) if ok(v) then resume(v) end end)
+		if tonumber(timeout) then task.delay(tonumber(timeout), function() resume(nil) end) end
+		return coroutine.yield()
+	end
+
+	-- ---- 6) OUTILS DE TEMPS ------------------------------------------------------------------------------------------------
+	function Library.Every(...)
+		local secs, fn, immediate = unself(Library, ...)
+		secs = tonumber(secs)
+		if not secs or secs <= 0 or type(fn) ~= "function" then
+			error("Library:Every(secondes, fn) : un nombre > 0 et une fonction sont attendus", 2)
+		end
+		local h = { Connected = true }
+		local acc = 0
+		local function run()
+			task.spawn(function()
+				local ok, err = pcall(fn, h)
+				if not ok then warn("[Ui-Lib] Every : " .. tostring(err)) end
+			end)
+		end
+		local conn = track(Ticker.connect(function(dt)
+			acc += dt
+			if acc >= secs then
+				acc = acc % secs
+				run()
+			end
+		end))
+		h.Disconnect = function()
+			h.Connected = false
+			conn:Disconnect()
+		end
+		h.disconnect = h.Disconnect
+		if immediate then run() end
+		return h
+	end
+
+	function Library.Debounce(...)
+		local fn, wait = unself(Library, ...)
+		if type(fn) ~= "function" then error("Library:Debounce(fn, attente) : une fonction est attendue", 2) end
+		wait = tonumber(wait) or 0.3
+		local token = 0
+		return function(...)
+			token += 1
+			local my, args = token, table.pack(...)
+			task.delay(wait, function()
+				if my == token then fire(fn, table.unpack(args, 1, args.n)) end
+			end)
+		end
+	end
+
+	function Library.Throttle(...)
+		local fn, interval = unself(Library, ...)
+		if type(fn) ~= "function" then error("Library:Throttle(fn, intervalle) : une fonction est attendue", 2) end
+		interval = tonumber(interval) or 0.2
+		local last = -math.huge
+		return function(...)
+			local now = os.clock()
+			if now - last >= interval then
+				last = now
+				fire(fn, ...)
+			end
+		end
+	end
 end
 
 function Library:Destroy()
