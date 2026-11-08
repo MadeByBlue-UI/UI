@@ -16,6 +16,9 @@
 		• « Recalibrer le curseur » (Paramètres > Fenêtre) est maintenant un CALIBRAGE GUIDÉ : 3 clics sur une barre blanche de 12 px (Échap annule) ;
 		  le décalage mesuré est verrouillé (seul un clic qui le contredit de plus de 14 px le change). « Copier le journal du curseur » liste qui a
 		  modifié la correction et de combien (Library:GetPointerLog()). Library:CalibratePointer() lance le calibrage par script.
+		• SYSTÈME DE POINTEUR REFAIT DE ZÉRO (V9.13) : un seul point d'entrée Library._pointerPos(p) pour souris / curseur virtuel / doigt. BUG corrigé :
+		  au tactile, les appels « pointeur maintenant » (étincelles, ragdoll, survol de l'aperçu, molette...) renvoyaient toujours (0, 58) : le personnage
+		  partait vers le haut dès qu'on le touchait. Le doigt est désormais suivi (Library._ptrTouchPos), souris et tactile mesurent chacun leur décalage.
 		• Le décalage est aussi mesuré EN CONTINU quand la souris bouge sur un bouton / une ligne (MouseMoved, ~12 fois par seconde au plus) : si le
 		  décalage change en cours de route (menu Échap de Roblox ouvert ou fermé, barre du haut), la correction se remet à jour toute seule.
 		• Recherche : le panneau de résultats suit le STYLE courant (vitre translucide en Verre / Givré, fond plein en Mat), reflet clair, lignes en 2 temps
@@ -1709,12 +1712,23 @@ local function guiInset()
 	return ok and v or Vector2.new(0, 0)
 end
 
--- Position du pointeur dans le MÊME repère que AbsolutePosition (les ScreenGui sont en IgnoreGuiInset = true).
--- Souris : GetMouseLocation, moins le réglage manuel (Library.PointerOffset) et moins la correction APPRISE toute seule
--- (Library._ptrLearn, voir Library._ptrCheck). Tactile : InputObject.Position décalé de l'inset.
--- CURSEUR (refait) : plus aucun apprentissage / vote / fichier. Le décalage éventuel entre l'écran et le ScreenGui de l'UI est
--- MESURÉ en direct (voir Library._ptrAuto). Les anciens noms restent pour compatibilité (ne font plus rien).
-Library._ptrLearn = 0
+-- ============================================================================
+-- POINTEUR  (V9.13 — refait de zéro)
+-- But : dire « où est le pointeur » dans le repère des ScreenGui de l'UI (celui de AbsolutePosition), que ce soit une souris, un curseur
+-- virtuel ou un doigt. TOUT passe par une seule fonction : Library._pointerPos(p)   (p = position d'un InputObject, facultative).
+--   • Souris : UIS:GetMouseLocation() (position écran brute), moins le décalage de la souris.
+--   • Tactile : position du dernier appui / glissement, suivie ici même (UIS.InputBegan / InputChanged). p = nil ou (0, 0) veut dire
+--     « le pointeur maintenant ». Avant, un appel avec (0, 0) renvoyait toujours le même point en haut à gauche dès qu'on touchait l'écran :
+--     le personnage de l'aperçu partait vers le HAUT au doigt, la poignée du color picker était décalée de ~58 px.
+--   • Le décalage entre l'écran et le ScreenGui (barre du haut de Roblox, ~58 px, ou rien) est MESURÉ, pas supposé : chaque appui / survol d'un
+--     élément donne une fourchette (le vrai pointeur est forcément dedans), voir Library._ptrCheck ; calibrage guidé : Library:CalibratePointer().
+--     La souris et le tactile ont chacun leur propre décalage (Library._ptrLearned / Library._ptrTouchE).
+-- Réglage manuel facultatif : Library.PointerOffset = Vector2.new(0, px).   Journal : Library:GetPointerLog().
+-- ============================================================================
+Library.PointerOffset = Library.PointerOffset or Vector2.new(0, 0)
+Library._ptrCache = { t = -1, k = 0 }
+Library._ptrTouchPos = nil      -- dernière position tactile connue (repère InputObject)
+Library._ptrLearn = 0           -- (anciens champs gardés pour compatibilité)
 Library._ptrVotes = {}
 Library._ptrLoaded = true
 Library._ptrSave = function() end
@@ -1725,21 +1739,44 @@ Library._ptrLoad = function()   -- supprime l'ancien _pointer.json (valeur appri
 		if isfile and delfile and isfile(f) then delfile(f) end
 	end)
 end
--- FIX curseur : position de la souris dans le repère de l'UI (même correction que _pointerPos), pour placer / tester des éléments
-Library._mouse = function()
-	return UIS:GetMouseLocation() - (Library._ptrCorrect and Library._ptrCorrect() or Vector2.new(0, 0))
+
+-- suivi du doigt : la dernière position tactile est toujours connue, sans que l'appelant ait à la passer
+do
+	local function onTouch(i)
+		if i.UserInputType == Enum.UserInputType.Touch then
+			Library._ptrTouchPos = Vector2.new(i.Position.X, i.Position.Y)
+		end
+	end
+	track(UIS.InputBegan:Connect(onTouch))
+	track(UIS.InputChanged:Connect(onTouch))
+end
+
+-- « souris » ou « touch » : selon le dernier périphérique utilisé
+Library._ptrKind = function()
+	local ok, last = pcall(function() return UIS:GetLastInputType() end)
+	return (ok and last == Enum.UserInputType.Touch) and "touch" or "mouse"
+end
+-- position BRUTE du pointeur (avant correction) et son type ; p = position d'un InputObject, facultative
+Library._ptrBase = function(p)
+	if Library._ptrKind() == "touch" then
+		local b
+		if p ~= nil and (p.X ~= 0 or p.Y ~= 0) then b = Vector2.new(p.X, p.Y) else b = Library._ptrTouchPos end
+		if b then return "touch", b end
+	end
+	return "mouse", UIS:GetMouseLocation()
 end
 Library._pointerPos = function(p)
-	local okT, last = pcall(function() return UIS:GetLastInputType() end)
-	if okT and last == Enum.UserInputType.Touch then
-		-- tactile : InputObject.Position + décalage (l'inset du moteur par défaut, ou celui CONSTATÉ par un vrai appui : voir _ptrCheck)
-		local e = Library._ptrTouchE
+	local kind, b = Library._ptrBase(p)
+	if kind == "touch" then
+		local e = Library._ptrTouchE   -- décalage CONSTATÉ au doigt (voir _ptrCheck), sinon l'inset du moteur
 		if e == nil then e = guiInset().Y end
-		return Vector2.new(p.X, p.Y + e)
+		return Vector2.new(b.X, b.Y + e)
 	end
 	local c = Library._ptrCorrect and Library._ptrCorrect() or Vector2.new(0, 0)
-	return UIS:GetMouseLocation() - c
+	return b - c
 end
+-- position du pointeur dans le repère de l'UI, « maintenant » (curseur dessiné, pipette, étincelles...)
+Library._mouse = function() return Library._pointerPos(nil) end
 
 Library._lastVP = Vector2.new(1280, 720)   -- (champ de Library : pas de variable locale en plus, limite de 200 locals)
 local function viewport()
@@ -1785,18 +1822,12 @@ Library._ptrCorrect = function()
 	return Vector2.new(man and man.X or 0, (man and man.Y or 0) + (Library._ptrLearned ~= nil and Library._ptrLearned or Library._ptrAuto()))
 end
 
--- V9.6 — CURSEUR DÉCALÉ (~58 px : barre du haut de Roblox) : test sur un VRAI clic. À l'appui sur un élément, le pointeur est forcément
--- DANS son rectangle. Si la position corrigée actuelle n'y est pas, on essaie quelques décalages connus (0, 36, 58, l'inset du moteur,
--- et leurs opposés) : si UN SEUL place le pointeur dans le rectangle, et que ça se répète à 2 clics de suite, il devient la correction
--- (Library._ptrLearned). Aucun fichier, aucune supposition : un clic cohérent remet toujours le décalage à jour.
--- Appelé à chaque appui sur une ligne / un bouton (hover) et sur le color picker. Souris seulement (le tactile a sa propre règle).
-Library._ptrVotesN = { d = nil, n = 0 }   -- (ancien système de votes : gardé pour compatibilité, plus utilisé)
--- V9.12 — CURSEUR : à chaque appui sur un élément, le VRAI pointeur est forcément dans son rectangle (c'est le moteur qui livre l'appui).
--- Chaque appui donne donc une fourchette [lo, hi] de décalages possibles ; on garde l'INTERSECTION des fourchettes des appuis récents
--- (un bouton de 30 px de haut suffit à exclure un décalage de 58 px). Si le décalage actuel n'est plus dans la fourchette, on prend le
--- premier décalage « connu » (0, inset du moteur, 58, 36 et leurs opposés) qui y est, sinon le milieu quand elle est étroite.
--- Plus de vote sur 2 clics, plus de liste fermée de valeurs : un seul appui cohérent suffit, et ça marche aussi au doigt / au curseur virtuel.
--- journal des changements de la correction (Paramètres > Fenêtre > « Copier le journal du curseur ») : permet de voir QUI a bougé le curseur
+-- MESURE DU DÉCALAGE. À chaque appui (et pendant le survol) sur un élément, le VRAI pointeur est forcément dans son rectangle : le moteur ne
+-- livre l'événement que dans ce cas. Chaque événement donne donc une fourchette [lo, hi] de décalages possibles ; on garde l'INTERSECTION des
+-- fourchettes récentes (un bouton de 30 px suffit à exclure un décalage de 58 px). Si le décalage actuel n'y est plus, on prend le premier
+-- décalage « connu » (0, inset du moteur, 58, 36 et leurs opposés) qui y est, sinon le milieu d'une fourchette très étroite (≤ 16 px).
+-- Souris et tactile ont leurs propres fourchettes. Appelé par les lignes, boutons, onglets et le color picker (jamais par l'aperçu 3D).
+-- journal : Paramètres > Fenêtre > « Copier le journal du curseur » (qui a changé la correction, de combien)
 Library._ptrLog = {}
 Library._ptrNote = function(src, old, new, extra)
 	local L = Library._ptrLog
@@ -1804,34 +1835,33 @@ Library._ptrNote = function(src, old, new, extra)
 		extra and ("  (" .. tostring(extra) .. ")") or "")
 	if #L > 60 then table.remove(L, 1) end
 end
-Library._ptrIv = { lo = -math.huge, hi = math.huge, t = 0 }    -- souris : y_vrai = GetMouseLocation.Y - décalage
-Library._ptrIvT = { lo = -math.huge, hi = math.huge, t = 0 }   -- tactile : y_vrai = Position.Y + décalage
+Library._ptrVotesN = { d = nil, n = 0 }   -- (ancien système de votes : gardé pour compatibilité, plus utilisé)
+Library._ptrIv = { lo = -math.huge, hi = math.huge, t = 0 }    -- souris : y_vrai = position brute - décalage
+Library._ptrIvT = { lo = -math.huge, hi = math.huge, t = 0 }   -- tactile : y_vrai = position brute + décalage
 Library._ptrCheck = function(obj, pos)
 	if not (typeof(obj) == "Instance" and obj:IsA("GuiObject") and obj.Parent) then return end
 	-- jamais de mesure sur l'aperçu 3D (ViewportFrame et ses zones « Hit_ » posées d'après la caméra) : leur géométrie est approximative
 	if obj:IsA("ViewportFrame") or obj:FindFirstAncestorWhichIsA("ViewportFrame") or string.sub(obj.Name, 1, 4) == "Hit_" then return end
 	local ap, as = obj.AbsolutePosition, obj.AbsoluteSize
 	if as.X < 4 or as.Y < 4 then return end
-	local okT, last = pcall(function() return UIS:GetLastInputType() end)
-	local touch = okT and last == Enum.UserInputType.Touch
+	local kind, base = Library._ptrBase(pos)
+	local touch = kind == "touch"
 	local now = os.clock()
 	local ins = guiInset().Y
 
 	local V, bx, by, cur, cands
 	if touch then
-		if typeof(pos) ~= "Vector3" and typeof(pos) ~= "Vector2" then return end
-		V, bx, by = Library._ptrIvT, pos.X, pos.Y
+		V, bx, by = Library._ptrIvT, base.X, base.Y
 		cur = Library._ptrTouchE
 		if cur == nil then cur = ins end
 		cands = { ins, 0, 58, 36, -ins, -58, -36 }
 	else
 		local man = Library.PointerOffset
-		local M = UIS:GetMouseLocation()
-		V, bx, by = Library._ptrIv, M.X - (man and man.X or 0), M.Y - (man and man.Y or 0)
+		V, bx, by = Library._ptrIv, base.X - (man and man.X or 0), base.Y - (man and man.Y or 0)
 		cur = Library._ptrLearned ~= nil and Library._ptrLearned or Library._ptrAuto()
 		cands = { 0, ins, 58, 36, -ins, -58, -36 }
 	end
-	-- pas de décalage horizontal supposé : un appui hors de l'objet en X = mesure peu fiable (objet qui bouge, rotation...), on l'ignore
+	-- pas de décalage horizontal supposé : un événement hors de l'objet en X = mesure peu fiable (objet qui bouge...), on l'ignore
 	if bx < ap.X - 1 or bx > ap.X + as.X + 1 then return end
 
 	local lo, hi
@@ -1840,15 +1870,14 @@ Library._ptrCheck = function(obj, pos)
 	else
 		lo, hi = by - ap.Y - as.Y - 1, by - ap.Y + 1
 	end
-	if now - V.t > 25 then V.lo, V.hi = -math.huge, math.huge end   -- vieilles mesures oubliées (fenêtre déplacée, menu Roblox ouvert...)
+	if now - V.t > 25 then V.lo, V.hi = -math.huge, math.huge end   -- vieilles mesures oubliées
 	local nlo, nhi = math.max(V.lo, lo), math.min(V.hi, hi)
-	if nlo > nhi then nlo, nhi = lo, hi end                           -- incohérent : on repart de cet appui seul
-	if cur < lo - 14 or cur > hi + 14 then nlo, nhi = lo, hi end      -- cet échantillon contredit nettement la valeur actuelle : l'ancien historique est périmé
+	if nlo > nhi then nlo, nhi = lo, hi end                           -- incohérent : on repart de cet échantillon seul
+	if cur < lo - 14 or cur > hi + 14 then nlo, nhi = lo, hi end      -- cet échantillon contredit nettement la valeur actuelle : historique périmé
 	V.lo, V.hi, V.t = nlo, nhi, now
 
-	if cur >= nlo - 0.5 and cur <= nhi + 0.5 then return end         -- le décalage actuel est compatible avec tous les appuis récents
-	-- après un calibrage guidé (Paramètres > Fenêtre > Recalibrer le curseur) : un appui ne change la valeur que s'il la contredit nettement
-	-- (marge de 14 px pour les éléments qui bougent : ressorts, glissement de page...)
+	if cur >= nlo - 0.5 and cur <= nhi + 0.5 then return end         -- la valeur actuelle est compatible avec tout ce qu'on a vu
+	-- après un calibrage guidé : on ne change que si la valeur est nettement contredite (marge de 14 px : ressorts, glissement de page...)
 	if Library._ptrLocked and cur >= nlo - 14 and cur <= nhi + 14 then return end
 	local pick
 	for _, d in ipairs(cands) do
@@ -1859,15 +1888,15 @@ Library._ptrCheck = function(obj, pos)
 	local who = obj:GetFullName()
 	if #who > 70 then who = "…" .. string.sub(who, -69) end
 	if touch then
-		Library._ptrNote("appui (tactile) sur " .. who, cur, pick, "fourchette " .. math.floor(nlo) .. " à " .. math.floor(nhi))
+		Library._ptrNote("tactile sur " .. who, cur, pick, "fourchette " .. math.floor(nlo) .. " à " .. math.floor(nhi))
 		Library._ptrTouchE = pick
 	else
-		Library._ptrNote("appui sur " .. who, cur, pick, "fourchette " .. math.floor(nlo) .. " à " .. math.floor(nhi))
+		Library._ptrNote("souris sur " .. who, cur, pick, "fourchette " .. math.floor(nlo) .. " à " .. math.floor(nhi))
 		Library._ptrLearned = pick
 		Library._ptrCache.t = -1
 	end
 end
-Library._ptrVote = function() end
+Library._ptrVote = function(obj, pos) pcall(Library._ptrCheck, obj, pos) end   -- onglets du menu, etc.
 function Library:ResetPointerCalibration()
 	Library._ptrNote("remise à zéro", Library._ptrLearned, nil)
 	Library._ptrLocked = nil
@@ -1996,8 +2025,8 @@ end
 -- journal des changements de la correction du curseur (texte, copiable)
 function Library:GetPointerLog()
 	local man = Library.PointerOffset
-	local head = string.format("manuel = %s · appris = %s · tactile = %s · auto = %s · verrouillé = %s",
-		tostring(man and man.Y or 0), tostring(Library._ptrLearned), tostring(Library._ptrTouchE), tostring(Library._ptrAuto()),
+	local head = string.format("périphérique = %s · manuel = %s · appris (souris) = %s · tactile = %s · auto = %s · verrouillé = %s",
+		Library._ptrKind(), tostring(man and man.Y or 0), tostring(Library._ptrLearned), tostring(Library._ptrTouchE), tostring(Library._ptrAuto()),
 		tostring(Library._ptrLocked == true))
 	return head .. "\n" .. table.concat(Library._ptrLog, "\n")
 end
@@ -6440,7 +6469,7 @@ function Block:CreateButton(o)
 	trackStyled(b, st, "row")
 	hover(b, st)
 	self:_reg(b, o.Name)
-	b.InputBegan:Connect(function(i) if isPress(i) then Library._ptrVote(b) end end)   -- calibrage du pointeur
+	b.InputBegan:Connect(function(i) if isPress(i) then Library._ptrVote(b, i.Position) end end)   -- calibrage du pointeur
 	local armed, armToken = false, 0
 	local baseText = o.Name or "Button"
 	-- V9.7 : Cooldown = secondes. Après un clic accepté, le bouton se grise, une barre de progression se vide et les clics sont
@@ -18364,7 +18393,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 		LayoutOrder = parentTab and ((#parentTab.Children + 1) * 2) or ((#self.Tabs + 1) * 2),
 	}, parentTab and parentTab:_childHolder() or self.Sidebar)
 	new("UICorner", { CornerRadius = UDim.new(0, 8) }, btn)
-	btn.InputBegan:Connect(function(i) if isPress(i) then Library._ptrVote(btn) end end)   -- calibrage du pointeur (voir Library._ptrVote)
+	btn.InputBegan:Connect(function(i) if isPress(i) then Library._ptrVote(btn, i.Position) end end)   -- calibrage du pointeur (voir Library._ptrVote)
 	local bar = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
 		Size = UDim2.new(0, 3, 0, 0), BackgroundColor3 = T.Accent, BorderSizePixel = 0 }, btn)
 	new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
