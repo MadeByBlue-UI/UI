@@ -7,6 +7,14 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.12 — CURSEUR (color picker / aperçu) + RECHERCHE EN VERRE
+		• Curseur : le décalage entre le pointeur et l'UI (~58 px) se calcule maintenant par INTERSECTION des fourchettes données par chaque appui
+		  (le vrai pointeur est forcément dans l'élément cliqué : un bouton de 30 px suffit à exclure un décalage de 58 px). Un seul appui cohérent suffit
+		  (plus de vote sur 2 clics ni de valeurs figées), et ça marche aussi au tactile / curseur virtuel. Les zones du personnage de l'aperçu servent
+		  aussi de mesure. Library:ResetPointerCalibration() remet tout à zéro.
+		• Recherche : le panneau de résultats suit le STYLE courant (vitre translucide en Verre / Givré, fond plein en Mat), reflet clair, lignes en 2 temps
+		  (nom + chemin onglet › bloc) avec pastille d'initiale, ↑ ↓ pour parcourir, Entrée pour ouvrir, ligne d'aide avec le nombre de résultats.
+
 	V9.11 — API PRATIQUE : SetEnabled / Destroy SUR TOUS LES ÉLÉMENTS + UTILITAIRES
 		• Tous les éléments : item.SetEnabled(bool) / item.IsEnabled() (ligne grisée, clics ignorés ; CreateXxx({ Enabled = false }) la crée
 		  désactivée) · item.Destroy() (retire la ligne et son Flag).
@@ -1718,7 +1726,10 @@ end
 Library._pointerPos = function(p)
 	local okT, last = pcall(function() return UIS:GetLastInputType() end)
 	if okT and last == Enum.UserInputType.Touch then
-		return Vector2.new(p.X, p.Y + guiInset().Y)
+		-- tactile : InputObject.Position + décalage (l'inset du moteur par défaut, ou celui CONSTATÉ par un vrai appui : voir _ptrCheck)
+		local e = Library._ptrTouchE
+		if e == nil then e = guiInset().Y end
+		return Vector2.new(p.X, p.Y + e)
 	end
 	local c = Library._ptrCorrect and Library._ptrCorrect() or Vector2.new(0, 0)
 	return UIS:GetMouseLocation() - c
@@ -1771,46 +1782,71 @@ end
 -- et leurs opposés) : si UN SEUL place le pointeur dans le rectangle, et que ça se répète à 2 clics de suite, il devient la correction
 -- (Library._ptrLearned). Aucun fichier, aucune supposition : un clic cohérent remet toujours le décalage à jour.
 -- Appelé à chaque appui sur une ligne / un bouton (hover) et sur le color picker. Souris seulement (le tactile a sa propre règle).
-Library._ptrVotesN = { d = nil, n = 0 }
-Library._ptrCheck = function(obj)
-	local okT, last = pcall(function() return UIS:GetLastInputType() end)
-	if okT and last == Enum.UserInputType.Touch then return end
+Library._ptrVotesN = { d = nil, n = 0 }   -- (ancien système de votes : gardé pour compatibilité, plus utilisé)
+-- V9.12 — CURSEUR : à chaque appui sur un élément, le VRAI pointeur est forcément dans son rectangle (c'est le moteur qui livre l'appui).
+-- Chaque appui donne donc une fourchette [lo, hi] de décalages possibles ; on garde l'INTERSECTION des fourchettes des appuis récents
+-- (un bouton de 30 px de haut suffit à exclure un décalage de 58 px). Si le décalage actuel n'est plus dans la fourchette, on prend le
+-- premier décalage « connu » (0, inset du moteur, 58, 36 et leurs opposés) qui y est, sinon le milieu quand elle est étroite.
+-- Plus de vote sur 2 clics, plus de liste fermée de valeurs : un seul appui cohérent suffit, et ça marche aussi au doigt / au curseur virtuel.
+Library._ptrIv = { lo = -math.huge, hi = math.huge, t = 0 }    -- souris : y_vrai = GetMouseLocation.Y - décalage
+Library._ptrIvT = { lo = -math.huge, hi = math.huge, t = 0 }   -- tactile : y_vrai = Position.Y + décalage
+Library._ptrCheck = function(obj, pos)
 	if not (typeof(obj) == "Instance" and obj:IsA("GuiObject") and obj.Parent) then return end
 	local ap, as = obj.AbsolutePosition, obj.AbsoluteSize
 	if as.X < 4 or as.Y < 4 then return end
-	local man = Library.PointerOffset
-	local mx, my = man and man.X or 0, man and man.Y or 0
-	local M = UIS:GetMouseLocation()
-	local function inside(d)
-		local x, y = M.X - mx, M.Y - my - d
-		return x >= ap.X - 1 and x <= ap.X + as.X + 1 and y >= ap.Y - 1 and y <= ap.Y + as.Y + 1
-	end
-	local V = Library._ptrVotesN
-	local cur = Library._ptrLearned ~= nil and Library._ptrLearned or Library._ptrAuto()
-	if inside(cur) then V.d, V.n = nil, 0 return end   -- le pointeur corrigé est bien dans l'élément : rien à changer
-	local cands, seen = { 0, 36, 58, -36, -58 }, { [0] = true, [36] = true, [58] = true, [-36] = true, [-58] = true }
+	local okT, last = pcall(function() return UIS:GetLastInputType() end)
+	local touch = okT and last == Enum.UserInputType.Touch
+	local now = os.clock()
 	local ins = guiInset().Y
-	for _, d in ipairs({ ins, -ins }) do
-		if d ~= 0 and not seen[d] then seen[d] = true cands[#cands + 1] = d end
+
+	local V, bx, by, cur, cands
+	if touch then
+		if typeof(pos) ~= "Vector3" and typeof(pos) ~= "Vector2" then return end
+		V, bx, by = Library._ptrIvT, pos.X, pos.Y
+		cur = Library._ptrTouchE
+		if cur == nil then cur = ins end
+		cands = { ins, 0, 58, 36, -ins, -58, -36 }
+	else
+		local man = Library.PointerOffset
+		local M = UIS:GetMouseLocation()
+		V, bx, by = Library._ptrIv, M.X - (man and man.X or 0), M.Y - (man and man.Y or 0)
+		cur = Library._ptrLearned ~= nil and Library._ptrLearned or Library._ptrAuto()
+		cands = { 0, ins, 58, 36, -ins, -58, -36 }
 	end
-	local fit
+	-- pas de décalage horizontal supposé : un appui hors de l'objet en X = mesure peu fiable (objet qui bouge, rotation...), on l'ignore
+	if bx < ap.X - 1 or bx > ap.X + as.X + 1 then return end
+
+	local lo, hi
+	if touch then
+		lo, hi = ap.Y - by - 1, ap.Y + as.Y - by + 1
+	else
+		lo, hi = by - ap.Y - as.Y - 1, by - ap.Y + 1
+	end
+	if now - V.t > 25 then V.lo, V.hi = -math.huge, math.huge end   -- vieilles mesures oubliées (fenêtre déplacée, menu Roblox ouvert...)
+	local nlo, nhi = math.max(V.lo, lo), math.min(V.hi, hi)
+	if nlo > nhi then nlo, nhi = lo, hi end                           -- incohérent : on repart de cet appui seul
+	V.lo, V.hi, V.t = nlo, nhi, now
+
+	if cur >= nlo - 0.5 and cur <= nhi + 0.5 then return end         -- le décalage actuel est compatible avec tous les appuis récents
+	local pick
 	for _, d in ipairs(cands) do
-		if d ~= cur and inside(d) then
-			if fit ~= nil then V.d, V.n = nil, 0 return end   -- plusieurs décalages possibles (élément trop haut) : on ne conclut pas
-			fit = d
-		end
+		if d >= nlo and d <= nhi then pick = d break end
 	end
-	if fit == nil then V.d, V.n = nil, 0 return end
-	if V.d == fit then V.n += 1 else V.d, V.n = fit, 1 end
-	if V.n >= 2 then
-		Library._ptrLearned = fit
-		V.d, V.n = nil, 0
+	if pick == nil and (nhi - nlo) <= 60 then pick = math.floor((nlo + nhi) / 2 + 0.5) end
+	if pick == nil then return end
+	if touch then
+		Library._ptrTouchE = pick
+	else
+		Library._ptrLearned = pick
 		Library._ptrCache.t = -1
 	end
 end
 Library._ptrVote = function() end
 function Library:ResetPointerCalibration()
 	Library._ptrLearned = nil
+	Library._ptrTouchE = nil
+	Library._ptrIv.lo, Library._ptrIv.hi = -math.huge, math.huge
+	Library._ptrIvT.lo, Library._ptrIvT.hi = -math.huge, math.huge
 	Library._ptrVotesN.d, Library._ptrVotesN.n = nil, 0
 	Library._ptrCache.t = -1
 	Library._ptrLoad()
@@ -2476,7 +2512,9 @@ end
 local function hover(f, st, hit)
 	hit = hit or f
 	hit.InputBegan:Connect(function(i)   -- un vrai clic sur cet élément : sert à vérifier / corriger le décalage du curseur
-		if i.UserInputType == Enum.UserInputType.MouseButton1 then pcall(Library._ptrCheck, hit) end
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			pcall(Library._ptrCheck, hit, i.Position)
+		end
 	end)
 	hit.MouseEnter:Connect(function()
 		uiSnd("hover")
@@ -9402,7 +9440,7 @@ function Block:CreateColorPicker(o)
 			BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, abar)
 		aHit.InputBegan:Connect(function(i)
 			if isPress(i) then
-				Library._ptrCheck(aHit)
+				Library._ptrCheck(aHit, i.Position)
 				startDrag(function(p)
 					alpha = (norm(abar, p))
 					commit()
@@ -9509,7 +9547,7 @@ function Block:CreateColorPicker(o)
 
 	svHit.InputBegan:Connect(function(i)
 		if isPress(i) then
-			Library._ptrCheck(svHit)
+			Library._ptrCheck(svHit, i.Position)
 			startDrag(function(p)
 				local nx, ny = norm(sv, p)
 				s, v = nx, 1 - ny
@@ -9519,7 +9557,7 @@ function Block:CreateColorPicker(o)
 	end)
 	hueHit.InputBegan:Connect(function(i)
 		if isPress(i) then
-			Library._ptrCheck(hueHit)
+			Library._ptrCheck(hueHit, i.Position)
 			startDrag(function(p)
 				local nx = norm(hue, p)
 				h = math.min(nx, 0.999)
@@ -13412,7 +13450,10 @@ function Block:CreatePreview3D(o)
 				ZIndex = 3, Visible = false }, ov)
 			hitF[n] = hf
 			hf.InputBegan:Connect(function(i)
-				if isPress(i) then hitSeen[n] = hitArea[n] or 1e9 end
+				if isPress(i) then
+					hitSeen[n] = hitArea[n] or 1e9
+					pcall(Library._ptrCheck, hf, i.Position)   -- le vrai pointeur est dans cette zone : bonne mesure du décalage (zones étroites)
+				end
 			end)
 			hf.MouseEnter:Connect(function() ix.hitReady = true end)
 		end
@@ -14374,7 +14415,7 @@ function Block:CreatePreview3D(o)
 	vp.InputBegan:Connect(function(i)
 		if isPress(i) then
 			pressed, moved, pressT = true, 0, os.clock()
-			pcall(Library._ptrCheck, vp)   -- le vrai pointeur est dans l'aperçu : si le calculé est dehors, on recale
+			pcall(Library._ptrCheck, vp, i.Position)   -- le vrai pointeur est dans l'aperçu : si le calculé est dehors, on recale
 			pressPos = Library._pointerPos(i.Position)
 			ix.press(pressPos)   -- sur un membre / le torse : prise (voir plus haut) au lieu de tourner la caméra
 			tween(hint, { TextTransparency = 1 }, 0.2)
@@ -14844,7 +14885,7 @@ Library.Changelog = {
 	{ Version = "5.11.0", Date = "2026-11-01", Title = "Console et recherche", Notes = {
 		"+ Nouvel élément Console (style CMD) : titre + description, lignes colorées par niveau, filtres, champ de commandes avec historique (flèches haut / bas) et sauvegarde optionnelle entre deux sessions.",
 		"+ Library:LogEvent(tag, texte, niveau) : écrit dans toutes les consoles créées avec Events = true.",
-		"Pointeur : calibrage automatique par votes (clics sur les onglets du menu et les boutons) : un curseur décalé de 58 px (trop haut ou trop bas) se recale tout seul, ce qui remet en état la prise des membres et le ragdoll du torse dans l'aperçu.",
+		"Pointeur : calibrage automatique à chaque clic sur un bouton, une ligne, le color picker ou un membre du personnage (le vrai pointeur est forcément dans l'élément cliqué, ce qui borne le décalage) : un curseur décalé de ~58 px se recale tout seul, ce qui remet en état le color picker, la prise des membres et le ragdoll du torse dans l'aperçu.",
 		"Aperçu du personnage : il repasse en pleine fréquence dès qu'on touche la souris ou l'écran (avant, il pouvait rester à ~4 images/s et le glisser / la prise des membres ne répondaient pas).",
 		"Aperçu du personnage (Home) : les emotes sont retirées, le personnage fait juste coucou en boucle (Library.HomeEmotes = true pour les remettre).",
 		"Barre de recherche : elle s'agrandit vers le bas, à sa largeur, et les résultats s'affichent dedans, avec le même verre que le reste de l'interface.",
@@ -17859,9 +17900,11 @@ Library._applySearch = applySearch
 do -- (portée réduite : évite d'ajouter des variables locales au niveau principal)
 -- Résultats de la recherche : la barre elle-même s'agrandit vers le bas (même verre, même bord, même largeur) puis les résultats
 -- apparaissent à l'intérieur, séparés de la zone de saisie par un fin trait. Quand on efface, elle se rétracte en pilule.
+-- V9.12 : le panneau suit le style courant (vitre translucide en Verre / Givré), lignes en 2 temps (nom + chemin onglet › bloc) avec pastille,
+-- navigation au clavier (↑ ↓ pour parcourir, Entrée pour ouvrir) et ligne d'aide avec le nombre de résultats.
 -- Un clic sur un résultat ouvre son onglet, déplie son bloc et fait défiler jusqu'à la ligne (Library:RevealElement).
 Library.SearchResults = true
-local SR_MINW, SR_ROW, SR_MAX = 200, 32, 7
+local SR_MINW, SR_ROW, SR_MAX, SR_HINT = 280, 40, 6, 22
 local function srEsc(t) return (tostring(t):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
 
 -- position / largeur / hauteur de la barre, en unités de la fenêtre (indépendant de l'échelle)
@@ -17877,21 +17920,42 @@ local function srGeom(win)
 	return left, by, w, bh
 end
 
+-- V9.12 — le panneau suit le STYLE courant (Library:SetStyle) au lieu d'un gris foncé fixe :
+--   Verre / Givré : vitre translucide (la fenêtre et le décor se devinent derrière), reflet clair en haut, bord lumineux.
+--   Standard / Mat / Néon : fond plus plein, reflet très discret.
+local SR_SHEEN_GLASS = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.86), NumberSequenceKeypoint.new(0.35, 0.93),
+	NumberSequenceKeypoint.new(1, 0.985) })
+local SR_SHEEN_FLAT = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.95), NumberSequenceKeypoint.new(1, 0.99) })
+local function srPaint(sr)
+	local tr = Sty.PanelTr or 0.1
+	if Sty.Glass then tr = math.clamp(tr, 0.4, 0.62) else tr = math.clamp(tr, 0.06, 0.3) end
+	sr.box.BackgroundColor3 = T.Main
+	sr.box.BackgroundTransparency = tr
+	sr.sheen.BackgroundColor3 = T.Text
+	sr.sheenGrad.Transparency = Sty.Glass and SR_SHEEN_GLASS or SR_SHEEN_FLAT
+	sr.stroke.Color = T.Text
+	sr.stroke.Transparency = math.clamp((Sty.PanelStroke or 0.5) - 0.25, 0.05, 0.6)
+	sr.sep.BackgroundColor3 = T.Text
+	sr.list.ScrollBarImageColor3 = T.Accent
+	sr.hint.TextColor3 = T.ElementAccent
+end
+
 local function srBuild(win)
 	if win._sr then return win._sr end
-	local sr = { tok = 0, rows = {}, extra = 0 }
+	local sr = { tok = 0, rows = {}, items = {}, sel = 1, extra = 0 }
 	win.Search.ZIndex = 310   -- la zone de saisie reste au-dessus du panneau qui s'agrandit derrière elle
 	sr.barStroke = win.Search:FindFirstChildOfClass("UIStroke")
 	sr.box = new("CanvasGroup", { Name = "SearchResults", AnchorPoint = Vector2.new(0, 0), Position = UDim2.fromOffset(0, 0),
-		Size = UDim2.fromOffset(SR_MINW, 30), BackgroundColor3 = T.Second, BackgroundTransparency = 0.18, BorderSizePixel = 0,
+		Size = UDim2.fromOffset(SR_MINW, 30), BackgroundColor3 = T.Main, BackgroundTransparency = 0.5, BorderSizePixel = 0,
 		ClipsDescendants = true, GroupTransparency = 1, Visible = false, ZIndex = 300 }, win.Main)
 	local cr = Instance.new("UICorner")
-	cr.CornerRadius = UDim.new(0, 18)   -- se limite tout seul à une pilule quand le panneau est replié
+	cr.CornerRadius = UDim.new(0, 20)   -- se limite tout seul à une pilule quand le panneau est replié
 	cr:SetAttribute("KeepRound", true)
 	cr.Parent = sr.box
-	-- reflet de verre (voile clair très léger) + bord lumineux, comme la barre
-	sr.sheen = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = T.Text, BackgroundTransparency = 0.95,
+	-- reflet de verre : voile clair, plus lumineux en haut qu'en bas (le dégradé multiplie la transparence du cadre)
+	sr.sheen = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = T.Text, BackgroundTransparency = 0,
 		BorderSizePixel = 0, ZIndex = 300 }, sr.box)
+	sr.sheenGrad = new("UIGradient", { Rotation = 90, Transparency = SR_SHEEN_GLASS }, sr.sheen)
 	sr.stroke = new("UIStroke", { Color = T.Text, Thickness = 1, Transparency = 0.3, ApplyStrokeMode = BORDER }, sr.box)
 	new("UIGradient", { Rotation = 40, Transparency = GLASS_EDGE }, sr.stroke)
 	sr.sep = new("Frame", { BackgroundColor3 = T.Text, BackgroundTransparency = 0.9, BorderSizePixel = 0, ZIndex = 301 }, sr.box)
@@ -17899,6 +17963,10 @@ local function srBuild(win)
 		ScrollBarImageColor3 = T.Accent, ScrollBarImageTransparency = 0.5, CanvasSize = UDim2.new(),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 301 }, sr.box)
 	new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, sr.list)
+	-- ligne d'aide en bas du panneau : raccourcis + nombre de résultats
+	sr.hint = new("TextLabel", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 16, 1, -4), Size = UDim2.new(1, -32, 0, SR_HINT - 6),
+		BackgroundTransparency = 1, Text = "", TextColor3 = T.ElementAccent, TextTransparency = 0.25, TextSize = 10, Font = F_MED,
+		TextXAlignment = Enum.TextXAlignment.Left, BorderSizePixel = 0, ZIndex = 302 }, sr.box)
 	win._sr = sr
 
 	-- suit la barre si elle bouge / change de taille (changement de type d'interface, redimensionnement de la fenêtre...)
@@ -17912,7 +17980,60 @@ local function srBuild(win)
 		local c = sig:Connect(follow)
 		if track then track(c) end
 	end
+
+	-- clavier : flèches haut / bas pour parcourir les résultats, Entrée pour ouvrir celui qui est surligné
+	local ck = UIS.InputBegan:Connect(function(i)
+		if not (sr.shown and sr.box.Visible and #sr.items > 0) then return end
+		if not win.Search:IsFocused() then return end
+		if i.KeyCode == Enum.KeyCode.Down then
+			Library._srSelect(sr, sr.sel + 1, true)
+		elseif i.KeyCode == Enum.KeyCode.Up then
+			Library._srSelect(sr, sr.sel - 1, true)
+		end
+	end)
+	if track then track(ck) end
+	win.Search.FocusLost:Connect(function(enter)
+		if enter and sr.shown and sr.items[sr.sel] then Library._srOpen(win, sr.items[sr.sel].data) end
+	end)
 	return sr
+end
+
+-- surligne une ligne (souris ou clavier) ; scroll = la fait défiler dans la liste si elle est cachée
+function Library._srSelect(sr, i, scroll, instant)
+	local n = #sr.items
+	if n == 0 then return end
+	i = math.clamp(i, 1, n)
+	sr.sel = i
+	for k, it in ipairs(sr.items) do
+		local on = k == i
+		if instant then
+			it.row.BackgroundTransparency = on and 0.86 or 1
+			it.bar.BackgroundTransparency = on and 0 or 1
+			it.enter.TextTransparency = on and 0.2 or 1
+		else
+			tween(it.row, { BackgroundTransparency = on and 0.86 or 1 }, 0.1)
+			tween(it.bar, { BackgroundTransparency = on and 0 or 1 }, 0.1)
+			tween(it.enter, { TextTransparency = on and 0.2 or 1 }, 0.1)
+		end
+	end
+	if scroll then
+		local list, row = sr.list, sr.items[i].row
+		local top = row.AbsolutePosition.Y - list.AbsolutePosition.Y + list.CanvasPosition.Y
+		local bot = top + row.AbsoluteSize.Y
+		local view = list.AbsoluteWindowSize.Y
+		if top < list.CanvasPosition.Y then
+			list.CanvasPosition = Vector2.new(0, top)
+		elseif bot > list.CanvasPosition.Y + view then
+			list.CanvasPosition = Vector2.new(0, bot - view)
+		end
+	end
+end
+
+-- ouvre un résultat : son onglet, son bloc déplié, défilement jusqu'à la ligne
+function Library._srOpen(win, it)
+	if not it then return end
+	if win.Search then pcall(function() win.Search:ReleaseFocus() end) end
+	Library:RevealElement({ Tab = it.owner, Block = it.blk, Frame = it.e.Frame })   -- vide aussi la recherche : le panneau se rétracte
 end
 
 -- extra = hauteur ajoutée sous la barre (0 = replié)
@@ -17922,7 +18043,7 @@ local function srMove(win, sr, extra, shown)
 	sr.sep.Position = UDim2.new(0, 16, 0, bh + 1)
 	sr.sep.Size = UDim2.new(1, -32, 0, 1)
 	sr.list.Position = UDim2.new(0, 6, 0, bh + 5)
-	sr.list.Size = UDim2.new(1, -12, 1, -(bh + 11))
+	sr.list.Size = UDim2.new(1, -12, 1, -(bh + 11 + SR_HINT))
 	Library._spring(sr.box, { Size = UDim2.fromOffset(w, bh + extra), Position = UDim2.fromOffset(left, by) }, "smooth")
 end
 
@@ -17946,7 +18067,8 @@ end
 function Library._updateSearchResults(win, q)
 	if Library.SearchResults == false or not win or not win.Main or not win.Search then return end
 	local sr = srBuild(win)
-	q = string.lower(q or "")
+	local qRaw = q or ""
+	q = string.lower(qRaw)
 	if q == "" then srHide(win, sr) return end
 
 	-- résultats : éléments dont le nom contient le texte (ceux qui commencent par le texte d'abord)
@@ -17972,49 +18094,78 @@ function Library._updateSearchResults(win, q)
 	sr.tok += 1
 	for _, r in ipairs(sr.rows) do r:Destroy() end
 	table.clear(sr.rows)
-	-- couleurs du thème courant
-	sr.box.BackgroundColor3 = T.Second
-	sr.sheen.BackgroundColor3 = T.Text
-	sr.stroke.Color = T.Text
-	sr.sep.BackgroundColor3 = T.Text
-	sr.list.ScrollBarImageColor3 = T.Accent
+	table.clear(sr.items)
+	sr.sel = 1
+	srPaint(sr)   -- couleurs + transparence du style et du thème courants
 
 	local count = math.min(#found, 40)
 	if count == 0 then
-		sr.rows[1] = new("TextLabel", { Size = UDim2.new(1, 0, 0, SR_ROW), BackgroundTransparency = 1, Text = "Aucun résultat",
-			TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED, BorderSizePixel = 0, LayoutOrder = 1, ZIndex = 302 }, sr.list)
+		sr.rows[1] = new("TextLabel", { Size = UDim2.new(1, 0, 0, SR_ROW), BackgroundTransparency = 1,
+			Text = "Aucun résultat pour « " .. qRaw .. " »", TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED,
+			TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0, LayoutOrder = 1, ZIndex = 302 }, sr.list)
+		sr.hint.Text = "Essaie un autre mot"
+	else
+		sr.hint.Text = "↑ ↓ naviguer     ↵ ouvrir     ·     " .. count .. (#found > count and "+" or "") .. (count > 1 and " résultats" or " résultat")
 	end
 	for i = 1, count do
 		local it = found[i]
 		local nm = tostring(it.e.Name)
+		local ownerName = tostring(it.owner.Name or "")
+		local blkName = type(it.blk.Name) == "string" and it.blk.Name or ""
 		local row = new("TextButton", { Size = UDim2.new(1, 0, 0, SR_ROW), BackgroundColor3 = T.Text, BackgroundTransparency = 1,
 			Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i, ZIndex = 302 }, sr.list)
 		local rc = Instance.new("UICorner")
-		rc.CornerRadius = UDim.new(0, 13)
+		rc.CornerRadius = UDim.new(0, 14)
 		rc:SetAttribute("KeepRound", true)
 		rc.Parent = row
+		-- trait d'accent à gauche (visible sur la ligne surlignée)
+		local bar = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0), Size = UDim2.fromOffset(3, 18),
+			BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 303 }, row)
+		local bc = Instance.new("UICorner")
+		bc.CornerRadius = UDim.new(1, 0)
+		bc:SetAttribute("KeepRound", true)
+		bc.Parent = bar
+		-- pastille : initiale de l'onglet
+		local ini = "•"
+		if utf8.len(ownerName) and utf8.len(ownerName) > 0 then
+			ini = string.upper(ownerName:sub(1, (utf8.offset(ownerName, 2) or (#ownerName + 1)) - 1))
+		end
+		local badge = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0.5, 0), Size = UDim2.fromOffset(24, 24),
+			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.8, BorderSizePixel = 0, ZIndex = 303 }, row)
+		local bdc = Instance.new("UICorner")
+		bdc.CornerRadius = UDim.new(0, 9)
+		bdc:SetAttribute("KeepRound", true)
+		bdc.Parent = badge
+		new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.6, ApplyStrokeMode = BORDER }, badge)
+		new("TextLabel", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = ini, TextColor3 = T.Text, TextSize = 12,
+			Font = F_BOLD, BorderSizePixel = 0, ZIndex = 304 }, badge)
 		-- nom avec la partie trouvée en gras
 		local pre, mid, post = nm:sub(1, it.pos - 1), nm:sub(it.pos, it.pos + #q - 1), nm:sub(it.pos + #q)
-		new("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0, 14, 0, 0), Size = UDim2.new(0.6, -14, 1, 0),
-			Text = srEsc(pre) .. "<b>" .. srEsc(mid) .. "</b>" .. srEsc(post), RichText = true, TextColor3 = T.Text, TextSize = 12.5, Font = F_MED,
+		new("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0, 46, 0, 5), Size = UDim2.new(1, -90, 0, 17),
+			Text = srEsc(pre) .. "<b>" .. srEsc(mid) .. "</b>" .. srEsc(post), RichText = true, TextColor3 = T.Text, TextSize = 13, Font = F_MED,
 			TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0, ZIndex = 303 }, row)
-		new("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0.6, 0, 0, 0), Size = UDim2.new(0.4, -14, 1, 0),
-			Text = tostring(it.owner.Name or ""), TextColor3 = T.ElementAccent, TextTransparency = 0.15, TextSize = 10.5, Font = F_MED,
-			TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0, ZIndex = 303 }, row)
-		row.MouseEnter:Connect(function() tween(row, { BackgroundTransparency = 0.88 }, 0.12) end)
-		row.MouseLeave:Connect(function() tween(row, { BackgroundTransparency = 1 }, 0.12) end)
-		row.MouseButton1Click:Connect(function()
-			if win.Search then pcall(function() win.Search:ReleaseFocus() end) end
-			Library:RevealElement({ Tab = it.owner, Block = it.blk, Frame = it.e.Frame })   -- vide aussi la recherche : le panneau se rétracte
-		end)
+		-- chemin : onglet › bloc
+		local path = ownerName
+		if blkName ~= "" and blkName ~= ownerName then path = path .. "  ›  " .. blkName end
+		new("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0, 46, 0, 22), Size = UDim2.new(1, -90, 0, 13),
+			Text = path, TextColor3 = T.ElementAccent, TextTransparency = 0.1, TextSize = 10.5, Font = F_MED,
+			TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0, ZIndex = 303 }, row)
+		-- touche Entrée (visible sur la ligne surlignée)
+		local enter = new("TextLabel", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(24, 20),
+			BackgroundTransparency = 1, Text = "↵", TextColor3 = T.ElementAccent, TextTransparency = 1, TextSize = 15, Font = F_BOLD,
+			BorderSizePixel = 0, ZIndex = 303 }, row)
+		sr.items[i] = { row = row, bar = bar, enter = enter, data = it }
+		row.MouseEnter:Connect(function() Library._srSelect(sr, i, false) end)
+		row.MouseButton1Click:Connect(function() Library._srOpen(win, it) end)
 		sr.rows[i] = row
 	end
+	Library._srSelect(sr, 1, false, true)
 
 	local _, by, _, bh = srGeom(win)
 	local rows = math.max(1, math.min(count, SR_MAX))
-	local extra = rows * (SR_ROW + 2) + 14
+	local extra = rows * (SR_ROW + 2) + 14 + SR_HINT
 	local maxExtra = win.Main.AbsoluteSize.Y / pxScale() - by - bh - 12
-	extra = math.max(44, math.min(extra, maxExtra))
+	extra = math.max(60, math.min(extra, maxExtra))
 	if not sr.box.Visible then   -- ouverture : le panneau part exactement de la pilule, puis s'agrandit vers le bas
 		local left, y, w = srGeom(win)
 		sr.box.Size = UDim2.fromOffset(w, bh)
@@ -18025,7 +18176,7 @@ function Library._updateSearchResults(win, q)
 		if sr.barStroke then sr.barStroke.Enabled = false end   -- le bord du panneau remplace celui de la barre
 	end
 	tween(sr.box, { GroupTransparency = 0 }, 0.12)
-	tween(sr.sep, { BackgroundTransparency = 0.9 }, 0.3)
+	tween(sr.sep, { BackgroundTransparency = 0.88 }, 0.3)
 	srMove(win, sr, extra, true)
 end
 end
