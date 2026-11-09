@@ -14017,9 +14017,270 @@ function Block:CreatePreview3D(o)
 			local xr = Vector3.new(xv.X, 0, xv.Z)
 			RG.Xr = (xr.Magnitude > 1e-3) and xr.Unit or Vector3.new(1, 0, 0)
 		end
+		-- =============================================================================================================
+		-- RAGDOLL V3 : VRAIE PHYSIQUE ROBLOX (WorldModel:StepPhysics + BallSocketConstraint).
+		--   À la prise du torse (ou pv:Ragdoll) les Motor6D sont coupés et remplacés par des articulations à rotule avec limites
+		--   réalistes (cou, épaules, hanches) ; le corps devient de vrais solides qui tombent, rebondissent sur le sol / les murs de
+		--   l'aperçu et se heurtent. Tenir = ressort (AlignPosition) sur le point saisi du torse. Au repos, le personnage est tiré
+		--   debout (AlignPosition + AlignOrientation) puis les articulations d'origine reviennent.
+		--   Si le moteur refuse (pas de StepPhysics...), l'ancienne simulation 2D (V2, plus haut) prend le relais toute seule.
+		--   Réglages : Library.PreviewRagdollTimeScale (0.6 : < 1 = ralenti) · PreviewRagdollRecover · PreviewRagdollGetUpTime.
+		-- =============================================================================================================
+		local PH = { on = false, ok = nil, state = "free", t = 0, calm = 0, g = 0, p = {}, junk = {}, motors = {}, act = {}, vf = {} }
+		ix.ph = PH
+		PH.NAMES = { "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg" }
+		-- { articulation, cône max (rad), torsion max (rad), sens de l'axe (-1 : vers le bas, 1 : vers le haut), friction }
+		PH.JOINTS = {
+			{ "Neck", 0.80, 0.55, 1, 4 },
+			{ "Left Shoulder", 2.45, 0.9, -1, 2 },
+			{ "Right Shoulder", 2.45, 0.9, -1, 2 },
+			{ "Left Hip", 1.25, 0.4, -1, 3 },
+			{ "Right Hip", 1.25, 0.4, -1, 3 },
+		}
+
+		function PH.mk(class, props, parent)
+			local o = Instance.new(class)
+			for k, v in pairs(props or {}) do o[k] = v end
+			o.Parent = parent
+			PH.junk[#PH.junk + 1] = o
+			return o
+		end
+
+		function PH.step(dt)
+			if PH.useList then world:StepPhysics(dt, { rig }) else world:StepPhysics(dt) end
+		end
+
+		function PH.dropActuators()
+			for _, o in ipairs(PH.act) do pcall(function() o:Destroy() end) end
+			table.clear(PH.act)
+			PH.hold = nil
+		end
+
+		function PH.clean()
+			PH.dropActuators()
+			for _, o in ipairs(PH.junk) do pcall(function() o:Destroy() end) end
+			table.clear(PH.junk)
+			table.clear(PH.vf)
+		end
+
+		function PH.finish()
+			local wasOn = PH.on
+			PH.on = false
+			PH.clean()
+			for _, j in ipairs(PH.motors) do pcall(function() j.Enabled = true end) end
+			table.clear(PH.motors)
+			for _, part in pairs(PH.p) do
+				pcall(function()
+					part.CanCollide = false
+					part.AssemblyLinearVelocity = Vector3.zero
+					part.AssemblyAngularVelocity = Vector3.zero
+				end)
+			end
+			table.clear(PH.p)
+			if wasOn then avY = math.huge end   -- force un rig:PivotTo à l'image suivante : le personnage reprend sa pose normale
+		end
+
+		function PH.fail(err)
+			PH.ok = false
+			if not PH.warned then
+				PH.warned = true
+				warn("[Ui-Lib] ragdoll physique indisponible, ancienne simulation utilisée : " .. tostring(err))
+			end
+			PH.finish()
+		end
+
+		function PH.build()
+			if not (world and world.Parent and rig and rig.Parent and avBase and fit and r6ok()) then error("avatar non prêt") end
+			rgSetAxis()
+			local folder = PH.mk("Folder", { Name = "RagdollPhysics" }, world)
+			PH.folder = folder
+			table.clear(PH.p)
+			table.clear(PH.motors)
+			for _, n in ipairs(PH.NAMES) do
+				local part = rig:FindFirstChild(n)
+				if not (part and part:IsA("BasePart")) then error("pièce absente : " .. n) end
+				PH.p[n] = part
+			end
+
+			-- décor : sol, murs, plafond, et deux plaques qui gardent le corps dans le plan visible
+			local B = CFrame.fromMatrix(avBase.Position, RG.Xr, Vector3.yAxis)
+			PH.B = B
+			local dist = math.max((cam.CFrame.Position - avBase.Position).Magnitude, fit.dist or 0)
+			local tanH = math.tan(math.rad(cam.FieldOfView) / 2)
+			local asp = vp.AbsoluteSize.X / math.max(vp.AbsoluteSize.Y, 1)
+			PH.floorY = (fit.focus.Y - fit.size.Y / 2) - avBase.Position.Y
+			PH.wallX = math.max(dist * tanH * asp - 1.6, 2.8)
+			PH.topY = math.max(dist * tanH + (fit.focus.Y - avBase.Position.Y) - 1.3, PH.floorY + 4)
+			local function wall(cf, size)
+				PH.mk("Part", { Anchored = true, CanCollide = true, CanQuery = false, CanTouch = false, Transparency = 1,
+					Size = size, CFrame = cf, CustomPhysicalProperties = PhysicalProperties.new(1, 0.9, 0.05, 1, 1) }, folder)
+			end
+			wall(B * CFrame.new(0, PH.floorY - 1, 0), Vector3.new(160, 2, 160))
+			wall(B * CFrame.new(-(PH.wallX + 0.5), 0, 0), Vector3.new(1, 160, 160))
+			wall(B * CFrame.new(PH.wallX + 0.5, 0, 0), Vector3.new(1, 160, 160))
+			wall(B * CFrame.new(0, PH.topY + 3.1, 0), Vector3.new(160, 1, 160))
+			wall(B * CFrame.new(0, 0, -1.45), Vector3.new(160, 160, 1))
+			wall(B * CFrame.new(0, 0, 1.45), Vector3.new(160, 160, 1))
+
+			-- articulations
+			for _, jd in ipairs(PH.JOINTS) do
+				local j = avJoints[jd[1]]
+				if not (j and j.Part0 and j.Part1) then error("articulation absente : " .. jd[1]) end
+				local rot = CFrame.Angles(0, 0, jd[4] * math.pi / 2)   -- l'axe de la rotule : le long du membre
+				local a0 = PH.mk("Attachment", { CFrame = CFrame.new(j.C0.Position) * rot }, j.Part0)
+				local a1 = PH.mk("Attachment", { CFrame = CFrame.new(j.C1.Position) * rot }, j.Part1)
+				PH.mk("BallSocketConstraint", { Attachment0 = a0, Attachment1 = a1, LimitsEnabled = true, UpperAngle = math.deg(jd[2]),
+					TwistLimitsEnabled = true, TwistLowerAngle = -math.deg(jd[3]), TwistUpperAngle = math.deg(jd[3]),
+					Restitution = 0, MaxFrictionTorque = jd[5] }, folder)
+				PH.mk("NoCollisionConstraint", { Part0 = j.Part0, Part1 = j.Part1 }, folder)
+				PH.motors[#PH.motors + 1] = j
+			end
+			local rj = avJoints["RootJoint"]
+			if rj then PH.motors[#PH.motors + 1] = rj end
+			for _, j in ipairs(PH.motors) do j.Enabled = false end
+
+			-- solides : le torse est libéré (la racine reste ancrée), gravité réelle quelle que soit celle du jeu
+			local extra = 196.2 - workspace.Gravity
+			for _, part in pairs(PH.p) do
+				part.Anchored = false
+				part.CanCollide = true
+				part.CustomPhysicalProperties = PhysicalProperties.new(0.7, 0.8, 0.05, 1, 1)
+				part.AssemblyLinearVelocity = Vector3.zero
+				part.AssemblyAngularVelocity = Vector3.zero
+				if math.abs(extra) > 1 then
+					local at = PH.mk("Attachment", {}, part)
+					local vf = PH.mk("VectorForce", { Attachment0 = at, RelativeTo = Enum.ActuatorRelativeTo.World, ApplyAtCenterOfMass = true,
+						Force = Vector3.zero }, folder)
+					PH.vf[#PH.vf + 1] = { vf = vf, part = part, g = extra }
+				end
+			end
+
+			-- le moteur accepte-t-il StepPhysics (avec ou sans liste de modèles) ?
+			if not pcall(PH.step, 1 / 240) then
+				PH.useList = true
+				if not pcall(PH.step, 1 / 240) then error("WorldModel:StepPhysics indisponible") end
+			end
+			PH.on, PH.state, PH.t, PH.calm, PH.g = true, "free", 0, 0, 0
+		end
+
+		function PH.start()
+			if PH.on then return true end
+			if PH.ok == false then return false end
+			local ok, err = pcall(PH.build)
+			if not ok then
+				PH.fail(err)
+				return false
+			end
+			PH.ok = true
+			return true
+		end
+
+		function PH.beginHold()
+			PH.dropActuators()
+			local torso = PH.p.Torso
+			local c0x, c0y = cursorSim(ix.p0.X, ix.p0.Y)
+			local g0 = avBase.Position + RG.Xr * c0x + Vector3.new(0, c0y, 0)
+			local lo = torso.CFrame:PointToObjectSpace(g0)
+			local hw, hh = torso.Size.X / 2, torso.Size.Y / 2
+			lo = Vector3.new(math.clamp(lo.X, -hw * 0.9, hw * 0.9), math.clamp(lo.Y, -hh * 0.9, hh * 0.9), 0)
+			local at = PH.mk("Attachment", { CFrame = CFrame.new(lo) }, torso)
+			local gw = torso.CFrame:PointToWorldSpace(lo)
+			local ap = PH.mk("AlignPosition", { Mode = Enum.PositionAlignmentMode.OneAttachment, Attachment0 = at, RigidityEnabled = false,
+				ApplyAtCenterOfMass = false, MaxForce = 1e7, MaxVelocity = 90, Responsiveness = 40, Position = gw }, PH.folder)
+			PH.act[#PH.act + 1] = at
+			PH.act[#PH.act + 1] = ap
+			PH.hold = { ap = ap, g0 = gw, cx = c0x, cy = c0y }
+			PH.state = "held"
+		end
+
+		function PH.beginGetup()
+			PH.dropActuators()
+			local torso = PH.p.Torso
+			local at = PH.mk("Attachment", {}, torso)
+			local ap = PH.mk("AlignPosition", { Mode = Enum.PositionAlignmentMode.OneAttachment, Attachment0 = at, RigidityEnabled = false,
+				ApplyAtCenterOfMass = true, MaxForce = 1e7, MaxVelocity = 35, Responsiveness = 12, Position = avBase.Position }, PH.folder)
+			local ao = PH.mk("AlignOrientation", { Mode = Enum.OrientationAlignmentMode.OneAttachment, Attachment0 = at, RigidityEnabled = false,
+				MaxTorque = 1e7, MaxAngularVelocity = 10, Responsiveness = 12, CFrame = avBase - avBase.Position }, PH.folder)
+			PH.act[#PH.act + 1] = at
+			PH.act[#PH.act + 1] = ap
+			PH.act[#PH.act + 1] = ao
+			PH.state, PH.g = "getup", 0
+		end
+
+		function PH.setFree()
+			PH.dropActuators()
+			PH.state, PH.t, PH.calm = "free", 0, 0
+		end
+
+		function PH.update(dt, holding, mp, limbOn)
+			local torso = PH.p.Torso
+			if not (torso and torso.Parent and world and world.Parent) then PH.finish() return end
+			if limbOn and PH.state ~= "getup" then PH.beginGetup() end
+			if holding and not limbOn and PH.state ~= "held" then PH.beginHold() end
+			if PH.state == "held" and not holding then PH.setFree() end
+
+			-- cible du ressort : point saisi + déplacement du curseur depuis la prise, gardée dans l'aperçu
+			local H = PH.hold
+			if PH.state == "held" and H and mp then
+				local mx = math.clamp(mp.X, 16, math.max(vp.AbsoluteSize.X - 16, 17))
+				local my = math.clamp(mp.Y, 16, math.max(vp.AbsoluteSize.Y - 16, 17))
+				local qx, qy = cursorSim(mx, my)
+				local tgt = H.g0 + RG.Xr * (qx - H.cx) + Vector3.new(0, qy - H.cy, 0)
+				local loc = PH.B:PointToObjectSpace(tgt)
+				loc = Vector3.new(math.clamp(loc.X, -(PH.wallX - 0.6), PH.wallX - 0.6), math.clamp(loc.Y, PH.floorY + 0.4, PH.topY), 0)
+				H.ap.Position = PH.B:PointToWorldSpace(loc)
+			end
+
+			-- gravité de remplacement (si le jeu a changé workspace.Gravity)
+			for _, e in ipairs(PH.vf) do
+				if e.part.Parent then e.vf.Force = Vector3.new(0, -e.part.AssemblyMass * e.g, 0) end
+			end
+
+			-- pas de simulation (3 sous-pas, ralenti réglable)
+			local h = math.clamp(dt, 1 / 120, 1 / 30) * rgNum("PreviewRagdollTimeScale", 0.6)
+			for _ = 1, 3 do
+				local ok, err = pcall(PH.step, h / 3)
+				if not ok then PH.fail(err) return end
+			end
+
+			-- le corps reste dans le plan visible : on amortit ce qui en sort
+			local nz = RG.Xr:Cross(Vector3.yAxis)
+			local mv, wv = 0, 0
+			for _, part in pairs(PH.p) do
+				local v, w = part.AssemblyLinearVelocity, part.AssemblyAngularVelocity
+				part.AssemblyLinearVelocity = v - nz * (v:Dot(nz) * 0.7)
+				local wp = nz * w:Dot(nz)
+				part.AssemblyAngularVelocity = wp + (w - wp) * 0.5
+				mv, wv = math.max(mv, v.Magnitude), math.max(wv, w.Magnitude)
+			end
+
+			if PH.state == "free" then
+				PH.t += dt
+				if mv < 3 and wv < 2 then PH.calm += dt else PH.calm = 0 end
+				if Library.PreviewRagdollRecover ~= false and ((PH.t > 0.8 and PH.calm > 0.5) or PH.t > 6) then PH.beginGetup() end
+			elseif PH.state == "getup" then
+				PH.g += dt / math.max(rgNum("PreviewRagdollGetUpTime", 0.9), 0.2)
+				local near = (torso.Position - avBase.Position).Magnitude < 0.35 and torso.CFrame.UpVector:Dot(avBase.UpVector) > 0.97
+				if PH.g >= 1.4 or (PH.g > 0.5 and near) then PH.finish() end
+			end
+		end
+
 		-- pv:Ragdoll(sens) : fait tomber le personnage (sens -1..1 = direction de la poussée ; au hasard par défaut)
 		function ix.ragdollNow(dirx)
 			if not (r6ok() and avBase) then return false end
+			if PH.on and PH.state ~= "getup" then return true end
+			if not RG.sim and PH.ok ~= false and PH.start() then
+				local dir = tonumber(dirx)
+				if not dir then dir = (math.random() < 0.5) and -1 or 1 end
+				dir = math.clamp(dir, -2, 2)
+				PH.setFree()
+				local torso = PH.p.Torso
+				if torso then
+					torso.AssemblyLinearVelocity = RG.Xr * (dir * 9) + Vector3.new(0, 6, 0)
+					torso.AssemblyAngularVelocity = RG.Xr:Cross(Vector3.yAxis) * (-dir * 2.5)
+				end
+				return true
+			end
 			if RG.sim and RG.sim.state ~= "getup" then return true end
 			rgSetAxis()
 			local sim = rgNewSim(ix.off:Dot(RG.Xr), ix.off.Y, ix.roll, ix.rt)
@@ -14034,8 +14295,9 @@ function Block:CreatePreview3D(o)
 			RG.sim, RG.acc, RG.rigFor = sim, 0, rig
 			return true
 		end
-		function ix.isDown() return RG.sim ~= nil and RG.sim.state ~= "getup" end
+		function ix.isDown() return (PH.on and PH.state ~= "getup") or (RG.sim ~= nil and RG.sim.state ~= "getup") end
 		function ix.getUp()
+			if PH.on and PH.state ~= "getup" then PH.beginGetup() end
 			if RG.sim and RG.sim.state ~= "getup" then RG.sim.state, RG.sim.g = "getup", 0 end
 		end
 
@@ -14108,6 +14370,17 @@ function Block:CreatePreview3D(o)
 			local holding = canSim and ix.rag and ix.active and mp ~= nil
 			if canSim then rgSetAxis() end
 			local Xr = RG.Xr
+			-- ---- RAGDOLL V3 (physique Roblox) prioritaire ; l'ancienne simulation 2D sert de repli (voir plus haut)
+			if canSim and PH.ok ~= false and not sim then
+				if not PH.on and holding then PH.start() end
+				if PH.on then
+					PH.update(dt, holding, mp, limbOn)
+					if ix.off ~= Vector3.zero then ix.off = Vector3.zero end
+					ix.roll, ix.rollOut, ix.rw = 0, 0, 0
+					for k in pairs(ix.rt) do ix.rt[k] = 0 end
+					return
+				end
+			end
 			if limbOn and sim and sim.state ~= "getup" then sim.state, sim.g = "getup", 0 end   -- on saisit un membre : le corps se redresse
 			if holding and (not sim or sim.state ~= "held") then
 				-- (re)prise : la simulation repart de la pose actuellement affichée (aucune cassure, même en pleine remise debout)
@@ -14469,7 +14742,7 @@ function Block:CreatePreview3D(o)
 			if finished then jumpT0, y = nil, 0 end
 			y = y + wy + EMO.y
 			local ex, er = EMO.x or 0, EMO.roll or 0
-			if rig and avBase and (y ~= avY or EMO.spin ~= avSpin or EMO.flip ~= avFlip or ex ~= EMO.ax or er ~= EMO.ar or ix.off ~= ix.lo or ix.rollOut ~= ix.lr) then
+			if rig and avBase and not (ix.ph and ix.ph.on) and (y ~= avY or EMO.spin ~= avSpin or EMO.flip ~= avFlip or ex ~= EMO.ax or er ~= EMO.ar or ix.off ~= ix.lo or ix.rollOut ~= ix.lr) then
 				avY, avSpin, avFlip, EMO.ax, EMO.ar, ix.lo, ix.lr = y, EMO.spin, EMO.flip, ex, er, ix.off, ix.rollOut
 				rig:PivotTo(CFrame.new(ix.off) * avBase * CFrame.new(ex, y, 0) * CFrame.Angles(EMO.flip, EMO.spin, er + ix.rollOut))
 			end
