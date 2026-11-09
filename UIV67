@@ -7,6 +7,13 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.17 — LOADER « EAU » (visuel uniquement, inspiré du style Verre + d'une surface d'eau)
+		• Nouvelle intro par défaut : horizon brumeux, eau azur avec nappes de lumière animées (faux shader en dégradés), caustiques, reflets
+		  qui scintillent, ondes elliptiques, bulles, colonne de lumière, carte de verre (bord lumineux + reflet qui balaie) avec anneau et barre.
+		  Aucun texte, aucun son. Le jeu se floute derrière (Library.LoaderBlur = false pour couper). Se dissout sur la fenêtre à la fin.
+		• Library.IntroStyle = "Eau" | "Messages" (l'ancienne intro) · Library:SetIntroStyle(v) · Library.LoaderMinTime (1,9 s) ·
+		  Library:PreviewLoader(secondes) · Paramètres : « Style de l'intro » + bouton « Prévisualiser le loader ».
+
 	V9.16 — APERÇU DE L'AVATAR (Home) SIMPLIFIÉ
 		• Home > Mon personnage : nouvel aperçu Block:CreateAvatarWave — ton avatar de face qui fait coucou en boucle, et c'est tout.
 		  Plus de ragdoll, de zoom, de rotation à la souris, d'emotes, d'étincelles, de boutons, ni de saut / animation de bienvenue :
@@ -615,10 +622,12 @@ do
 		pcall(function()
 			if not writefile then return end
 			if makefolder and isfolder and not isfolder(Library.ConfigFolder) then makefolder(Library.ConfigFolder) end
-			writefile(introFile, HttpService:JSONEncode({ enabled = Library.IntroEnabled, total = saved.total }))
+			writefile(introFile, HttpService:JSONEncode({ enabled = Library.IntroEnabled, total = saved.total, style = Library.IntroStyle }))
 		end)
 	end
 	Library.IntroEnabled = (saved.enabled ~= false) and (genv.UiLibIntro ~= false)
+	Library.IntroStyle = genv.UiLibIntroStyle or Library.IntroStyle or saved.style or "Eau"   -- "Eau" (loader visuel) | "Messages" (phrases)
+	Library.LoaderMinTime = Library.LoaderMinTime or 1.9
 	Library.IntroYield = true
 	Library.IntroMinTime = 2.2
 	Library.IntroActive = false
@@ -635,8 +644,332 @@ do
 		Library.IntroEnabled = v and true or false
 		writeIntro()
 	end
+	function Library:SetIntroStyle(v)
+		Library.IntroStyle = (string.lower(tostring(v)) == "messages") and "Messages" or "Eau"
+		writeIntro()
+	end
 	function Library:HoldIntro(v) local I = Library._intro if I then I.hold = v and true or false end end
 	function Library:FinishIntro() local I = Library._intro if I then I.force = true end end
+
+	-- ====================================================================================================================
+	-- V9.17 : LOADER « EAU »  (visuel uniquement : aucun texte, aucun son)
+	--   Inspiré du style Verre (vitre translucide, bord lumineux, reflet qui balaie) et d'une surface d'eau vue de biais :
+	--   horizon brumeux, eau azur, bandes de lumière qui glissent (faux « shader » en dégradés animés), reflets qui scintillent,
+	--   ondes elliptiques, bulles, colonne de lumière, et une carte de verre avec anneau + barre de progression.
+	--   Tout est fait en instances d'interface (Frame / UIGradient / UIStroke), sans image à télécharger.
+	--   Library.IntroStyle = "Eau" (défaut) | "Messages" (l'ancienne intro avec les phrases) · Library:SetIntroStyle(v)
+	--   Library.LoaderMinTime (1,9 s) · Library.LoaderBlur = false (sans flou du jeu derrière) · Library:PreviewLoader(secondes)
+	-- ====================================================================================================================
+	local function buildWater(gui, parent)
+		local rng = Random.new()
+		local WHITE = Color3.new(1, 1, 1)
+		local SEQ, KP = NumberSequence.new, NumberSequenceKeypoint.new
+		local function mk(class, props, par)
+			local o = Instance.new(class)
+			for k, v in pairs(props) do o[k] = v end
+			o.Parent = par
+			return o
+		end
+		local function round(par, r) return mk("UICorner", { CornerRadius = r or UDim.new(1, 0) }, par) end
+		local FULL = UDim2.fromScale(1, 1)
+		local CENTER = Vector2.new(0.5, 0.5)
+
+		local W = { bar = 0, goal = 0, fadeA = 0, outroA = 0, t0 = os.clock(), last = os.clock() }
+
+		for _, o in ipairs(Lighting:GetChildren()) do
+			if o.Name == "SolarisIntroBlur" then pcall(function() o:Destroy() end) end
+		end
+		if Library.LoaderBlur ~= false then
+			pcall(function()
+				W.blur = mk("BlurEffect", { Name = "SolarisIntroBlur", Size = 0 }, Lighting)
+			end)
+		end
+
+		-- CanvasGroup : un seul réglage (GroupTransparency) fait apparaître / disparaître toute la scène d'un coup
+		local scene = mk("CanvasGroup", { Name = "Water", Size = FULL, BackgroundTransparency = 1, BorderSizePixel = 0,
+			GroupTransparency = 1, ZIndex = 1 }, parent)
+
+		-- ---- fond : brume de l'horizon en haut, eau azur qui s'assombrit vers le bas (un peu transparent : le jeu flou se devine)
+		local bg = mk("Frame", { Size = FULL, BackgroundColor3 = WHITE, BackgroundTransparency = 0.07, BorderSizePixel = 0, ZIndex = 1 }, scene)
+		mk("UIGradient", { Rotation = 90, Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.fromRGB(118, 176, 236)),
+			ColorSequenceKeypoint.new(0.33, Color3.fromRGB(198, 234, 255)),
+			ColorSequenceKeypoint.new(0.385, Color3.fromRGB(150, 206, 250)),
+			ColorSequenceKeypoint.new(0.405, Color3.fromRGB(20, 124, 240)),
+			ColorSequenceKeypoint.new(0.7, Color3.fromRGB(8, 82, 204)),
+			ColorSequenceKeypoint.new(1, Color3.fromRGB(3, 26, 100)) }) }, bg)
+
+		-- ---- « shader » : deux nappes de lumière qui glissent sur l'eau (dégradé dont on anime l'Offset)
+		local bands = {}
+		for i = 1, 2 do
+			local f = mk("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.fromScale(1, 0.6),
+				BackgroundColor3 = i == 1 and Color3.fromRGB(190, 240, 255) or WHITE, BackgroundTransparency = 0.5, BorderSizePixel = 0, ZIndex = 2 }, scene)
+			local g = mk("UIGradient", { Rotation = i == 1 and 18 or -24, Transparency = SEQ({
+				KP(0, 1), KP(0.14, 0.85), KP(0.28, 1), KP(0.5, 0.78), KP(0.64, 1), KP(0.82, 0.88), KP(1, 1) }) }, f)
+			bands[i] = { g = g, sp = i == 1 and 0.045 or -0.032 }
+		end
+
+		-- ---- caustiques : traînées de lumière allongées (plus grandes et plus proches en bas, comme en perspective)
+		local streaks = {}
+		for i = 1, 22 do
+			local y = 0.43 + rng:NextNumber() ^ 0.85 * 0.55
+			local s = { x = rng:NextNumber(), y = y, d = (y - 0.4) / 0.6, w = 150 + rng:NextNumber() * 270, h = 14 + rng:NextNumber() * 26,
+				rot = rng:NextNumber() * 30 - 15, ph = rng:NextNumber() * 6.28, sp = 0.25 + rng:NextNumber() * 0.5 }
+			s.f = mk("Frame", { AnchorPoint = CENTER, BorderSizePixel = 0, ZIndex = 3, BackgroundTransparency = 0.88,
+				BackgroundColor3 = (i % 3 == 0) and WHITE or Color3.fromRGB(170, 236, 255) }, scene)
+			round(s.f)
+			mk("UIGradient", { Transparency = SEQ({ KP(0, 1), KP(0.5, 0), KP(1, 1) }) }, s.f)
+			streaks[i] = s
+		end
+
+		-- ---- colonne de lumière (derrière la carte) + traînée de reflets sous la carte
+		local pillar = mk("Frame", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.fromScale(0.5, 0.58), BorderSizePixel = 0,
+			BackgroundColor3 = Color3.fromRGB(215, 248, 255), BackgroundTransparency = 0.3, ZIndex = 3 }, scene)
+		round(pillar, UDim.new(0, 10))
+		mk("UIGradient", { Transparency = SEQ({ KP(0, 1), KP(0.3, 0.8), KP(0.5, 0.42), KP(0.7, 0.8), KP(1, 1) }) }, pillar)
+
+		local dashes = {}
+		for i = 1, 8 do
+			local d = { y = 0.64 + (i - 1) * 0.043, w = 150 - (i - 1) * 13, ph = rng:NextNumber() * 6.28, sp = 0.8 + rng:NextNumber() * 0.9 }
+			d.f = mk("Frame", { AnchorPoint = CENTER, BorderSizePixel = 0, BackgroundColor3 = Color3.fromRGB(225, 250, 255), ZIndex = 3 }, scene)
+			round(d.f)
+			mk("UIGradient", { Transparency = SEQ({ KP(0, 1), KP(0.5, 0), KP(1, 1) }) }, d.f)
+			dashes[i] = d
+		end
+
+		-- ---- ondes : anneaux elliptiques (la surface est vue de biais) qui s'élargissent depuis l'eau sous la carte
+		local rings = {}
+		for i = 1, 5 do
+			local f = mk("Frame", { AnchorPoint = CENTER, Position = UDim2.fromScale(0.5, 0.72), Size = UDim2.fromOffset(0, 0),
+				BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 3 }, scene)
+			round(f)
+			rings[i] = { f = f, st = mk("UIStroke", { Color = WHITE, Thickness = 2, Transparency = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, f),
+				off = (i - 1) * 0.58 }
+		end
+
+		-- ---- scintillements (petits losanges blancs qui clignotent vite, comme le soleil sur l'eau)
+		local glints = {}
+		for i = 1, 34 do
+			local g = { x = rng:NextNumber(), y = 0.42 + rng:NextNumber() * 0.56, ph = rng:NextNumber() * 6.28, sp = 0.9 + rng:NextNumber() * 1.8,
+				sz = 3 + rng:NextNumber() * 5 }
+			g.f = mk("Frame", { AnchorPoint = CENTER, Rotation = 45, BorderSizePixel = 0, BackgroundColor3 = WHITE, ZIndex = 4,
+				Size = UDim2.fromOffset(g.sz, g.sz), BackgroundTransparency = 1 }, scene)
+			glints[i] = g
+		end
+
+		-- ---- bulles qui montent
+		local bubbles = {}
+		for i = 1, 16 do
+			local b = { x = rng:NextNumber(), off = rng:NextNumber(), spd = 0.05 + rng:NextNumber() * 0.07, sz = 6 + rng:NextNumber() * 16,
+				sway = 0.008 + rng:NextNumber() * 0.02, ph = rng:NextNumber() * 6.28 }
+			b.f = mk("Frame", { AnchorPoint = CENTER, Size = UDim2.fromOffset(b.sz, b.sz), BackgroundColor3 = WHITE, BackgroundTransparency = 1,
+				BorderSizePixel = 0, ZIndex = 5 }, scene)
+			round(b.f)
+			b.st = mk("UIStroke", { Color = WHITE, Thickness = 1.2, Transparency = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, b.f)
+			bubbles[i] = b
+		end
+
+		-- ---- carte de verre : fond translucide, bord lumineux (dégradé comme le style Verre), reflet fixe + reflet qui balaie
+		local card = mk("Frame", { AnchorPoint = CENTER, Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(300, 170),
+			BackgroundColor3 = Color3.fromRGB(232, 247, 255), BackgroundTransparency = 0.78, BorderSizePixel = 0, ZIndex = 8 }, scene)
+		local cscale = mk("UIScale", { Scale = 1 }, card)
+		round(card, UDim.new(0, 26))
+		local cst = mk("UIStroke", { Color = WHITE, Thickness = 1.5, Transparency = 0.05, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, card)
+		mk("UIGradient", { Rotation = 40, Transparency = SEQ({ KP(0, 0), KP(0.45, 0.5), KP(1, 0.82) }) }, cst)
+
+		local clip = mk("CanvasGroup", { Size = FULL, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 1 }, card)
+		round(clip, UDim.new(0, 26))
+		local sheen = mk("Frame", { Size = UDim2.fromScale(1, 0.55), BackgroundColor3 = WHITE, BackgroundTransparency = 0.8, BorderSizePixel = 0, ZIndex = 1 }, clip)
+		mk("UIGradient", { Rotation = 90, Transparency = SEQ({ KP(0, 0), KP(0.35, 0.45), KP(1, 1) }) }, sheen)
+		local sweep = mk("Frame", { AnchorPoint = CENTER, Size = UDim2.new(0, 70, 1.9, 0), Rotation = 20, BackgroundColor3 = WHITE,
+			BackgroundTransparency = 0.62, BorderSizePixel = 0, ZIndex = 2, Position = UDim2.fromScale(-1, 0.5) }, clip)
+		mk("UIGradient", { Transparency = SEQ({ KP(0, 1), KP(0.5, 0), KP(1, 1) }) }, sweep)
+
+		-- anneau : un arc effilé qui tourne (le dégradé du trait tourne, la zone visible suit)
+		local ringBox = mk("Frame", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 24), Size = UDim2.fromOffset(78, 78),
+			BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 3 }, card)
+		local track = mk("Frame", { Size = FULL, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 1 }, ringBox)
+		round(track)
+		mk("UIStroke", { Color = WHITE, Thickness = 5, Transparency = 0.84, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, track)
+		local arc = mk("Frame", { Size = FULL, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 2 }, ringBox)
+		round(arc)
+		local arcSt = mk("UIStroke", { Color = WHITE, Thickness = 5, Transparency = 0, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, arc)
+		local arcGrad = mk("UIGradient", { Transparency = SEQ({ KP(0, 0), KP(0.35, 0.1), KP(0.58, 1), KP(1, 1) }),
+			Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(120, 215, 255)) }, arcSt)
+		-- goutte au centre (respire)
+		local core = mk("Frame", { AnchorPoint = CENTER, Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(16, 16),
+			BackgroundColor3 = Color3.fromRGB(235, 250, 255), BackgroundTransparency = 0.15, BorderSizePixel = 0, ZIndex = 3 }, ringBox)
+		round(core)
+		local coreSt = mk("UIStroke", { Color = WHITE, Thickness = 6, Transparency = 0.75, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, core)
+
+		-- barre de progression en verre, avec une petite goutte lumineuse au bout
+		local barBox = mk("Frame", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -24), Size = UDim2.fromOffset(210, 6),
+			BackgroundColor3 = WHITE, BackgroundTransparency = 0.8, BorderSizePixel = 0, ZIndex = 3 }, card)
+		round(barBox)
+		local fill = mk("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = WHITE, BorderSizePixel = 0, ZIndex = 4 }, barBox)
+		round(fill)
+		mk("UIGradient", { Color = ColorSequence.new(Color3.fromRGB(110, 214, 255), Color3.fromRGB(255, 255, 255)) }, fill)
+		local head = mk("Frame", { AnchorPoint = CENTER, Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(14, 14),
+			BackgroundColor3 = WHITE, BackgroundTransparency = 0.5, BorderSizePixel = 0, ZIndex = 5, Visible = false }, barBox)
+		round(head)
+
+		-- ------------------------------------------------------------------------------------------------------------
+		local sin, cos, max, min = math.sin, math.cos, math.max, math.min
+
+		function W.fade(a)
+			W.fadeA = a
+			scene.GroupTransparency = 1 - a * (1 - W.outroA)
+			if W.blur then W.blur.Size = 22 * a * (1 - W.outroA) end
+		end
+		function W.outro(a)   -- a : 0..1, la vitre se dissout et la fenêtre apparaît derrière
+			W.outroA = a * a * (3 - 2 * a)
+			W.fade(W.fadeA)
+		end
+
+		function W.update(now)
+			local t = now - W.t0
+			local dt = min(max(now - W.last, 0), 0.1)
+			W.last = now
+			local ab = parent.AbsoluteSize
+			if ab.X < 2 or ab.Y < 2 then return end
+			local k = math.clamp(min(ab.X / 1000, ab.Y / 640), 0.55, 1.5)
+
+			-- progression : glisse vers l'objectif (W.goal)
+			local d = W.goal - W.bar
+			local step = d * min(dt * 3.2, 1)
+			if d > 0 then step = max(step, min(d, dt * 0.25)) end
+			W.bar = math.clamp(W.bar + step, 0, 1)
+			fill.Size = UDim2.fromScale(W.bar, 1)
+			head.Visible = W.bar > 0.02
+			head.Position = UDim2.new(W.bar, 0, 0.5, 0)
+			head.BackgroundTransparency = 0.45 + 0.2 * sin(t * 5)
+
+			-- carte : taille adaptée à l'écran, petit « gonflement » à la dissolution
+			cscale.Scale = math.clamp(min(ab.X / 700, ab.Y / 420), 0.6, 1.25) * (1 + 0.12 * W.outroA)
+			card.Position = UDim2.new(0.5, 0, 0.5, sin(t * 1.1) * 3)   -- elle flotte un peu, comme sur l'eau
+
+			-- anneau, goutte, reflet qui balaie la vitre
+			arcGrad.Rotation = (t * 300) % 360
+			local br = sin(t * 2.4)
+			core.Size = UDim2.fromOffset(15 + br * 3, 15 + br * 3)
+			coreSt.Transparency = 0.78 - br * 0.1
+			local p = (t % 3.2) / 1.5
+			sweep.Position = UDim2.fromScale(p <= 1 and (-0.25 + 1.5 * p) or -1, 0.5)
+
+			-- nappes de lumière (shader)
+			for _, b in ipairs(bands) do
+				b.g.Offset = Vector2.new(((t * b.sp) % 1) * 2 - 1, 0)
+			end
+
+			-- caustiques
+			for _, s in ipairs(streaks) do
+				local sc = 0.35 + 0.65 * s.d
+				s.f.Position = UDim2.fromScale(s.x + sin(t * s.sp + s.ph) * 0.035, s.y + sin(t * s.sp * 0.7 + s.ph * 1.3) * 0.012)
+				s.f.Size = UDim2.fromOffset(s.w * sc * k * (1 + 0.22 * sin(t * 0.8 + s.ph * 2)), s.h * sc * k)
+				s.f.Rotation = s.rot + sin(t * 0.35 + s.ph) * 5
+				s.f.BackgroundTransparency = 0.86 + 0.08 * sin(t * 1.1 + s.ph * 3)
+			end
+
+			-- colonne de lumière
+			pillar.Size = UDim2.new(0, (110 + 14 * sin(t * 0.9)) * k, 0.5, 0)
+			pillar.BackgroundTransparency = 0.3 + 0.08 * sin(t * 1.3)
+
+			-- reflets sous la carte
+			for _, r in ipairs(dashes) do
+				r.f.Position = UDim2.fromScale(0.5 + sin(t * r.sp + r.ph) * 0.02, r.y)
+				r.f.Size = UDim2.fromOffset(r.w * k * (1 + 0.2 * sin(t * r.sp * 1.7 + r.ph)), 3)
+				r.f.BackgroundTransparency = 0.45 + 0.3 * (0.5 + 0.5 * sin(t * r.sp * 1.3 + r.ph * 2))
+			end
+
+			-- ondes
+			for _, r in ipairs(rings) do
+				local a = ((t - r.off) % 2.9) / 2.9
+				local w = a * 1100 * k
+				r.f.Size = UDim2.fromOffset(w, w * 0.34)
+				r.st.Transparency = 0.5 + 0.5 * a
+				r.st.Thickness = 0.6 + 2.2 * (1 - a)
+			end
+
+			-- scintillements
+			for _, g in ipairs(glints) do
+				g.f.Position = UDim2.fromScale(g.x + sin(t * 0.3 + g.ph) * 0.01, g.y)
+				local v = max(0, sin(t * g.sp + g.ph)) ^ 8
+				g.f.BackgroundTransparency = 1 - v * 0.95
+				local sz = g.sz * k * (0.6 + 0.8 * v)
+				g.f.Size = UDim2.fromOffset(sz, sz)
+			end
+
+			-- bulles
+			for _, b in ipairs(bubbles) do
+				local q = (t * b.spd + b.off) % 1
+				b.f.Position = UDim2.fromScale(b.x + sin(t * 1.3 + b.ph) * b.sway, 1.05 - q * 0.7)
+				local v = min(q * 6, 1) * min((1 - q) * 5, 1)
+				b.f.BackgroundTransparency = 1 - 0.12 * v
+				b.st.Transparency = 1 - 0.55 * v
+			end
+		end
+
+		function W.destroy()
+			pcall(function() if W.blur then W.blur:Destroy() W.blur = nil end end)
+			pcall(function() scene:Destroy() end)
+		end
+
+		return W
+	end
+	Library._buildWaterLoader = buildWater
+
+	-- aperçu du loader (réglages) : le même décor pendant quelques secondes, avec une fausse progression
+	function Library:PreviewLoader(seconds)
+		seconds = math.clamp(tonumber(seconds) or 4.5, 2, 15)
+		if Library._loaderPreview or Library.IntroActive then return end
+		local g = Instance.new("ScreenGui")
+		g.Name = "SolarisLoaderPreview"
+		g.ResetOnSpawn = false
+		g.DisplayOrder = 2000
+		g.IgnoreGuiInset = true
+		g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		pcall(function()
+			if syn and syn.protect_gui then syn.protect_gui(g) elseif protectgui then protectgui(g) end
+		end)
+		local okm = pcall(function() g.Parent = CoreGui end)
+		if not okm or not g.Parent then g.Parent = LP:WaitForChild("PlayerGui") end
+		local root = Instance.new("TextButton")
+		root.Size = UDim2.fromScale(1, 1)
+		root.BackgroundTransparency = 1
+		root.Text = ""
+		root.AutoButtonColor = false
+		root.Active = true
+		root.Parent = g
+		local okw, W = pcall(buildWater, g, root)
+		if not okw or not W then
+			warn("[Ui-Lib] loader : " .. tostring(W))
+			g:Destroy()
+			return
+		end
+		Library._loaderPreview = true
+		local t0, skip, hb = os.clock(), false, nil
+		root.MouseButton1Click:Connect(function() skip = true end)
+		hb = RunService.Heartbeat:Connect(function()
+			local now = os.clock()
+			local el = now - t0
+			if skip then el = math.max(el, seconds) end
+			pcall(function()
+				W.update(now)
+				W.goal = math.clamp(el / math.max(seconds - 0.8, 0.5), 0, 1)
+				if el < seconds then
+					W.fade(1 - (1 - math.min(el / 0.6, 1)) ^ 3)
+				else
+					W.outro(math.clamp((el - seconds) / 0.6, 0, 1))
+				end
+			end)
+			if el >= seconds + 0.7 then
+				hb:Disconnect()
+				Library._loaderPreview = false
+				pcall(W.destroy)
+				pcall(function() g:Destroy() end)
+			end
+		end)
+	end
 
 	if Library.IntroEnabled then
 		local gui
@@ -674,6 +1007,13 @@ do
 			local root = mk("TextButton", { Name = "Root", Size = UDim2.fromScale(1, 1), BackgroundColor3 = BLACK,
 				BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, Active = true }, gui)
 
+			-- loader « Eau » (visuel uniquement) : remplace les phrases
+			local water
+			if string.lower(tostring(Library.IntroStyle)) ~= "messages" then
+				local okw, w = pcall(buildWater, gui, root)
+				if okw then water = w else warn("[Ui-Lib] loader : " .. tostring(w)) end
+			end
+
 			-- phrases à écrire
 			local msgs = {}
 			do
@@ -683,7 +1023,7 @@ do
 					for _, s in ipairs(src) do msgs[#msgs + 1] = tostring(s) end
 				end
 			end
-			local msgOn = #msgs > 0 and Library.IntroHi ~= false and genv.UiLibIntroHi ~= false
+			local msgOn = (not water) and #msgs > 0 and Library.IntroHi ~= false and genv.UiLibIntroHi ~= false
 
 			-- calendrier d'écriture de chaque phrase : instant d'apparition de chaque lettre (pause sur la ponctuation)
 			local sched = {}
@@ -751,7 +1091,7 @@ do
 				coreBackup = nil
 				for ty, v in pairs(b) do pcall(StarterGui.SetCoreGuiEnabled, StarterGui, ty, v) end
 			end
-			if msgOn then hideCore() end
+			if msgOn or water then hideCore() end
 
 			-- état
 			local I = { hold = false, force = false }
@@ -795,6 +1135,7 @@ do
 
 			function I.destroy()
 				if hb then hb:Disconnect() hb = nil end
+				if water then pcall(water.destroy) end
 				restoreCore()
 				state = "dead"
 				Library.IntroActive = false
@@ -830,10 +1171,16 @@ do
 				local now = os.clock()
 				local ab = root.AbsoluteSize
 				label.TextSize = math.clamp(math.floor(ab.X / 20), 26, 52)
+				if water then water.update(now) end
 
 				if state == "outro" then
 					local u = now - outroT0
 					root.Active = u < 0.3
+					if water then   -- la vitre se dissout sur la fenêtre déjà ouverte
+						water.outro(math.clamp(u / 0.6, 0, 1))
+						if u >= 0.7 then I.destroy() end
+						return
+					end
 					root.BackgroundTransparency = ease3(math.clamp(u / 0.5, 0, 1))
 					if u >= 0.65 then I.destroy() end
 					return
@@ -841,7 +1188,11 @@ do
 
 				-- fondu d'entrée vers le noir
 				local ft = now - t0
-				root.BackgroundTransparency = 1 - ease3(math.min(ft / 0.35, 1))
+				if water then
+					water.fade(ease3(math.min(ft / 0.6, 1)))
+				else
+					root.BackgroundTransparency = 1 - ease3(math.min(ft / 0.35, 1))
+				end
 				root.Active = true
 
 				-- clic pour passer (dès que la fenêtre existe)
@@ -909,7 +1260,11 @@ do
 					end
 
 				else -- "wait" : aucune phrase à écrire, on attend simplement la fin du chargement
-					if ft >= 0.5 and loadingReady(now) then startOutro(now) end
+					if water then
+						local ready = ft >= (Library.LoaderMinTime or 1.9) and loadingReady(now)
+						water.goal = ready and 1 or 0.92 * (1 - math.exp(-ft / 2.2))   -- la barre monte vers ~92 % puis finit quand tout est prêt
+						if ready and water.bar >= 0.995 then startOutro(now) end
+					elseif ft >= 0.5 and loadingReady(now) then startOutro(now) end
 				end
 			end
 
@@ -20305,6 +20660,11 @@ function Window:CreateSettingsTab(name, icon, docked)
 	B:CreateToggle({ Name = "Intro de chargement", Flag = "ui.intro", Default = Library.IntroEnabled ~= false,
 		Tooltip = "Petite animation « trou noir » pendant que l'interface se charge (au prochain lancement).",
 		Callback = function(v) Library:SetIntroEnabled(v) end })
+	B:CreateDropdown({ Name = "Style de l'intro", Flag = "ui.introstyle", Items = { "Eau", "Messages" }, Search = false, Favorite = false,
+		Default = Library.IntroStyle or "Eau",
+		Tooltip = "Eau : loader visuel en verre et eau, sans texte. Messages : l'ancienne intro avec les phrases (au prochain lancement).",
+		Callback = function(v) Library:SetIntroStyle(v) end })
+	B:CreateButton({ Name = "Prévisualiser le loader", Favorite = false, Callback = function() Library:PreviewLoader(4.5) end })
 	B:CreateToggle({ Name = "Son « Hi. »", Flag = "ui.hisound", Default = Library.HiSound ~= false,
 		Tooltip = "Le son du « Hi. » : au début de l'intro, et quand l'avatar de Home te salue.",
 		Callback = function(v) Library.HiSound = v and true or false end })
