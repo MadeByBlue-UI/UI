@@ -7,6 +7,11 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.16 — APERÇU DE L'AVATAR (Home) SIMPLIFIÉ
+		• Home > Mon personnage : nouvel aperçu Block:CreateAvatarWave — ton avatar de face qui fait coucou en boucle, et c'est tout.
+		  Plus de ragdoll, de zoom, de rotation à la souris, d'emotes, d'étincelles, de boutons, ni de saut / animation de bienvenue :
+		  spammer l'onglet Home ne fait plus rebondir l'avatar. CreatePreview3D (utilisé par l'aperçu ESP) est inchangé.
+
 	V9.14 — CURSEUR REFAIT AU PROPRE (pointeur + curseur libre + curseur dessiné + réglages)
 		• Le calcul de la position du pointeur est réécrit : une seule règle (position brute + décalage mesuré − réglage manuel), un seul état par
 		  périphérique (souris / doigt), une seule fonction de mesure (Library._ptrProbe, appelée sur les clics et les survols). Plus de doublons,
@@ -15225,6 +15230,237 @@ function Block:CreatePreview3D(o)
 	end
 	return item
 end
+-- ===================================================================================================================
+-- V9.16 : APERÇU DE TON AVATAR (Home > Mon personnage), VERSION SIMPLE
+--   Block:CreateAvatarWave({ Height = 260 })
+--   Ton avatar Roblox de face, qui fait coucou en boucle. C'est tout : pas de ragdoll, pas de zoom, pas de rotation à la souris,
+--   pas d'emotes, pas d'étincelles, pas de saut ni d'animation de bienvenue (revenir sur Home ne fait donc plus rien bouger).
+--   pv:Refresh() recharge l'avatar · pv:GetModel() · pv.Viewport / pv.Camera / pv.Instance
+--   (Welcome / Jump existent encore mais ne font rien, pour ne pas casser d'anciens scripts.)
+--   L'ancien CreatePreview3D reste intact : l'aperçu ESP (CreateESPPreview) s'en sert toujours.
+-- ===================================================================================================================
+function Block:CreateAvatarWave(o)
+	if type(o) ~= "table" then o = {} end
+	local h = math.clamp(tonumber(o.Height) or 260, 120, 520)
+	local f = makeRow(self, h + 12, "Mon personnage")
+
+	-- fond dégradé DERRIÈRE le ViewportFrame (qui reste transparent)
+	local bg = new("Frame", { Position = UDim2.new(0, 8, 0, 6), Size = UDim2.new(1, -16, 0, h),
+		BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, f)
+	corner(bg, 6)
+	new("UIGradient", { Rotation = 90, Color = ColorSequence.new(Color3.fromRGB(52, 52, 60), Color3.fromRGB(13, 13, 17)) }, bg)
+
+	local vp = new("ViewportFrame", { Position = UDim2.new(0, 8, 0, 6), Size = UDim2.new(1, -16, 0, h),
+		BackgroundTransparency = 1, BorderSizePixel = 0, Ambient = Color3.fromRGB(170, 170, 176), LightColor = Color3.new(1, 1, 1),
+		LightDirection = Vector3.new(-0.6, -1, -0.5), ClipsDescendants = true }, f)
+	corner(vp, 6)
+
+	local loadLbl = new("TextLabel", { BackgroundTransparency = 1, Font = F_MED, TextSize = 12, Text = "Chargement de ton avatar…",
+		TextColor3 = Color3.fromRGB(220, 220, 226), Size = UDim2.new(1, 0, 1, 0), ZIndex = 5 }, vp)
+
+	local cam = Instance.new("Camera")
+	cam.FieldOfView = 40
+	cam.Parent = vp
+	vp.CurrentCamera = cam
+	local world = Instance.new("WorldModel")   -- nécessaire pour que les articulations (Motor6D) s'actualisent dans un ViewportFrame
+	world.Name = "AvatarWorld"
+	world.Parent = vp
+
+	local rig, joints, bsize = nil, {}, Vector3.new(4, 5, 1)
+	local tpl, busy = nil, false
+
+	-- avatar du COMPTE (R6 par défaut), récupéré par UserId avec reprises
+	local function fetch()
+		if tpl then return tpl end
+		local want = string.upper(tostring(o.RigType or Library.PreviewRigType or "R6"))
+		local rigType = (want == "R15") and Enum.HumanoidRigType.R15 or Enum.HumanoidRigType.R6
+		local function viaDescription()
+			return Players:CreateHumanoidModelFromDescription(Players:GetHumanoidDescriptionFromUserId(LP.UserId), rigType)
+		end
+		local function viaApplied()
+			local ch = LP.Character
+			local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+			return Players:CreateHumanoidModelFromDescription(hum:GetAppliedDescription(), rigType)
+		end
+		local function viaUserId() return Players:CreateHumanoidModelFromUserId(LP.UserId) end
+		local m
+		for attempt = 1, 3 do
+			for _, fn in ipairs({ viaDescription, viaApplied, viaUserId }) do
+				local ok, res = pcall(fn)
+				if ok and typeof(res) == "Instance" and res:IsA("Model") then m = res break end
+			end
+			if m then break end
+			task.wait(0.4 * attempt)
+		end
+		if not m then return nil end
+		for _, d in ipairs(m:GetDescendants()) do
+			if d:IsA("LuaSourceContainer") then d:Destroy() end
+		end
+		m.Name = "PreviewAvatar"
+		tpl = m
+		return m
+	end
+
+	local function build(src)
+		local okc, clone = pcall(function() return src:Clone() end)
+		if not okc or typeof(clone) ~= "Instance" then return false end
+		local root = clone:FindFirstChild("HumanoidRootPart")
+		if not root or not root:IsA("BasePart") then clone:Destroy() return false end
+		for _, d in ipairs(clone:GetDescendants()) do
+			if d:IsA("LuaSourceContainer") or d:IsA("Sound") or d:IsA("BillboardGui") or d:IsA("ForceField") then
+				d:Destroy()
+			elseif d:IsA("BasePart") then
+				d.CanCollide, d.CanQuery, d.CanTouch = false, false, false
+			end
+		end
+		local hum = clone:FindFirstChildOfClass("Humanoid")
+		if hum then
+			pcall(function() hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None end)
+			pcall(function() hum.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff end)
+			pcall(function() hum.EvaluateStateMachine = false end)
+		end
+		root.Anchored = true   -- seule la racine est ancrée : les membres suivent les articulations
+		if not clone.PrimaryPart then clone.PrimaryPart = root end
+
+		if rig then rig:Destroy() end
+		rig = clone
+		rig.Name = "Character"
+		rig.Parent = world
+		rig:PivotTo(CFrame.new(0, 0, 0))   -- le personnage regarde vers -Z
+
+		-- cadrage : on centre sur le CORPS seul (un accessoire démesuré ne doit pas dézoomer l'aperçu)
+		local mn, mx
+		for _, p in ipairs(rig:GetChildren()) do
+			if p:IsA("BasePart") and p ~= root and p.Transparency < 0.99 then
+				local cf, sz = p.CFrame, p.Size
+				for _, x in ipairs({ -0.5, 0.5 }) do
+					for _, y in ipairs({ -0.5, 0.5 }) do
+						for _, z in ipairs({ -0.5, 0.5 }) do
+							local c = cf:PointToWorldSpace(Vector3.new(x * sz.X, y * sz.Y, z * sz.Z))
+							mn = mn and mn:Min(c) or c
+							mx = mx and mx:Max(c) or c
+						end
+					end
+				end
+			end
+		end
+		if not mn then
+			local bcf, bsz = rig:GetBoundingBox()
+			mn, mx = bcf.Position - bsz / 2, bcf.Position + bsz / 2
+		end
+		rig:PivotTo(rig:GetPivot() - (mn + mx) / 2)
+		local size = mx - mn
+		bsize = Vector3.new(math.clamp(size.X, 1, 9), math.clamp(size.Y, 2, 9), math.clamp(size.Z, 1, 6))
+
+		joints = {}
+		for _, d in ipairs(rig:GetDescendants()) do
+			if d:IsA("Motor6D") then joints[d.Name] = d end
+		end
+		return true
+	end
+
+	local function refresh(force)
+		if force and tpl then
+			tpl:Destroy()
+			tpl = nil
+		end
+		if tpl and build(tpl) then
+			loadLbl.Visible = false
+			return true
+		end
+		if busy then return false end
+		busy = true
+		loadLbl.Text = "Chargement de ton avatar…"
+		loadLbl.Visible = rig == nil
+		task.spawn(function()
+			local m = fetch()
+			busy = false
+			if not vp.Parent then return end
+			if m and build(m) then
+				loadLbl.Visible = false
+				return
+			end
+			-- repli : ton personnage en jeu
+			local ch = LP.Character
+			local okc, c = pcall(function()
+				local was = ch.Archivable
+				ch.Archivable = true
+				local x = ch:Clone()
+				ch.Archivable = was
+				return x
+			end)
+			if okc and typeof(c) == "Instance" then
+				tpl = c
+				if build(c) then
+					loadLbl.Visible = false
+					return
+				end
+			end
+			if not rig then
+				loadLbl.Text = "Avatar indisponible"
+				loadLbl.Visible = true
+			end
+		end)
+		return false
+	end
+
+	-- coucou en boucle (poses faites à la main : les animations Roblox ne tournent pas dans un ViewportFrame)
+	local A = CFrame.Angles
+	local function pose(t)
+		for _, j in pairs(joints) do j.Transform = CFrame.identity end
+		if joints["Right Shoulder"] then   -- R6
+			local function rot(n, R)
+				local j = joints[n]
+				if j then
+					local c0 = j.C0 - j.C0.Position
+					j.Transform = c0:Inverse() * R * c0
+				end
+			end
+			local rs, ls = Library._baseArms(t, 1, 0, true)   -- bras droit levé qui ondule, bras gauche le long du corps
+			rot("RootJoint", A(math.sin(t * 2) * 0.01, 0, 0))
+			rot("Neck", A(math.sin(t * 2) * 0.04, 0, math.sin(t * 3.5) * 0.04))
+			rot("Right Shoulder", rs)
+			rot("Left Shoulder", ls)
+		else   -- R15
+			local function set(n, cf)
+				local j = joints[n]
+				if j then j.Transform = cf end
+			end
+			set("Waist", A(math.sin(t * 2) * 0.015, 0, 0))
+			set("RightShoulder", A(0, 0, 2.7))
+			set("RightElbow", A(0.3, 0, math.sin(t * 8) * 0.55))
+			set("LeftShoulder", A(0, 0, -0.1 - math.sin(t * 2) * 0.02))
+			set("Neck", A(math.sin(t * 2) * 0.04, 0, math.sin(t * 3.5) * 0.04))
+		end
+	end
+
+	-- l'horloge tourne en continu : quitter puis revenir sur Home ne relance rien, le coucou continue simplement
+	local t0 = os.clock()
+	local conn = Ticker.connect(function()
+		if not rig or not rig.Parent or Library._resizing then return end
+		pose((os.clock() - t0) * math.max(Library.AnimSpeed or 1, 0.05))
+		local s = vp.AbsoluteSize
+		local asp = math.max(s.X, 1) / math.max(s.Y, 1)
+		local tanV = math.tan(math.rad(cam.FieldOfView) / 2)
+		local dist = math.max(bsize.Y * 0.5 / tanV, bsize.X * 0.6 / (tanV * asp)) * 1.3
+		cam.CFrame = CFrame.lookAt(Vector3.new(0, bsize.Y * 0.04, -dist), Vector3.new(0, 0, 0))
+	end, { gate = vp, deco = true })
+	track(conn)
+	f.Destroying:Connect(function() pcall(function() conn:Disconnect() end) end)
+
+	refresh()
+
+	local item = {}
+	item.Instance = f
+	item.Viewport = vp
+	item.Camera = cam
+	item.Refresh = function() return refresh(true) end
+	item.GetModel = function() return rig end
+	item.Welcome = function() end   -- supprimé (compatibilité)
+	item.Jump = function() end      -- supprimé (compatibilité)
+	return item
+end
+
 Block.CreateESPPreview = Block.CreatePreview3D
 
 
@@ -17174,29 +17410,8 @@ function Window:CreateHomeTab(name, icon, cfg)
 	-- ===================== COLONNE GAUCHE =====================
 	-- ----- mon personnage : aperçu 3D + identité
 	local prof = subInfo:CreateBlock({ Name = "Mon personnage", Side = "Left" })
-	local pv = prof:CreatePreview3D({ Name = false, Character = true, Height = 260,
-		Theme = "studio", Toolbar = false, Yaw = 180, Pitch = -0.04, RigType = "R6",
-		Options = { Box = false, Name = false, Health = false, Distance = false, Floor = false, AutoRotate = false, Wave = true, Animate = true, Emotes = Library.HomeEmotes == true } })
-	-- première arrivée : animation de bienvenue (2 sauts, bras levés) ; ensuite un petit saut à chaque retour sur Home > Info.
-	-- Dans les deux cas le coucou continue en boucle (une fois la lib entièrement chargée). Library.HomeWelcome = false : sauts seuls.
-	do
-		local welcomed = false
-		local function greet()
-			if not welcomed and Library.HomeWelcome ~= false then
-				welcomed = true
-				pv.Welcome()
-			else
-				pv.Jump()
-			end
-		end
-		local prevSel = tab.OnSelect
-		tab.OnSelect = function(...)
-			if prevSel then prevSel(...) end
-			if tab.CurrentSub == subInfo or tab.CurrentSub == nil then greet() end
-		end
-		subInfo.OnShow = function() greet() end
-		greet()
-	end
+	-- aperçu simplifié : ton avatar qui fait coucou, rien d'autre (aucun saut, aucune animation au retour sur Home)
+	local pv = prof:CreateAvatarWave({ Height = 260 })
 	prof:CreateButton({ Name = "Actualiser l'aperçu", Favorite = false, Callback = function() pv:Refresh() end })
 	prof:CreateStats({ Columns = 2, CellHeight = 46, Items = {
 		{ Id = "name", Name = "Pseudo", Value = (lp.DisplayName ~= lp.Name) and (lp.DisplayName .. " (@" .. lp.Name .. ")") or lp.Name, Size = 13 },
