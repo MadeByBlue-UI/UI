@@ -13767,8 +13767,8 @@ function Block:CreatePreview3D(o)
 				end
 				if best then
 					ix.hitReady = true
-				elseif not ix.hitReady then
-					-- repli : les cadres n'ont jamais rien reçu (exécuteur étrange) -> ancien calcul par coordonnées
+				else
+					-- repli : aucun cadre n'a répondu (exécuteur étrange, zones décalées) -> calcul par coordonnées
 					local po = Library.PreviewPickOffset
 					best = ix.pick(ix.p0.X, ix.p0.Y - ((typeof(po) == "Vector2") and po.Y or 0))
 				end
@@ -14034,6 +14034,7 @@ function Block:CreatePreview3D(o)
 			RG.sim, RG.acc, RG.rigFor = sim, 0, rig
 			return true
 		end
+		function ix.isDown() return RG.sim ~= nil and RG.sim.state ~= "getup" end
 		function ix.getUp()
 			if RG.sim and RG.sim.state ~= "getup" then RG.sim.state, RG.sim.g = "getup", 0 end
 		end
@@ -20179,50 +20180,54 @@ function Window:CreateSettingsTab(name, icon, docked)
 		local MODE_NAMES = { native = "Curseur Roblox", force = "Curseur Roblox forcé" }
 		local MODE_KEYS = { ["Curseur Roblox"] = "native", ["Curseur Roblox forcé"] = "force" }
 		local function co(n) return function(v) Library:SetCursorOption(n, v) end end
+		local function setItem(flag, v)
+			local it = Library.Items[flag]
+			if it and it.Set then pcall(it.Set, it, v) end
+		end
 
-		local CA = BK("Curseur", { Name = "Affichage", Side = "Left" })
+		-- ── Colonne gauche : mode + test ──
+		local CA = BK("Curseur", { Name = "Mode", Side = "Left" })
 		CA:CreateDropdown({ Name = "Mode", Flag = "ui.cursor.mode", Search = false, Favorite = false,
 			Items = { "Curseur Roblox", "Curseur Roblox forcé" },
 			Default = MODE_NAMES[Library.CursorStyle or "native"] or MODE_NAMES.native,
-			Tooltip = "Curseur Roblox : le curseur normal de Roblox, rendu libre tant que l'interface est ouverte. Curseur Roblox forcé : en plus, le curseur est réaffiché en permanence même si le jeu le cache (icône désactivée, image transparente, souris verrouillée) ; tout est rendu au jeu à la fermeture.",
+			Tooltip = "Curseur Roblox : le curseur normal, libre tant que l'interface est ouverte. Curseur Roblox forcé : il est réaffiché en permanence même si le jeu le cache.",
 			Callback = function(v) Library:SetCursorStyle(MODE_KEYS[v] or "native") end })
-		CA:CreateDropdown({ Name = "Forme", Flag = "ui.cursor.shape", Search = false, Favorite = false,
-			Items = { "Point", "Flèche Roblox", "Cercle", "Carré", "Croix" }, Default = Library.CursorCfg.Shape,
-			Callback = co("Shape") })
-		CA:CreateSlider({ Name = "Taille", Flag = "ui.cursor.size", Min = 6, Max = 48, Step = 1, Suffix = " px",
-			Default = Library.CursorCfg.Size, Favorite = false, Callback = co("Size") })
-		CA:CreateSlider({ Name = "Opacité", Flag = "ui.cursor.opacity", Min = 20, Max = 100, Step = 5, Suffix = "%",
-			Default = math.floor(Library.CursorCfg.Opacity * 100 + 0.5), Favorite = false,
-			Callback = function(v) Library:SetCursorOption("Opacity", v / 100) end })
-		CA:CreateToggle({ Name = "Rétrécir au clic", Flag = "ui.cursor.shrink", Default = Library.CursorCfg.ClickShrink,
-			Favorite = false, Tooltip = "Le curseur se réduit légèrement tant que le clic gauche est enfoncé.",
-			Callback = co("ClickShrink") })
+		CA:CreateParagraph({ Title = "Curseur Roblox forcé",
+			Content = "Réactive l'icône de la souris, retire l'image de curseur du jeu et garde la souris libre, même si le jeu les change en cours de route. Tout est rendu au jeu à la fermeture de l'interface." })
 
-		local CC = BK("Curseur", { Name = "Couleurs", Side = "Right" })
-		CC:CreateToggle({ Name = "Suivre la couleur d'accent", Flag = "ui.cursor.accent", Default = Library.CursorCfg.UseAccent,
-			Favorite = false, Tooltip = "Le curseur prend la couleur d'accent du thème (et la suit quand tu la changes).",
-			Callback = co("UseAccent") })
-		CC:CreateColorPicker({ Name = "Couleur", Flag = "ui.cursor.color", Default = Library.CursorCfg.Color, Opacity = false,
-			Favorite = false, Callback = function(c) Library:SetCursorOption("Color", c) end })
-		CC:CreateColorPicker({ Name = "Contour", Flag = "ui.cursor.outline", Default = Library.CursorCfg.Outline, Opacity = false,
-			Favorite = false, Callback = function(c) Library:SetCursorOption("Outline", c) end })
-		CC:CreateSlider({ Name = "Épaisseur du contour", Flag = "ui.cursor.outsize", Min = 0, Max = 4, Step = 0.5, Suffix = " px",
-			Default = Library.CursorCfg.OutlineSize, Favorite = false, Callback = co("OutlineSize") })
+		local CP = BK("Curseur", { Name = "Test", Side = "Left" })
+		CP:CreateButton({ Name = "Aperçu du curseur dessiné (6 s)", Favorite = false,
+			Tooltip = "Dessine pendant 6 secondes un curseur avec les réglages du bloc « Curseur dessiné » : bouge la souris dans la fenêtre.",
+			Callback = function() Library:PreviewCursor(6) end })
+		CP:CreateButton({ Name = "Réinitialiser le curseur", Favorite = false, Confirm = true,
+			Tooltip = "Remet mode, forme, taille, couleurs, contour et opacité par défaut.",
+			Callback = function()
+				setItem("ui.cursor.mode", MODE_NAMES.native)
+				setItem("ui.cursor.shape", CD.Shape)
+				setItem("ui.cursor.size", CD.Size)
+				setItem("ui.cursor.opacity", math.floor(CD.Opacity * 100 + 0.5))
+				setItem("ui.cursor.shrink", CD.ClickShrink)
+				setItem("ui.cursor.accent", CD.UseAccent)
+				setItem("ui.cursor.color", CD.Color)
+				setItem("ui.cursor.outline", CD.Outline)
+				setItem("ui.cursor.outsize", CD.OutlineSize)
+				Library:Notify({ Title = "Curseur", Content = "Réglages du curseur réinitialisés", Type = "Success", Duration = 3 })
+			end })
 
-		-- Position : où l'UI croit que se trouve le pointeur (voir POINTEUR). Normalement tout est mesuré tout seul.
+		-- ── Colonne droite : position ──
 		local CO = BK("Curseur", { Name = "Position", Side = "Right" })
 		CO:CreateSlider({ Name = "Décalage vertical", Flag = "ui.ptroffset", Min = -80, Max = 80, Default = 0, Step = 1, Suffix = " px",
 			Favorite = false,
-			Tooltip = "Le décalage est mesuré automatiquement en direct. À régler seulement si, malgré ça, la poignée ou le curseur n'est pas pile sous ta souris : positif = il monte, négatif = il descend. Laisse 0 sinon.",
+			Tooltip = "Le décalage est mesuré automatiquement en direct. À régler seulement si, malgré ça, la poignée n'est pas pile sous ta souris : positif = elle monte, négatif = elle descend. Laisse 0 sinon.",
 			Callback = function(v) Library.PointerOffset = Vector2.new(0, tonumber(v) or 0) end })
 		CO:CreateButton({ Name = "Recalibrer le curseur", Favorite = false,
-			Tooltip = "Calibrage guidé : trois clics sur une barre blanche très fine. Le décalage est mesuré à quelques pixels près puis gardé ; plus rien ne le modifie sauf un clic qui le contredit nettement.",
+			Tooltip = "Calibrage guidé : trois clics sur une barre blanche très fine. Le décalage est mesuré puis gardé.",
 			Callback = function()
 				Library:ResetPointerCalibration()
 				Library:CalibratePointer()
 			end })
 		CO:CreateButton({ Name = "Copier le journal du curseur", Favorite = false,
-			Tooltip = "Copie la liste des derniers changements de la correction du curseur (qui l'a modifiée, de combien). Utile si le curseur se décale encore.",
+			Tooltip = "Copie la liste des derniers changements de la correction du curseur. Utile si le curseur se décale encore.",
 			Callback = function()
 				local t = Library:GetPointerLog()
 				local ok = pcall(function() setclipboard(t) end)
@@ -20230,28 +20235,26 @@ function Window:CreateSettingsTab(name, icon, docked)
 				Library:Notify({ Title = "Curseur", Content = ok and "Journal copié (et affiché dans la console)." or "Journal affiché dans la console (pas de presse-papiers).", Duration = 4, Type = "Info" })
 			end })
 
-		local CP = BK("Curseur", { Name = "Aperçu", Side = "Left" })
-		CP:CreateParagraph({ Title = "Voir le résultat",
-			Content = "« Aperçu » dessine un curseur avec tes réglages (forme, taille, couleurs) pendant 6 secondes : bouge la souris dans la fenêtre pour le voir." })
-		CP:CreateButton({ Name = "Aperçu (6 s)", Favorite = false, Callback = function() Library:PreviewCursor(6) end })
-		CP:CreateButton({ Name = "Réinitialiser le curseur", Favorite = false, Confirm = true,
-			Tooltip = "Remet mode, forme, taille, couleurs, contour et opacité par défaut.",
-			Callback = function()
-				local function set(flag, v)
-					local it = Library.Items[flag]
-					if it and it.Set then pcall(it.Set, it, v) end
-				end
-				set("ui.cursor.mode", MODE_NAMES.native)
-				set("ui.cursor.shape", CD.Shape)
-				set("ui.cursor.size", CD.Size)
-				set("ui.cursor.opacity", math.floor(CD.Opacity * 100 + 0.5))
-				set("ui.cursor.shrink", CD.ClickShrink)
-				set("ui.cursor.accent", CD.UseAccent)
-				set("ui.cursor.color", CD.Color)
-				set("ui.cursor.outline", CD.Outline)
-				set("ui.cursor.outsize", CD.OutlineSize)
-				Library:Notify({ Title = "Curseur", Content = "Réglages du curseur réinitialisés", Type = "Success", Duration = 3 })
-			end })
+		-- ── Curseur dessiné (visible dans l'aperçu) ──
+		local CS = BK("Curseur", { Name = "Curseur dessiné", Side = "Right", Collapsed = true })
+		CS:CreateDropdown({ Name = "Forme", Flag = "ui.cursor.shape", Search = false, Favorite = false,
+			Items = { "Point", "Flèche Roblox", "Cercle", "Carré", "Croix" }, Default = Library.CursorCfg.Shape,
+			Callback = co("Shape") })
+		CS:CreateSlider({ Name = "Taille", Flag = "ui.cursor.size", Min = 6, Max = 48, Step = 1, Suffix = " px",
+			Default = Library.CursorCfg.Size, Favorite = false, Callback = co("Size") })
+		CS:CreateSlider({ Name = "Opacité", Flag = "ui.cursor.opacity", Min = 20, Max = 100, Step = 5, Suffix = "%",
+			Default = math.floor(Library.CursorCfg.Opacity * 100 + 0.5), Favorite = false,
+			Callback = function(v) Library:SetCursorOption("Opacity", v / 100) end })
+		CS:CreateToggle({ Name = "Rétrécir au clic", Flag = "ui.cursor.shrink", Default = Library.CursorCfg.ClickShrink,
+			Favorite = false, Callback = co("ClickShrink") })
+		CS:CreateToggle({ Name = "Suivre la couleur d'accent", Flag = "ui.cursor.accent", Default = Library.CursorCfg.UseAccent,
+			Favorite = false, Callback = co("UseAccent") })
+		CS:CreateColorPicker({ Name = "Couleur", Flag = "ui.cursor.color", Default = Library.CursorCfg.Color, Opacity = false,
+			Favorite = false, Callback = function(c) Library:SetCursorOption("Color", c) end })
+		CS:CreateColorPicker({ Name = "Contour", Flag = "ui.cursor.outline", Default = Library.CursorCfg.Outline, Opacity = false,
+			Favorite = false, Callback = function(c) Library:SetCursorOption("Outline", c) end })
+		CS:CreateSlider({ Name = "Épaisseur du contour", Flag = "ui.cursor.outsize", Min = 0, Max = 4, Step = 0.5, Suffix = " px",
+			Default = Library.CursorCfg.OutlineSize, Favorite = false, Callback = co("OutlineSize") })
 	end
 
 	-- ───────────── HUD des actifs ─────────────
