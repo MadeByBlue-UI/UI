@@ -7,6 +7,19 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.18b — MODE COMPACT : Library:SetCompact(bool) / CreateWindow({ Compact = true }) / Paramètres > Style > « Mode compact » (type Classique).
+
+	V9.18 — RISKY · RAISON DE DÉSACTIVATION · TABBOX · BOÎTE DE DÉPENDANCE · DIALOGUES · WIDGETS FLOTTANTS · WARNING BOX
+		• Tout élément : Risky = true (barre rouge + info-bulle, RiskyText) · DisabledReason = "..." (la raison s'affiche au survol d'une ligne grisée) ·
+		  item.SetEnabled(false, "raison") · item.SetRisky(bool, texte) · item.SetDisabledReason(texte).
+		• blk:CreateTabbox({ Tabs = { "A", "B" } }) : des onglets dans un bloc (tb.A:CreateToggle(...), tb:Select("B")).
+		• blk:CreateDependencyBox({ Depends = toggle }) : groupe d'options visible seulement si la condition est vraie (accepte tout ShowIf).
+		• Library:Dialog({ Title, Content, Buttons = {...} }) / Library:Confirm(titre, texte, oui, non) / Window:AddDialog(...) : popups modaux.
+		• Library:AddDraggableLabel / AddDraggableButton / AddDraggableMenu : widgets flottants déplaçables (option Flag = position sauvegardée).
+		• tab:AddWarningBox({ Title, Text, Type = "Warning" | "Error" | "Info" | "Success", Dismissable }) : bandeau en haut d'un onglet.
+		• CreateButton({ SubButton = { Name = "⚙", Callback = f } }) · CreateButton({ DoubleClick = true }) · blk:CreateVideo({ Video = id }) ·
+		  Library:SetBackgroundImage(id, transparence).
+
 	V9.17 — LOADER « EAU » (visuel uniquement, inspiré du style Verre + d'une surface d'eau)
 		• Nouvelle intro par défaut : horizon brumeux, eau azur avec nappes de lumière animées (faux shader en dégradés), caustiques, reflets
 		  qui scintillent, ondes elliptiques, bulles, colonne de lumière, carte de verre (bord lumineux + reflet qui balaie) avec anneau et barre.
@@ -569,6 +582,7 @@ local Library = {
 	TitleFonts        = { "Michroma", "Gotham Black", "Fredoka", "Oswald", "Bangers", "Jura", "Sci-Fi", "Arcade", "Normale" },
 	TitleShine        = true,
 	LayoutStyle       = "Classique",                 -- type d'interface : "Classique" | "Éclipse" | "Carré"
+	Compact           = false,                       -- mode compact (V9.18) : menu réduit aux icônes (type Classique)
 	LayoutStyleOrder  = { "Classique", "Éclipse", "Carré" },
 	SquareMode        = false,                       -- vrai quand le type « Carré » est appliqué (coins à 0, police monospace)
 	Square            = { Mono = true, TitleOnBorder = true },
@@ -20295,6 +20309,9 @@ function Window:CreateSettingsTab(name, icon, docked)
 			win:SetLayoutStyle(v)
 			if layoutInfo then layoutInfo.Set({ Title = v, Content = Library.LayoutStyleInfo[v] or "" }) end
 		end })
+	ST:CreateToggle({ Name = "Mode compact", Flag = "ui.compact", Default = Library.Compact == true,
+		Tooltip = "Menu réduit à une colonne d'icônes (initiales si l'onglet n'a pas d'icône) : plus de place pour le contenu. Type Classique uniquement.",
+		Callback = function(v) Library:SetCompact(v) end })
 	layoutInfo = ST:CreateParagraph({ Title = Library.LayoutStyle, Content = Library.LayoutStyleInfo[Library.LayoutStyle] or "" })
 	ST:CreateSection("Style de l'interface")
 	local styleInfo
@@ -23121,6 +23138,7 @@ function Library:CreateWindow(cfg)
 	if cfg.Shape then Library.Shape = (cfg.Shape == "Vague") and "Arrondie" or cfg.Shape end
 	if cfg.Style and STYLES[cfg.Style] then Library:SetStyle(cfg.Style) end
 	if cfg.LayoutStyle and Library.LayoutStyleInfo[cfg.LayoutStyle] then Library.LayoutStyle = cfg.LayoutStyle end
+	if cfg.Compact ~= nil then Library.Compact = cfg.Compact == true end
 	if type(cfg.Eclipse) == "table" then
 		for k, v in pairs(cfg.Eclipse) do
 			if Library.Eclipse[k] ~= nil then Library.Eclipse[k] = v end
@@ -24157,8 +24175,58 @@ function Library:CreateWindow(cfg)
 				txt:SetAttribute("BaseX", nil)
 			end
 		end
+		-- MODE COMPACT (V9.18, type Classique) : icône seule au centre ; sans icône, les initiales ; nom au survol
+		do
+			local cp = Library.Compact == true and not on and not sq
+			if txt then
+				local ic = btn:FindFirstChildOfClass("ImageLabel")
+				if ic and ic.Image == "" then ic = nil end
+				if cp then
+					if not tab._cpSaved then
+						tab._cpSaved = { text = txt.Text, pos = txt.Position, size = txt.Size, align = txt.TextXAlignment, icpos = ic and ic.Position }
+					end
+					if ic then
+						txt.Visible = false
+						ic.Position = UDim2.new(0.5, -ic.Size.X.Offset / 2, 0.5, -ic.Size.Y.Offset / 2)
+					else
+						txt.Visible = true
+						local nm = tostring(tab._cpSaved.text)
+						txt.Text = string.upper(string.sub(nm, 1, utf8.offset(nm, 3) and (utf8.offset(nm, 3) - 1) or #nm))
+						txt.Position = UDim2.new(0, 0, 0, 0)
+						txt.Size = UDim2.new(1, 0, 1, 0)
+						txt.TextXAlignment = Enum.TextXAlignment.Center
+						txt:SetAttribute("BaseX", 0)
+					end
+					if not tab._cpTip then   -- le nom de l'onglet s'affiche au survol
+						tab._cpTip = true
+						local tk = 0
+						btn.MouseEnter:Connect(function()
+							tk += 1
+							local my = tk
+							task.delay(0.35, function()
+								if tk == my and Library.Compact == true and Library.LayoutStyle == "Classique" and btn.Parent and Library._tipShow then
+									Library._tipShow(tostring(tab.Name), btn)
+								end
+							end)
+						end)
+						btn.MouseLeave:Connect(function()
+							tk += 1
+							if Library.Compact == true and Library._tipHide then Library._tipHide() end
+						end)
+					end
+				elseif tab._cpSaved then
+					local sv = tab._cpSaved
+					tab._cpSaved = nil
+					txt.Text, txt.Position, txt.Size, txt.TextXAlignment, txt.Visible = sv.text, sv.pos, sv.size, sv.align, true
+					txt:SetAttribute("BaseX", nil)
+					if ic and sv.icpos then ic.Position = sv.icpos end
+				end
+			end
+			if tab._arrow and cp then tab._arrow.Visible = false end
+			tab._cpOn = cp
+		end
 		if tab.Dot then
-			if sq then
+			if sq or tab._cpOn then
 				tab.Dot.AnchorPoint = Vector2.new(1, 0)
 				tab.Dot.Position = UDim2.new(1, -3, 0, 3)
 			else
@@ -24166,7 +24234,7 @@ function Library:CreateWindow(cfg)
 				tab.Dot.Position = UDim2.new(1, -8, 0.5, 0)
 			end
 		end
-		if tab._arrow then tab._arrow.Visible = not sq end
+		if tab._arrow then tab._arrow.Visible = not sq and not tab._cpOn end
 		-- les onglets enfants passent à plat dans la barre du haut, puis reviennent dans leur parent
 		if isChild and orig then
 			if sq then
@@ -24472,19 +24540,22 @@ function Library:CreateWindow(cfg)
 				end))
 			end
 		else
-			SIDE_PAD = 156
+			local cp = Library.Compact == true      -- mode compact : menu réduit à une colonne d'icônes
+			local sbw = cp and 40 or 116
+			SIDE_PAD = cp and 74 or 156
 			ec.collapsedH = 44
-			footer.Position = UDim2.new(0, 10, 1, -48)
-			footer.Size = UDim2.new(0, 116, 0, 34)
-			sidebar.Position = UDim2.new(0, 10, 0, 54)
-			sidebar.Size = UDim2.new(0, 116, 1, -106)
+			footer.Position = UDim2.new(0, cp and 8 or 10, 1, -48)
+			footer.Size = UDim2.new(0, sbw, 0, 34)
+			sidebar.Position = UDim2.new(0, cp and 8 or 10, 0, 54)
+			sidebar.Size = UDim2.new(0, sbw, 1, -106)
+			vline.Position = UDim2.new(0, cp and 54 or 134, 0, 54)
 			ec.sidePad.PaddingLeft, ec.sidePad.PaddingRight, ec.sidePad.PaddingTop = UDim.new(0, 0), UDim.new(0, 0), UDim.new(0, 0)
 			titleBar.Position = UDim2.new(0, 0, 0, 0)
 			titleBar.Size = UDim2.new(1, 0, 0, 42)
 			ec.titleLine.Position = UDim2.new(0, 14, 0, 42)
 			ec.titleLine.Size = UDim2.new(1, -28, 0, 1)
-			content.Position = UDim2.new(0, 146, 0, 52)
-			content.Size = UDim2.new(1, -156, 1, -64)
+			content.Position = UDim2.new(0, cp and 64 or 146, 0, 52)
+			content.Size = UDim2.new(1, -SIDE_PAD, 1, -64)
 			fpsLabel.Parent = titleBar
 			fpsLabel.Position = UDim2.new(1, -80, 0.5, 0)
 			undoBtn.Parent = titleBar
@@ -25581,6 +25652,170 @@ do
 end
 
 -- ============================================================================
+-- V9.18 (A) : TABBOX · BOÎTE DE DÉPENDANCE · VIDÉO
+--   Placé AVANT les systèmes ShowIf / SetEnabled / Risky : ces trois méthodes en héritent automatiquement
+--   (ShowIf, HideIf, Enabled, Risky, DisabledReason, Destroy, SetEnabled fonctionnent dessus).
+--
+--   local tb = blk:CreateTabbox({ Tabs = { "Combat", "Visuel" } })     -- des onglets À L'INTÉRIEUR d'un bloc
+--   tb.Combat:CreateToggle({ Name = "Aimbot" })                         -- tb[1] / tb["Combat"] se comportent comme un bloc
+--   tb.Visuel:CreateSlider({ Name = "FOV", Min = 30, Max = 120 })
+--   tb:Select("Visuel") · tb.Get() · Callback = function(nom) end
+--
+--   local avance = blk:CreateToggle({ Name = "Réglages avancés" })
+--   local dep = blk:CreateDependencyBox({ Depends = avance })           -- visible seulement si « avance » est activé
+--   dep:CreateSlider({ Name = "Précision", Min = 1, Max = 10 })         -- (Depends accepte tout ce que ShowIf accepte)
+--
+--   blk:CreateVideo({ Video = "rbxassetid://...", Height = 160, Looped = true, Volume = 0 })
+-- ============================================================================
+do
+	-- « faux bloc » : reçoit les mêmes CreateXxx qu'un vrai bloc, mais dessine dans un cadre à lui
+	local function subBlock(parent, body, frame)
+		return setmetatable({
+			Frame = frame, Body = body, Scroll = parent.Scroll, Tab = parent.Tab, Name = parent.Name,
+			Side = parent.Side, Index = parent.Index, Key = parent.Key, DefOrder = parent.DefOrder,
+			Entries = {}, _noFav = parent._noFav, _isSub = true,
+			_collapse = function() end, _isCollapsed = function() return false end,
+		}, Block)
+	end
+
+	-- ---- BOÎTE DE DÉPENDANCE ------------------------------------------------------------------------------------------
+	function Block:CreateDependencyBox(o)
+		o = type(o) == "table" and o or {}
+		local box = new("Frame", {
+			Name = "DependencyBox", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY,
+			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.94, BorderSizePixel = 0,
+		}, self.Body)
+		corner(box, 8)
+		stroke(box, 0.9)
+		new("UIPadding", {
+			PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6),
+			PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6),
+		}, box)
+		new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = BYORDER }, box)
+		self:_reg(box, "")
+		return subBlock(self, box, box)
+	end
+
+	-- ---- TABBOX ------------------------------------------------------------------------------------------------------
+	function Block:CreateTabbox(o)
+		if type(o) == "table" and o[1] ~= nil and o.Tabs == nil then o = { Tabs = o } end
+		o = type(o) == "table" and o or {}
+		local list = {}
+		for _, t in ipairs(o.Tabs or o.Items or {}) do
+			list[#list + 1] = type(t) == "table" and tostring(t.Name or t[1] or "Tab") or tostring(t)
+		end
+		if #list == 0 then list = { "Tab 1", "Tab 2" } end
+		local n = #list
+
+		local box = new("Frame", {
+			Name = "Tabbox", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundColor3 = T.Element,
+			BackgroundTransparency = 0.4, BorderSizePixel = 0,
+		}, self.Body)
+		corner(box, 8)
+		trackStyled(box, stroke(box, 0.93), "row")
+		new("UIPadding", {
+			PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6),
+			PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6),
+		}, box)
+		new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = BYORDER }, box)
+		local bar = new("Frame", { Name = "TabboxBar", Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, LayoutOrder = 1 }, box)
+		new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = BYORDER }, bar)
+		self:_reg(box, "")
+
+		local btns, pages, subs = {}, {}, {}
+		local cur = 0
+		local tb = {}
+
+		local function pick(i, silent)
+			if i == cur or not pages[i] then return end
+			cur = i
+			for j = 1, n do
+				local on = j == i
+				pages[j].Visible = on
+				tween(btns[j].btn, { BackgroundTransparency = on and 0.85 or 1 }, 0.18)
+				tween(btns[j].lbl, { TextColor3 = on and T.Text or T.ElementAccent }, 0.18)
+			end
+			if not silent then fire(o.Callback, list[i]) end
+		end
+
+		for i, nm in ipairs(list) do
+			local b = new("TextButton", {
+				Name = "Tab_" .. nm, Size = UDim2.new(1 / n, -math.floor(4 * (n - 1) / n), 1, 0), BackgroundColor3 = T.Accent,
+				BackgroundTransparency = 1, Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i,
+			}, bar)
+			corner(b, 6)
+			local l = label(b, nm, 12, { TextXAlignment = CENTER, TextColor3 = T.ElementAccent, Size = UDim2.new(1, -6, 1, 0), Position = UDim2.fromOffset(3, 0) })
+			btns[i] = { btn = b, lbl = l }
+			local pg = new("Frame", {
+				Name = "TabboxPage_" .. nm, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
+				BorderSizePixel = 0, LayoutOrder = 2, Visible = false,
+			}, box)
+			new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = BYORDER }, pg)
+			pages[i] = pg
+			local sb = subBlock(self, pg, box)
+			subs[i] = sb
+			tb[i] = sb
+			if tb[nm] == nil then tb[nm] = sb end
+			b.MouseButton1Click:Connect(function() pick(i) end)
+		end
+
+		tb.Select = function(...)
+			local v = unself(tb, ...)
+			if type(v) == "number" then pick(math.clamp(math.floor(v), 1, n))
+			else
+				local idx = table.find(list, tostring(v))
+				if idx then pick(idx) end
+			end
+		end
+		tb.Get = function() return list[cur] end
+		tb.Pages = subs
+		pick(math.clamp(tonumber(o.Default) or (table.find(list, tostring(o.Default)) or 1), 1, n), true)
+		return tb
+	end
+
+	-- ---- VIDÉO -------------------------------------------------------------------------------------------------------
+	function Block:CreateVideo(o)
+		if type(o) ~= "table" then o = { Video = tostring(o or "") } end
+		local vid = o.Video or o.Source or o.Id or ""
+		if type(vid) == "number" then vid = "rbxassetid://" .. vid end
+		local f = new("Frame", {
+			Name = "Video", Size = UDim2.new(1, 0, 0, tonumber(o.Height) or 160), BackgroundColor3 = Color3.new(0, 0, 0),
+			BackgroundTransparency = 0.2, BorderSizePixel = 0, ClipsDescendants = true,
+		}, self.Body)
+		corner(f, 8)
+		trackStyled(f, stroke(f, 0.93), "row")
+		local v
+		local ok = pcall(function()
+			v = new("VideoFrame", {
+				Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Video = tostring(vid),
+				Looped = o.Looped ~= false, Volume = tonumber(o.Volume) or 0,
+			}, f)
+			if o.Autoplay ~= false and tostring(vid) ~= "" then v:Play() end
+		end)
+		if not ok or not v then
+			label(f, "Vidéo indisponible", 12, { TextXAlignment = CENTER, TextColor3 = T.ElementAccent })
+		end
+		-- un clic sur la vidéo : pause / lecture
+		local hit = new("TextButton", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", ZIndex = 5 }, f)
+		hit.MouseButton1Click:Connect(function()
+			if not v then return end
+			if v.Playing then v:Pause() else v:Play() end
+		end)
+		self:_reg(f, o.Name or "Video")
+		local item = { Instance = v, Frame = f }
+		item.Play = function() if v then v:Play() end end
+		item.Pause = function() if v then v:Pause() end end
+		item.SetVideo = function(...)
+			local x = unself(item, ...)
+			if type(x) == "number" then x = "rbxassetid://" .. x end
+			if v then v.Video = tostring(x) v:Play() end
+		end
+		item.SetVolume = function(...) local x = tonumber((unself(item, ...))) or 0 if v then v.Volume = x end end
+		return item
+	end
+end
+
+-- ============================================================================
 -- V9.6 : ÉLÉMENTS CONDITIONNELS  (ShowIf / HideIf sur n'importe quel élément : toggle, slider, liste, bouton, section...)
 --   local avance = blk:CreateToggle({ Name = "Réglages avancés" })
 --   blk:CreateSlider({ Name = "Précision", Min = 1, Max = 10, ShowIf = avance })             -- visible seulement si « avance » est activé
@@ -26040,6 +26275,662 @@ do
 	end
 end
 
+-- ============================================================================
+-- V9.18 (B) : RISKY · RAISON DE DÉSACTIVATION · SOUS-BOUTON · DOUBLE CLIC · DIALOGUES · WIDGETS FLOTTANTS ·
+--             WARNING BOX · IMAGE DE FOND
+--
+--   Sur n'importe quel élément :
+--     blk:CreateToggle({ Name = "Desync", Risky = true, RiskyText = "Peut te faire bannir" })     barre rouge + info-bulle
+--     blk:CreateToggle({ Name = "Hook", Enabled = false, DisabledReason = "Ton exécuteur ne supporte pas ça" })
+--       → au survol de la ligne grisée, la raison s'affiche. item.SetEnabled(false, "raison") · item.SetDisabledReason(txt)
+--       item.SetRisky(bool, texte) · item.IsRisky()
+--   Bouton :
+--     blk:CreateButton({ Name = "Teleport", Callback = f, SubButton = { Name = "⚙", Callback = f2, Tooltip = "Options" } })
+--     blk:CreateButton({ Name = "Reset", DoubleClick = true, DoubleClickHint = "Clique encore pour confirmer", Callback = f })
+--
+--   Dialogues (popups modaux) :
+--     Library:Dialog({ Title = "Quitter ?", Content = "Tout sera perdu.", Buttons = {
+--         { Name = "Annuler" }, { Name = "Quitter", Primary = true, Callback = function() end } } })      -- ou Window:AddDialog(...)
+--     Library:Confirm("Titre", "Texte", function() oui end, function() non end)
+--
+--   Widgets flottants déplaçables (restent à l'écran même fenêtre fermée) :
+--     local lbl = Library:AddDraggableLabel({ Text = "Keybinds", X = 20, Y = 200, Flag = "pos_kb",
+--                     Update = function() return "Fly : ON" end, Interval = 0.5 })        -- lbl.SetText / SetVisible / Destroy
+--     local btn = Library:AddDraggableButton({ Text = "FLY", Toggle = true, Callback = function(on) end })   -- bouton mobile
+--     local m = Library:AddDraggableMenu({ Title = "Rapide" })
+--     m:AddLabel("Texte") · m:AddButton("Nom", f) · m:AddToggle("Nom", false, f) · m:Clear() · m:Collapse(bool)
+--     Flag = "nom" : la position est sauvegardée avec les configs.
+--
+--   Onglet :  tab:AddWarningBox({ Title = "Attention", Text = "Ce onglet est instable", Type = "Warning" | "Error" | "Info" | "Success",
+--                                 Dismissable = true })
+--   Fenêtre : Library:SetBackgroundImage("rbxassetid://...", 0.8) (nil pour retirer) · win:SetBackgroundImage(...)
+-- ============================================================================
+do
+	local RED = Color3.fromRGB(235, 87, 87)
+	local MOUSEMOVE, TOUCH = Enum.UserInputType.MouseMovement, Enum.UserInputType.Touch
+
+	-- ---- 1) RISKY / DISABLEDREASON / SUBBUTTON / DOUBLECLICK : enveloppe de tous les Block:Create* -------------------------
+	local names = {}
+	for k, fn in pairs(Block) do
+		if type(k) == "string" and string.sub(k, 1, 6) == "Create" and type(fn) == "function" then names[#names + 1] = k end
+	end
+	for _, k in ipairs(names) do
+		local orig = Block[k]
+		Block[k] = function(self, o, ...)
+			if type(o) ~= "table" or type(self) ~= "table" or not self.Entries then return orig(self, o, ...) end
+
+			local rowRef
+			-- double clic : le callback ne part qu'au 2e clic (dans le délai)
+			if k == "CreateButton" and o.DoubleClick and type(o.Callback) == "function" then
+				local cb, last = o.Callback, -math.huge
+				local o2 = {}
+				for kk, vv in pairs(o) do o2[kk] = vv end
+				o = o2
+				local gap = tonumber(o.DoubleClickTime) or 0.6
+				o.Callback = function(...)
+					local now = os.clock()
+					if now - last <= gap then
+						last = -math.huge
+						return cb(...)
+					end
+					last = now
+					if rowRef and rowRef.Parent and Library._tipShow then
+						Library._tipShow(tostring(o.DoubleClickHint or "Clique une 2e fois pour confirmer"), rowRef)
+						task.delay(gap + 0.4, function() if Library._tipHide then Library._tipHide() end end)
+					end
+				end
+			end
+
+			local n0 = #self.Entries
+			local a, b, c = orig(self, o, ...)
+			if type(a) ~= "table" then return a, b, c end
+			local ents = {}
+			for i = n0 + 1, #self.Entries do ents[#ents + 1] = self.Entries[i] end
+			if #ents == 0 then return a, b, c end
+
+			local ok, err = pcall(function()
+				local row = ents[1].Frame
+				if not row then return end
+				rowRef = row
+
+				-- RISKY : barre rouge à gauche + info-bulle au survol
+				local risky, riskyText = o.Risky == true, o.RiskyText
+				local mark
+				local function paint()
+					if risky then
+						if not (mark and mark.Parent) then
+							mark = new("Frame", {
+								Name = "RiskyMark", Size = UDim2.new(0, 3, 1, -12), Position = UDim2.fromOffset(3, 6),
+								BackgroundColor3 = RED, BorderSizePixel = 0, ZIndex = 5,
+							}, row)
+							corner(mark, 2)
+						end
+						mark.Visible = true
+					elseif mark then
+						mark.Visible = false
+					end
+				end
+				paint()
+				local tok = 0
+				local ownTip = o.Tooltip ~= nil or o.Tip ~= nil
+				row.MouseEnter:Connect(function()
+					tok += 1
+					local my = tok
+					if not risky or ownTip then return end
+					task.delay(0.45, function()
+						if tok == my and risky and row.Parent and Library._tipShow then
+							Library._tipShow(tostring(riskyText or "Option risquée : peut être détectée ou causer des problèmes"), row)
+						end
+					end)
+				end)
+				row.MouseLeave:Connect(function()
+					tok += 1
+					if risky and not ownTip and Library._tipHide then Library._tipHide() end
+				end)
+				a.SetRisky = function(...)
+					local v, t = unself(a, ...)
+					risky = v ~= false
+					if type(t) == "string" then riskyText = t end
+					paint()
+				end
+				a.IsRisky = function() return risky end
+
+				-- RAISON DE DÉSACTIVATION : info-bulle sur le voile gris
+				local reason = o.DisabledReason or o.DisabledText
+				local function hook()
+					for _, e in ipairs(ents) do
+						local fr = e.Frame
+						local ov = fr and fr.Parent and fr:FindFirstChild("DisabledOverlay")
+						if ov and not ov:GetAttribute("ReasonHooked") then
+							ov:SetAttribute("ReasonHooked", true)
+							local t = 0
+							ov.MouseEnter:Connect(function()
+								t += 1
+								local my = t
+								task.delay(0.2, function()
+									if t == my and ov.Parent and reason and reason ~= "" and Library._tipShow then
+										Library._tipShow(tostring(reason), ov)
+									end
+								end)
+							end)
+							ov.MouseLeave:Connect(function()
+								t += 1
+								if Library._tipHide then Library._tipHide() end
+							end)
+						end
+					end
+				end
+				if type(a.SetEnabled) == "function" then
+					local base = a.SetEnabled
+					a.SetEnabled = function(...)
+						local v, r = unself(a, ...)
+						if type(r) == "string" then reason = r end
+						base(v)
+						if v == false then hook() end
+					end
+					if type(a.IsEnabled) == "function" and a.IsEnabled() == false then hook() end
+				end
+				a.SetDisabledReason = function(...) reason = tostring((unself(a, ...))) end
+
+				-- SOUS-BOUTON (boutons)
+				if k == "CreateButton" and type(o.SubButton) == "table" then
+					local sbo = o.SubButton
+					local txt = tostring(sbo.Name or sbo.Text or "⚙")
+					local w = math.max(24, math.floor(measureText(txt, 12, F_BOLD).X) + 14)
+					local sub = new("TextButton", {
+						Name = "SubButton", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
+						Size = UDim2.new(0, w, 0, 22), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.88,
+						Text = txt, TextColor3 = T.Text, TextSize = 12, Font = F_BOLD, AutoButtonColor = false,
+						BorderSizePixel = 0, ZIndex = 6,
+					}, row)
+					corner(sub, 6)
+					sub.MouseEnter:Connect(function() tween(sub, { BackgroundTransparency = 0.7 }, 0.15) end)
+					sub.MouseLeave:Connect(function() tween(sub, { BackgroundTransparency = 0.88 }, 0.15) end)
+					sub.MouseButton1Click:Connect(function() fire(sbo.Callback, a) end)
+					if sbo.Tooltip then attachTip(sub, sbo.Tooltip) end
+					a.SubButton = sub
+				end
+			end)
+			if not ok then warn("[Ui-Lib] V9.18 (" .. k .. ") : " .. tostring(err)) end
+			return a, b, c
+		end
+	end
+
+	-- CreateDependencyBox({ Depends = élément }) = ShowIf
+	do
+		local rawDep = Block.CreateDependencyBox
+		Block.CreateDependencyBox = function(self, o, ...)
+			if type(o) == "table" and o.ShowIf == nil and o.HideIf == nil then
+				if o.Depends ~= nil then o.ShowIf = o.Depends
+				elseif o.DependsOn ~= nil then o.ShowIf = o.DependsOn end
+			end
+			return rawDep(self, o, ...)
+		end
+	end
+
+	-- ---- 2) DIALOGUES ------------------------------------------------------------------------------------------------
+	function Library.Dialog(...)
+		local o = unself(Library, ...)
+		if type(o) == "string" then o = { Content = o } end
+		o = type(o) == "table" and o or {}
+		local win = Library.Window
+		local gui = win and win.Gui
+		if not gui then warn("[Ui-Lib] Dialog : crée d'abord la fenêtre") return nil end
+
+		local ov = new("TextButton", {
+			Name = "UiDialog", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 1,
+			Text = "", AutoButtonColor = false, BorderSizePixel = 0, ZIndex = 900, Active = true,
+		}, gui)
+		local card = new("Frame", {
+			Name = "Card", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(tonumber(o.Width) or 340, 0), AutomaticSize = AY, BackgroundColor3 = T.Main,
+			BackgroundTransparency = 0.04, BorderSizePixel = 0, Active = true,
+		}, ov)
+		corner(card, 12)
+		stroke(card, 0.8)
+		new("UIPadding", {
+			PaddingTop = UDim.new(0, 16), PaddingBottom = UDim.new(0, 16),
+			PaddingLeft = UDim.new(0, 16), PaddingRight = UDim.new(0, 16),
+		}, card)
+		new("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = BYORDER }, card)
+		local sc = new("UIScale", { Scale = 0.92 }, card)
+
+		local title = tostring(o.Title or o.Name or "")
+		if title ~= "" then
+			new("TextLabel", {
+				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, Text = title, TextColor3 = T.Text,
+				TextSize = 16, Font = F_BOLD, TextWrapped = true, TextXAlignment = LEFT, LayoutOrder = 1,
+			}, card)
+		end
+		local content = tostring(o.Content or o.Text or "")
+		if content ~= "" then
+			new("TextLabel", {
+				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, Text = content,
+				TextColor3 = T.ElementAccent, TextSize = 13, Font = F_REG, TextWrapped = true, TextXAlignment = LEFT,
+				TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 2,
+			}, card)
+		end
+
+		local closed, escConn = false, nil
+		local handle = { Gui = ov }
+		local function close()
+			if closed then return end
+			closed = true
+			if escConn then escConn:Disconnect() end
+			tween(ov, { BackgroundTransparency = 1 }, 0.15)
+			tween(sc, { Scale = 0.94 }, 0.15)
+			task.delay(0.17, function() pcall(function() ov:Destroy() end) end)
+			fire(o.OnClose, handle)
+		end
+		handle.Close = close
+		handle.Destroy = close
+		handle.IsOpen = function() return not closed end
+
+		local btns = o.Buttons
+		if type(btns) ~= "table" or #btns == 0 then btns = { { Name = "OK", Primary = true } } end
+		local rowF = new("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1, LayoutOrder = 3 }, card)
+		new("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = BYORDER,
+			HorizontalAlignment = Enum.HorizontalAlignment.Right, VerticalAlignment = Enum.VerticalAlignment.Center,
+		}, rowF)
+		for i, bo in ipairs(btns) do
+			if type(bo) == "string" then bo = { Name = bo } end
+			local txt = tostring(bo.Name or bo.Text or "OK")
+			local w = math.max(80, math.floor(measureText(txt, 13, F_BOLD).X) + 28)
+			local primary, danger = bo.Primary == true, bo.Danger == true
+			local bg = danger and RED or (primary and T.Accent or T.Element)
+			local btn = new("TextButton", {
+				Size = UDim2.fromOffset(w, 32), BackgroundColor3 = bg, BackgroundTransparency = (primary or danger) and 0.05 or 0.3,
+				Text = txt, TextColor3 = (primary and not danger) and T.Main or T.Text, TextSize = 13, Font = F_BOLD,
+				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i,
+			}, rowF)
+			corner(btn, 8)
+			local base = btn.BackgroundTransparency
+			btn.MouseEnter:Connect(function() tween(btn, { BackgroundTransparency = math.max(base - 0.12, 0) }, 0.12) end)
+			btn.MouseLeave:Connect(function() tween(btn, { BackgroundTransparency = base }, 0.12) end)
+			btn.MouseButton1Click:Connect(function()
+				fire(bo.Callback, handle)
+				if bo.Keep ~= true then close() end
+			end)
+		end
+
+		ov.MouseButton1Click:Connect(function()
+			if o.Dismissable ~= false and o.CloseOnBackdrop ~= false then close() end
+		end)
+		escConn = track(UIS.InputBegan:Connect(function(i)
+			if i.KeyCode == Enum.KeyCode.Escape and o.Dismissable ~= false then close() end
+		end))
+		tween(ov, { BackgroundTransparency = 0.45 }, 0.18)
+		tween(sc, { Scale = 1 }, 0.2)
+		return handle
+	end
+
+	function Library.Confirm(...)
+		local title, content, onYes, onNo = unself(Library, ...)
+		local o
+		if type(title) == "table" then
+			o = title
+		else
+			o = { Title = title, Content = content, OnYes = onYes, OnNo = onNo }
+		end
+		return Library.Dialog(Library, {
+			Title = o.Title, Content = o.Content, Width = o.Width, Dismissable = o.Dismissable,
+			Buttons = {
+				{ Name = o.NoText or "Annuler", Callback = o.OnNo },
+				{ Name = o.YesText or "Confirmer", Primary = not o.Danger, Danger = o.Danger, Callback = o.OnYes },
+			},
+		})
+	end
+
+	function Window:AddDialog(o) return Library.Dialog(Library, o) end
+
+	-- ---- 3) WIDGETS FLOTTANTS DÉPLAÇABLES ----------------------------------------------------------------------------
+	local dragGui
+	local function getDragGui()
+		if dragGui and dragGui.Parent then return dragGui end
+		dragGui = new("ScreenGui", {
+			Name = "SolarisFloat", ResetOnSpawn = false, DisplayOrder = 950,
+			ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true,
+		})
+		mount(dragGui)
+		return dragGui
+	end
+	Library._destroyDraggables = function()
+		if dragGui then pcall(function() dragGui:Destroy() end) dragGui = nil end
+	end
+
+	local function clampPos(frame, x, y)
+		local vp = viewport()
+		local s = frame.AbsoluteSize
+		return math.clamp(x, 0, math.max(vp.X - s.X, 0)), math.clamp(y, 0, math.max(vp.Y - s.Y, 0))
+	end
+
+	-- glisser = déplacer · clic sans déplacement = onClick
+	local function makeDrag(frame, handle, onClick, onMoved)
+		handle.InputBegan:Connect(function(i)
+			if not isPress(i) then return end
+			local moved = false
+			local start = Vector2.new(i.Position.X, i.Position.Y)
+			local ox, oy = frame.Position.X.Offset, frame.Position.Y.Offset
+			local mc, ec
+			local function stop()
+				if mc then mc:Disconnect() mc = nil end
+				if ec then ec:Disconnect() ec = nil end
+				if moved then
+					if onMoved then onMoved() end
+				elseif onClick then
+					onClick()
+				end
+			end
+			mc = UIS.InputChanged:Connect(function(j)
+				if j.UserInputType ~= MOUSEMOVE and j.UserInputType ~= TOUCH then return end
+				local d = Vector2.new(j.Position.X, j.Position.Y) - start
+				if not moved and d.Magnitude < 5 then return end
+				moved = true
+				local x, y = clampPos(frame, ox + d.X, oy + d.Y)
+				frame.Position = UDim2.fromOffset(x, y)
+			end)
+			ec = i.Changed:Connect(function()
+				if i.UserInputState == Enum.UserInputState.End then stop() end
+			end)
+		end)
+	end
+
+	-- position sauvegardée avec les configs (option Flag)
+	local function bindPos(o, frame)
+		if type(o.Flag) ~= "string" or o.Flag == "" then return function() end end
+		local p = {}
+		p.Get = function() return { X = frame.Position.X.Offset, Y = frame.Position.Y.Offset } end
+		p.Set = function(...)
+			local v = unself(p, ...)
+			if type(v) == "table" and tonumber(v.X) and tonumber(v.Y) then
+				local x, y = clampPos(frame, tonumber(v.X), tonumber(v.Y))
+				frame.Position = UDim2.fromOffset(x, y)
+			end
+		end
+		register(o.Flag, p, p.Get())
+		return function() Library.Flags[o.Flag] = p.Get() end
+	end
+
+	local function common(item, f)
+		item.Instance = f
+		item.SetVisible = function(...) f.Visible = (unself(item, ...)) ~= false end
+		item.SetPosition = function(...)
+			local x, y = unself(item, ...)
+			x, y = clampPos(f, tonumber(x) or 0, tonumber(y) or 0)
+			f.Position = UDim2.fromOffset(x, y)
+		end
+		item.GetPosition = function() return f.Position.X.Offset, f.Position.Y.Offset end
+	end
+
+	function Library.AddDraggableLabel(...)
+		local o = unself(Library, ...)
+		if type(o) == "string" then o = { Text = o } end
+		o = type(o) == "table" and o or {}
+		local f = new("Frame", {
+			Name = "DraggableLabel", Position = UDim2.fromOffset(tonumber(o.X) or 20, tonumber(o.Y) or 200),
+			Size = UDim2.new(0, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.XY, BackgroundColor3 = Color3.new(0, 0, 0),
+			BackgroundTransparency = tonumber(o.Transparency) or 0.35, BorderSizePixel = 0, Active = true,
+			Visible = o.Visible ~= false,
+		}, getDragGui())
+		corner(f, 8)
+		stroke(f, 0.85)
+		new("UIPadding", {
+			PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5), PaddingLeft = UDim.new(0, 9), PaddingRight = UDim.new(0, 9),
+		}, f)
+		local l = new("TextLabel", {
+			Size = UDim2.new(0, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.XY, BackgroundTransparency = 1,
+			Text = tostring(o.Text or ""), TextColor3 = o.TextColor or Color3.new(1, 1, 1), TextSize = tonumber(o.TextSize) or 13,
+			Font = F_MED, TextXAlignment = LEFT, RichText = o.RichText == true,
+		}, f)
+		local saved = bindPos(o, f)
+		makeDrag(f, f, nil, saved)
+		local item = {}
+		common(item, f)
+		item.SetText = function(...) l.Text = tostring((unself(item, ...))) end
+		item.GetText = function() return l.Text end
+		local h
+		if type(o.Update) == "function" and Library.Every then
+			h = Library.Every(Library, tonumber(o.Interval) or 0.5, function()
+				local ok, r = pcall(o.Update)
+				if ok and r ~= nil and f.Parent then l.Text = tostring(r) end
+			end, true)
+		end
+		item.Destroy = function()
+			if h then pcall(function() h:Disconnect() end) end
+			pcall(function() f:Destroy() end)
+		end
+		return item
+	end
+
+	function Library.AddDraggableButton(...)
+		local o = unself(Library, ...)
+		if type(o) == "string" then o = { Text = o } end
+		o = type(o) == "table" and o or {}
+		local sz = tonumber(o.Size) or 52
+		local f = new("TextButton", {
+			Name = "DraggableButton", Position = UDim2.fromOffset(tonumber(o.X) or 20, tonumber(o.Y) or 300),
+			Size = UDim2.fromOffset(sz, sz), BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.25,
+			Text = tostring(o.Text or "●"), TextColor3 = Color3.new(1, 1, 1), TextSize = tonumber(o.TextSize) or 14,
+			Font = F_BOLD, AutoButtonColor = false, BorderSizePixel = 0, Visible = o.Visible ~= false,
+		}, getDragGui())
+		corner(f, 14)
+		stroke(f, 0.8)
+		local on = o.Default == true
+		local function paint()
+			if o.Toggle then
+				tween(f, { BackgroundColor3 = on and Color3.new(1, 1, 1) or Color3.new(0, 0, 0), BackgroundTransparency = on and 0.1 or 0.25 }, 0.15)
+				tween(f, { TextColor3 = on and Color3.new(0, 0, 0) or Color3.new(1, 1, 1) }, 0.15)
+			end
+		end
+		paint()
+		local saved = bindPos(o, f)
+		makeDrag(f, f, function()
+			if o.Toggle then
+				on = not on
+				paint()
+				fire(o.Callback, on)
+			else
+				fire(o.Callback)
+			end
+		end, saved)
+		local item = {}
+		common(item, f)
+		item.SetText = function(...) f.Text = tostring((unself(item, ...))) end
+		item.Get = function() return on end
+		item.Set = function(...) on = (unself(item, ...)) == true paint() end
+		item.Destroy = function() pcall(function() f:Destroy() end) end
+		return item
+	end
+
+	function Library.AddDraggableMenu(...)
+		local o = unself(Library, ...)
+		if type(o) == "string" then o = { Title = o } end
+		o = type(o) == "table" and o or {}
+		local root = new("Frame", {
+			Name = "DraggableMenu", Position = UDim2.fromOffset(tonumber(o.X) or 20, tonumber(o.Y) or 120),
+			Size = UDim2.fromOffset(tonumber(o.Width) or 190, 0), AutomaticSize = AY, BackgroundColor3 = Color3.new(0, 0, 0),
+			BackgroundTransparency = 0.25, BorderSizePixel = 0, Active = true, Visible = o.Visible ~= false,
+		}, getDragGui())
+		corner(root, 10)
+		stroke(root, 0.85)
+		new("UIListLayout", { SortOrder = BYORDER }, root)
+		local head = new("TextButton", {
+			Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, LayoutOrder = 1,
+		}, root)
+		local titleL = label(head, tostring(o.Title or "Menu"), 13, {
+			Font = F_BOLD, TextColor3 = Color3.new(1, 1, 1), Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -34, 1, 0),
+		})
+		local arrow = label(head, "–", 14, {
+			Font = F_BOLD, TextColor3 = Color3.new(1, 1, 1), TextXAlignment = CENTER, Position = UDim2.new(1, -24, 0, 0), Size = UDim2.fromOffset(20, 28),
+		})
+		local body = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = 2 }, root)
+		new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = BYORDER }, body)
+		new("UIPadding", { PaddingBottom = UDim.new(0, 8), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, body)
+
+		local collapsed = false
+		local m = {}
+		common(m, root)
+		m.Collapse = function(...)
+			collapsed = (unself(m, ...)) ~= false
+			body.Visible = not collapsed
+			arrow.Text = collapsed and "+" or "–"
+		end
+		local saved = bindPos(o, root)
+		makeDrag(root, head, function() m.Collapse(not collapsed) end, saved)
+
+		local order = 0
+		local function nextOrder() order += 1 return order end
+		m.AddLabel = function(...)
+			local text = unself(m, ...)
+			local l = new("TextLabel", {
+				Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, Text = tostring(text or ""), TextColor3 = Color3.fromRGB(210, 210, 215),
+				TextSize = 12, Font = F_REG, TextXAlignment = LEFT, TextWrapped = true, AutomaticSize = AY, LayoutOrder = nextOrder(),
+			}, body)
+			local it = {}
+			it.SetText = function(...) l.Text = tostring((unself(it, ...))) end
+			it.Destroy = function() l:Destroy() end
+			return it
+		end
+		m.AddButton = function(...)
+			local text, cb = unself(m, ...)
+			local b = new("TextButton", {
+				Size = UDim2.new(1, 0, 0, 26), BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.9, Text = tostring(text or "Bouton"),
+				TextColor3 = Color3.new(1, 1, 1), TextSize = 12, Font = F_MED, AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = nextOrder(),
+			}, body)
+			corner(b, 6)
+			b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0.8 }, 0.12) end)
+			b.MouseLeave:Connect(function() tween(b, { BackgroundTransparency = 0.9 }, 0.12) end)
+			b.MouseButton1Click:Connect(function() fire(cb) end)
+			local it = {}
+			it.SetText = function(...) b.Text = tostring((unself(it, ...))) end
+			it.Destroy = function() b:Destroy() end
+			return it
+		end
+		m.AddToggle = function(...)
+			local text, default, cb = unself(m, ...)
+			local on = default == true
+			local b = new("TextButton", {
+				Size = UDim2.new(1, 0, 0, 26), BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = on and 0.7 or 0.92, Text = "",
+				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = nextOrder(),
+			}, body)
+			corner(b, 6)
+			label(b, tostring(text or "Option"), 12, { TextColor3 = Color3.new(1, 1, 1), Position = UDim2.fromOffset(8, 0), Size = UDim2.new(1, -16, 1, 0) })
+			local it = {}
+			local function paint() tween(b, { BackgroundTransparency = on and 0.7 or 0.92 }, 0.12) end
+			b.MouseButton1Click:Connect(function() on = not on paint() fire(cb, on) end)
+			it.Get = function() return on end
+			it.Set = function(...) on = (unself(it, ...)) == true paint() end
+			it.Destroy = function() b:Destroy() end
+			return it
+		end
+		m.Clear = function() for _, c in ipairs(body:GetChildren()) do if c:IsA("GuiObject") then c:Destroy() end end end
+		m.SetTitle = function(...) titleL.Text = tostring((unself(m, ...))) end
+		m.Destroy = function() pcall(function() root:Destroy() end) end
+		if o.Collapsed then m.Collapse(true) end
+		return m
+	end
+
+	-- ---- 4) WARNING BOX D'ONGLET --------------------------------------------------------------------------------------
+	local WCOL = {
+		Warning = Color3.fromRGB(240, 180, 60), Error = Color3.fromRGB(235, 87, 87),
+		Info = Color3.fromRGB(110, 170, 255), Success = Color3.fromRGB(90, 200, 120),
+	}
+	local WICON = { Warning = "!", Error = "×", Info = "i", Success = "✓" }
+	function Tab:AddWarningBox(o)
+		if type(o) == "string" then o = { Text = o } end
+		o = type(o) == "table" and o or {}
+		local col = self.Cols and self.Cols[1]
+		if not col then return nil end
+		self._warnN = (self._warnN or 0) + 1
+		local kind = WCOL[o.Type] and o.Type or "Warning"
+		local f = new("Frame", {
+			Name = "WarningBox", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundColor3 = WCOL[kind],
+			BackgroundTransparency = 0.88, BorderSizePixel = 0, LayoutOrder = -100000 + self._warnN,
+		}, col)
+		corner(f, 10)
+		local st = stroke(f, 0.55)
+		st.Color = WCOL[kind]
+		new("UIPadding", {
+			PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 10), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10),
+		}, f)
+		local dismiss = o.Dismissable == true
+		local ic = new("TextLabel", {
+			Size = UDim2.fromOffset(22, 22), BackgroundColor3 = WCOL[kind], BackgroundTransparency = 0.75, Text = WICON[kind],
+			TextColor3 = WCOL[kind], TextSize = 14, Font = F_BOLD, BorderSizePixel = 0,
+		}, f)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, ic)
+		local txtF = new("Frame", {
+			Position = UDim2.fromOffset(32, 0), Size = UDim2.new(1, -32 - (dismiss and 24 or 0), 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
+		}, f)
+		new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = BYORDER }, txtF)
+		local titleL = new("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, Text = tostring(o.Title or ""), TextColor3 = T.Text,
+			TextSize = 13, Font = F_BOLD, TextWrapped = true, TextXAlignment = LEFT, LayoutOrder = 1,
+		}, txtF)
+		titleL.Visible = titleL.Text ~= ""
+		local bodyL = new("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, Text = tostring(o.Text or o.Content or ""),
+			TextColor3 = T.ElementAccent, TextSize = 12, Font = F_REG, TextWrapped = true, TextXAlignment = LEFT,
+			TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 2,
+		}, txtF)
+		local item = { Instance = f }
+		if dismiss then
+			local x = new("TextButton", {
+				AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 0), Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1,
+				Text = "×", TextColor3 = T.ElementAccent, TextSize = 16, Font = F_BOLD, AutoButtonColor = false,
+			}, f)
+			x.MouseButton1Click:Connect(function() f:Destroy() end)
+		end
+		item.SetText = function(...) bodyL.Text = tostring((unself(item, ...))) end
+		item.SetTitle = function(...) titleL.Text = tostring((unself(item, ...))) titleL.Visible = titleL.Text ~= "" end
+		item.SetType = function(...)
+			local t = unself(item, ...)
+			if not WCOL[t] then return end
+			f.BackgroundColor3, st.Color, ic.BackgroundColor3, ic.TextColor3, ic.Text = WCOL[t], WCOL[t], WCOL[t], WCOL[t], WICON[t]
+		end
+		item.SetVisible = function(...) f.Visible = (unself(item, ...)) ~= false end
+		item.Destroy = function() pcall(function() f:Destroy() end) end
+		return item
+	end
+	Tab.CreateWarningBox = Tab.AddWarningBox
+
+	-- ---- 5) IMAGE DE FOND DE LA FENÊTRE ------------------------------------------------------------------------------
+	function Library.SetBackgroundImage(...)
+		local id, tr = unself(Library, ...)
+		local w = Library.Window
+		if not (w and w.Main) then return false end
+		local img = w.Main:FindFirstChild("BgImage")
+		if id == nil or id == "" or id == false then
+			if img then img:Destroy() end
+			return true
+		end
+		if type(id) == "number" then id = "rbxassetid://" .. id end
+		if not img then
+			img = new("ImageLabel", {
+				Name = "BgImage", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, ScaleType = Enum.ScaleType.Crop,
+				ZIndex = 0, Active = false, BorderSizePixel = 0,
+			}, w.Main)
+			local mc = w.Main:FindFirstChildOfClass("UICorner")
+			if mc then new("UICorner", { CornerRadius = mc.CornerRadius }, img) end
+		end
+		img.Image = tostring(id)
+		img.ImageTransparency = math.clamp(tonumber(tr) or 0.8, 0, 1)
+		return true
+	end
+	function Window:SetBackgroundImage(...) return Library.SetBackgroundImage(Library, ...) end
+end
+
+-- Mode compact (V9.18) : menu réduit à une colonne d'icônes (type « Classique » ; sans effet en Éclipse / Carré)
+function Library.SetCompact(...)
+	local v = unself(Library, ...)
+	Library.Compact = v == true
+	local w = Library.Window
+	if w and w.RefreshLayoutStyle then w:RefreshLayoutStyle() end
+	return Library.Compact
+end
+function Library.GetCompact() return Library.Compact == true end
+
 function Library:Destroy()
 	if Library.Window and Library._settingsReady and Library.AutoSaveSettings ~= false then
 		pcall(Library.SaveSettings, Library)
@@ -26092,6 +26983,7 @@ function Library:Destroy()
 	table.clear(Library.NotifSilenced)
 	Library._onKeybindAdded, Library._onKeybindChanged, Library._onSilencedChanged = nil, nil, nil
 	if Library._destroyHud then pcall(Library._destroyHud) end
+	if Library._destroyDraggables then pcall(Library._destroyDraggables) end
 	if Library._destroyUISound then pcall(Library._destroyUISound) end
 	if Library._destroyPalette then pcall(Library._destroyPalette) end
 	if Library._destroySpotlight then pcall(Library._destroySpotlight) end
