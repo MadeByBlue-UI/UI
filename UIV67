@@ -6352,8 +6352,15 @@ local FONT_FAMILIES = {
 	["Nunito"]       = { "Nunito", "Nunito", "Nunito" },
 	["Arimo"]        = { "Arimo", "Arimo", "ArimoBold" },
 	["Code"]         = { "Code", "Code", "Code" },
+	-- polices « cute » (une seule graisse chacune : le gras est simulé par la même police)
+	["Fredoka"]      = { "FredokaOne", "FredokaOne", "FredokaOne" },   -- ronde et douce
+	["Patrick Hand"] = { "PatrickHand", "PatrickHand", "PatrickHand" }, -- écriture à la main, mignonne
+	["Kalam"]        = { "Kalam", "Kalam", "Kalam" },                   -- manuscrite, souple
+	["Cartoon"]      = { "Cartoon", "Cartoon", "Cartoon" },             -- dessin animé
+	["Bangers"]      = { "Bangers", "Bangers", "Bangers" },             -- BD, pétillante
 }
-Library.FontFamilies = { "Gotham", "Builder Sans", "Source Sans", "Ubuntu", "Nunito", "Arimo", "Code" }
+Library.FontFamilies = { "Gotham", "Builder Sans", "Source Sans", "Ubuntu", "Nunito", "Arimo", "Code",
+	"Fredoka", "Patrick Hand", "Kalam", "Cartoon", "Bangers" }
 
 function Library:SetFont(name)
 	if not FONT_FAMILIES[name] then return end
@@ -19029,7 +19036,8 @@ do -- (portée réduite : évite d'ajouter des variables locales au niveau princ
 -- navigation au clavier (↑ ↓ pour parcourir, Entrée pour ouvrir) et ligne d'aide avec le nombre de résultats.
 -- Un clic sur un résultat ouvre son onglet, déplie son bloc et fait défiler jusqu'à la ligne (Library:RevealElement).
 Library.SearchResults = true
-local SR_MINW, SR_ROW, SR_MAX, SR_HINT = 280, 40, 6, 22
+local SR_MINW, SR_ROW, SR_MAX, SR_HINT = 280, 40, 6, 28
+local SR_KEY_ICON = "rbxassetid://135341415849911"   -- icône « ouvrir » (remplace le glyphe ↵ qui s'affichait en carré)
 local function srEsc(t) return (tostring(t):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
 
 -- position / largeur / hauteur de la barre, en unités de la fenêtre (indépendant de l'échelle)
@@ -19063,6 +19071,8 @@ local function srPaint(sr)
 	sr.sep.BackgroundColor3 = T.Text
 	sr.list.ScrollBarImageColor3 = T.Accent
 	sr.hint.TextColor3 = T.ElementAccent
+	if sr.hint2 then sr.hint2.TextColor3 = T.ElementAccent end
+	if sr.hintIcon then sr.hintIcon.ImageColor3 = T.ElementAccent end
 end
 
 local function srBuild(win)
@@ -19081,7 +19091,7 @@ local function srBuild(win)
 	sr.sheen = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = T.Text, BackgroundTransparency = 0,
 		BorderSizePixel = 0, ZIndex = 300 }, sr.box)
 	sr.sheenGrad = new("UIGradient", { Rotation = 90, Transparency = SR_SHEEN_GLASS }, sr.sheen)
-	sr.stroke = new("UIStroke", { Color = T.Text, Thickness = 1, Transparency = 0.3, ApplyStrokeMode = BORDER }, sr.box)
+	sr.stroke = new("UIStroke", { Color = T.Text, Thickness = 1, Transparency = 0.3, ApplyStrokeMode = BORDER, Enabled = false }, sr.box)   -- contour du panneau retiré
 	new("UIGradient", { Rotation = 40, Transparency = GLASS_EDGE }, sr.stroke)
 	sr.sep = new("Frame", { BackgroundColor3 = T.Text, BackgroundTransparency = 0.9, BorderSizePixel = 0, ZIndex = 301 }, sr.box)
 	sr.list = new("ScrollingFrame", { BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
@@ -19092,6 +19102,14 @@ local function srBuild(win)
 	sr.hint = new("TextLabel", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 16, 1, -4), Size = UDim2.new(1, -32, 0, SR_HINT - 6),
 		BackgroundTransparency = 1, Text = "", TextColor3 = T.ElementAccent, TextTransparency = 0.25, TextSize = 10, Font = F_MED,
 		TextXAlignment = Enum.TextXAlignment.Left, BorderSizePixel = 0, ZIndex = 302 }, sr.box)
+	-- « ↵ ouvrir » : icône 22 x 22 + texte (la ligne d'aide est découpée : « naviguer » · icône · « ouvrir · N résultats »)
+	sr.hintIcon = new("ImageLabel", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 16, 1, -1),
+		Size = UDim2.fromOffset(Library.IconSize, Library.IconSize), BackgroundTransparency = 1, Image = SR_KEY_ICON,
+		ImageColor3 = T.ElementAccent, ImageTransparency = 0.25, ScaleType = Enum.ScaleType.Fit, Visible = false,
+		BorderSizePixel = 0, ZIndex = 302 }, sr.box)
+	sr.hint2 = new("TextLabel", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 16, 1, -4), Size = UDim2.new(1, -32, 0, SR_HINT - 6),
+		BackgroundTransparency = 1, Text = "", TextColor3 = T.ElementAccent, TextTransparency = 0.25, TextSize = 10, Font = F_MED,
+		TextXAlignment = Enum.TextXAlignment.Left, BorderSizePixel = 0, Visible = false, ZIndex = 302 }, sr.box)
 	win._sr = sr
 
 	-- suit la barre si elle bouge / change de taille (changement de type d'interface, redimensionnement de la fenêtre...)
@@ -19134,11 +19152,11 @@ function Library._srSelect(sr, i, scroll, instant)
 		if instant then
 			it.row.BackgroundTransparency = on and 0.86 or 1
 			it.bar.BackgroundTransparency = on and 0 or 1
-			it.enter.TextTransparency = on and 0.2 or 1
+			it.enter.ImageTransparency = on and 0.2 or 1
 		else
 			tween(it.row, { BackgroundTransparency = on and 0.86 or 1 }, 0.1)
 			tween(it.bar, { BackgroundTransparency = on and 0 or 1 }, 0.1)
-			tween(it.enter, { TextTransparency = on and 0.2 or 1 }, 0.1)
+			tween(it.enter, { ImageTransparency = on and 0.2 or 1 }, 0.1)
 		end
 	end
 	if scroll then
@@ -19184,7 +19202,7 @@ local function srHide(win, sr)
 	task.delay(0.42, function()
 		if sr.tok == my and sr.box.Parent then
 			sr.box.Visible = false
-			if sr.barStroke then sr.barStroke.Enabled = true end
+			if sr.barStroke then sr.barStroke.Enabled = false end
 		end
 	end)
 end
@@ -19229,8 +19247,20 @@ function Library._updateSearchResults(win, q)
 			Text = "Aucun résultat pour « " .. qRaw .. " »", TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED,
 			TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0, LayoutOrder = 1, ZIndex = 302 }, sr.list)
 		sr.hint.Text = "Essaie un autre mot"
+		sr.hint.Size = UDim2.new(1, -32, 0, SR_HINT - 6)
+		sr.hintIcon.Visible, sr.hint2.Visible = false, false
 	else
-		sr.hint.Text = "↑ ↓ naviguer     ↵ ouvrir     ·     " .. count .. (#found > count and "+" or "") .. (count > 1 and " résultats" or " résultat")
+		sr.hint.Text = "↑ ↓ naviguer"
+		local w1 = math.ceil(measureText(sr.hint.Text, sr.hint.TextSize, sr.hint.Font).X) + 2
+		sr.hint.Size = UDim2.new(0, w1, 0, SR_HINT - 6)
+		local ix = 16 + w1 + 16
+		local isz = Library.IconSize
+		sr.hintIcon.Position = UDim2.new(0, ix, 1, -1)
+		sr.hintIcon.Visible = true
+		sr.hint2.Position = UDim2.new(0, ix + isz + 4, 1, -4)
+		sr.hint2.Size = UDim2.new(1, -(ix + isz + 4 + 16), 0, SR_HINT - 6)
+		sr.hint2.Text = "ouvrir     ·     " .. count .. (#found > count and "+" or "") .. (count > 1 and " résultats" or " résultat")
+		sr.hint2.Visible = true
 	end
 	for i = 1, count do
 		local it = found[i]
@@ -19255,15 +19285,26 @@ function Library._updateSearchResults(win, q)
 		if utf8.len(ownerName) and utf8.len(ownerName) > 0 then
 			ini = string.upper(ownerName:sub(1, (utf8.offset(ownerName, 2) or (#ownerName + 1)) - 1))
 		end
-		local badge = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0.5, 0), Size = UDim2.fromOffset(24, 24),
+		local badge = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 10, 0.5, 0), Size = UDim2.fromOffset(28, 28),
 			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.8, BorderSizePixel = 0, ZIndex = 303 }, row)
 		local bdc = Instance.new("UICorner")
 		bdc.CornerRadius = UDim.new(0, 9)
 		bdc:SetAttribute("KeepRound", true)
 		bdc.Parent = badge
-		new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.6, ApplyStrokeMode = BORDER }, badge)
-		new("TextLabel", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = ini, TextColor3 = T.Text, TextSize = 12,
-			Font = F_BOLD, BorderSizePixel = 0, ZIndex = 304 }, badge)
+		-- icône du tab (22 x 22) à la place de la lettre ; sans icône : initiale comme avant ; icône « glyph:x » : le caractère
+		local tid = it.owner.IconId
+		if type(tid) == "string" and string.match(tid, "^%d+$") then tid = "rbxassetid://" .. tid end
+		if type(tid) == "string" and string.sub(tid, 1, 6) == "glyph:" then
+			new("TextLabel", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = string.sub(tid, 7), TextColor3 = T.Text,
+				TextSize = Library.IconSize - 4, Font = F_BOLD, BorderSizePixel = 0, ZIndex = 304 }, badge)
+		elseif type(tid) == "string" and tid ~= "" then
+			new("ImageLabel", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(Library.IconSize, Library.IconSize), BackgroundTransparency = 1, Image = tid,
+				ImageColor3 = T.Text, ScaleType = Enum.ScaleType.Fit, BorderSizePixel = 0, ZIndex = 304 }, badge)
+		else
+			new("TextLabel", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = ini, TextColor3 = T.Text, TextSize = 12,
+				Font = F_BOLD, BorderSizePixel = 0, ZIndex = 304 }, badge)
+		end
 		-- nom avec la partie trouvée en gras
 		local pre, mid, post = nm:sub(1, it.pos - 1), nm:sub(it.pos, it.pos + #q - 1), nm:sub(it.pos + #q)
 		new("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(0, 46, 0, 5), Size = UDim2.new(1, -90, 0, 17),
@@ -19276,9 +19317,9 @@ function Library._updateSearchResults(win, q)
 			Text = path, TextColor3 = T.ElementAccent, TextTransparency = 0.1, TextSize = 10.5, Font = F_MED,
 			TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0, ZIndex = 303 }, row)
 		-- touche Entrée (visible sur la ligne surlignée)
-		local enter = new("TextLabel", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(24, 20),
-			BackgroundTransparency = 1, Text = "↵", TextColor3 = T.ElementAccent, TextTransparency = 1, TextSize = 15, Font = F_BOLD,
-			BorderSizePixel = 0, ZIndex = 303 }, row)
+		local enter = new("ImageLabel", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
+			Size = UDim2.fromOffset(Library.IconSize, Library.IconSize), BackgroundTransparency = 1, Image = SR_KEY_ICON,
+			ImageColor3 = T.ElementAccent, ImageTransparency = 1, ScaleType = Enum.ScaleType.Fit, BorderSizePixel = 0, ZIndex = 303 }, row)
 		sr.items[i] = { row = row, bar = bar, enter = enter, data = it }
 		row.MouseEnter:Connect(function() Library._srSelect(sr, i, false) end)
 		row.MouseButton1Click:Connect(function() Library._srOpen(win, it) end)
@@ -19372,7 +19413,8 @@ function Window:CreateTab(name, _, icon, parentTab)
 	end
 
 	local tab = setmetatable({ Name = fullName, Page = page, Button = btn, Blocks = {}, Cols = {}, NumCols = 0,
-		_newColumn = newColumn, Win = win, ParentTab = parentTab, Depth = depth, Children = {}, Expanded = false }, Tab)
+		_newColumn = newColumn, Win = win, ParentTab = parentTab, Depth = depth, Children = {}, Expanded = false,
+		IconId = (type(icon) == "string" and icon ~= "") and icon or nil }, Tab)   -- IconId : repris par la recherche (icône du tab)
 	tab:SetColumns(self.EffCols or (self.TwoCols and 2 or 1))
 
 	function tab:Select()
@@ -21361,6 +21403,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		local ICO = Library.IconSize   -- taille de l'icône des réglages
 		local img = (icon and icon ~= "") and icon or "rbxassetid://13300915301"
 		if string.match(img, "^%d+$") then img = "rbxassetid://" .. img end
+		tab.IconId = img
 		new("ImageLabel", { Name = "SettingsIcon", BackgroundTransparency = 1, Image = img, ImageColor3 = T.Text,
 			ScaleType = Enum.ScaleType.Fit, Position = UDim2.new(0, 8, 0.5, -ICO / 2), Size = UDim2.fromOffset(ICO, ICO) }, tab.Button)
 	end
@@ -23512,8 +23555,8 @@ function Library:CreateWindow(cfg)
 	-- ------------------------------------------------------------------
 	-- Barre de recherche « verre » : pilule bien arrondie, large et visible, placée dans la barre du titre (voir ec.placeSearch)
 	local function glassEdge(parent, tr)
-		local st = new("UIStroke", { Color = T.Text, Thickness = 1, Transparency = tr, ApplyStrokeMode = BORDER }, parent)
-		new("UIGradient", { Rotation = 40, Transparency = GLASS_EDGE }, st)   -- bord lumineux en haut à gauche, qui s'éteint vers le bas
+		local st = new("UIStroke", { Color = T.Text, Thickness = 1, Transparency = tr, ApplyStrokeMode = BORDER, Enabled = false }, parent)   -- contour retiré (barre de recherche, puce « Modifiés »)
+		new("UIGradient", { Rotation = 40, Transparency = GLASS_EDGE }, st)
 		return st
 	end
 	local function roundOf(parent)   -- coins en pilule, gardés ronds même dans le type Carré
