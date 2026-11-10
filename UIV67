@@ -7,6 +7,14 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.19 — KEYBINDS SUR LES BOUTONS (comme les toggles)
+		• blk:CreateButton({ Name = "Téléport", Keybind = Enum.KeyCode.T }) : appuyer sur la touche = cliquer sur le bouton (Confirm, Cooldown et
+		  DoubleClick respectés). Sans option : clic droit sur le bouton (ou clic sur la puce) pour assigner une touche — clavier ou clic gauche /
+		  droit / milieu · Échap = annuler · Retour / Suppr = retirer la touche. Keybind = false : pas de touche pour ce bouton.
+		• KeyCallback = function(touche) · Flag = "x" : la touche est sauvegardée dans les configs (clé "x.key") · item.SetKey(k) / item.GetKey() /
+		  item.Press() (déclenche le bouton depuis le code). Listé dans Paramètres > Raccourcis clavier (conflits signalés) et retiré par
+		  « Réinitialiser les contrôles » ({ Reset = false } pour exclure).
+
 	V9.18b — MODE COMPACT : Library:SetCompact(bool) / CreateWindow({ Compact = true }) / Paramètres > Style > « Mode compact » (type Classique).
 
 	V9.18 — RISKY · RAISON DE DÉSACTIVATION · TABBOX · BOÎTE DE DÉPENDANCE · DIALOGUES · WIDGETS FLOTTANTS · WARNING BOX
@@ -6983,7 +6991,7 @@ function Block:CreateButton(o)
 			end
 		end)
 	end
-	b.MouseButton1Click:Connect(function()
+	local function press()   -- le clic ET la touche liée (V9.19) passent par ici : Confirm / Cooldown / DoubleClick respectés
 		if cdLeft() > 0 then return end   -- cooldown en cours : le clic est ignoré
 		if o.Confirm then
 			if not armed then
@@ -7014,7 +7022,8 @@ function Block:CreateButton(o)
 		tween(b, { BackgroundColor3 = T.Element, BackgroundTransparency = Sty.RowTr, TextColor3 = T.Text }, 0.5)
 		fire(o.Callback)
 		cdStart(cdTotal)
-	end)
+	end
+	b.MouseButton1Click:Connect(press)
 	local item = {}
 	item.SetText = function(...)
 		baseText = tostring((unself(item, ...)))
@@ -7024,6 +7033,133 @@ function Block:CreateButton(o)
 	item.GetCooldown = function() return cdLeft() end
 	item.SetCooldown = function(...) cdTotal = math.max(tonumber((unself(item, ...))) or 0, 0) end
 	item.ResetCooldown = function() if cdLeft() > 0 then cdEnd() end end
+	item.Press = function() press() end   -- déclenche le bouton depuis le code (comme un clic)
+
+	-- ---- V9.19 : touche liée au bouton, comme pour les toggles ---------------------------------------------------------------
+	--   CreateButton({ Keybind = Enum.KeyCode.T }) (ou "T" / "MouseButton3") : appuyer sur la touche = cliquer sur le bouton.
+	--   Sans option : clic droit sur le bouton (ou clic sur la puce) pour assigner une touche. Échap = annuler, Retour / Suppr =
+	--   retirer la touche · Keybind = false : pas de touche pour ce bouton · KeyCallback = function(touche).
+	--   Flag = "x" : la touche est sauvegardée dans les configs (clé "x.key") · item.SetKey(k) / item.GetKey().
+	local KBX = Library._kb   -- (rangé dans Library : la lib est proche de la limite de 200 variables locales)
+	local explicitKey = o.Keybind ~= nil and o.Keybind ~= false
+	local keyOk = o.Keybind ~= false and not self._noFav
+		and not (self.Tab and (self.Tab._isSettings or self.Tab._isHome))
+	if KBX and (explicitKey or keyOk) then
+		local key = KBX.parse(o.Keybind) or Enum.KeyCode.Unknown
+		local function keyLabel(k) return k == Enum.KeyCode.Unknown and "—" or KBX.text(k) end
+		-- un SubButton occupe le bord droit : la puce se décale à gauche de lui
+		local subOff = 0
+		if type(o.SubButton) == "table" then
+			local stxt = tostring(o.SubButton.Name or o.SubButton.Text or "⚙")
+			subOff = math.max(24, (utf8.len(stxt) or #stxt) * 8 + 14) + 6
+		end
+		local chip = new("TextButton", {
+			Name = "KeyChip", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -(8 + subOff), 0.5, 0),
+			Size = UDim2.new(0, 0, 0, 20), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = T.Off,
+			BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = keyLabel(key), TextColor3 = T.Text,
+			TextSize = 11, Font = F_MED, AutoButtonColor = false, ZIndex = 5, Visible = false,
+		}, b)
+		corner(chip, 6)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, chip)
+		local cst = stroke(chip, 0.9)
+		trackStyled(chip, cst, "input")
+
+		local listening, lastBind = false, 0
+		local registered, bindConn = false, nil
+		local keyItem = {}
+		local function look()
+			chip.Visible = explicitKey or listening or key ~= Enum.KeyCode.Unknown
+		end
+
+		-- l'entrée n'apparaît dans « Raccourcis clavier » qu'une fois qu'une touche existe
+		local function ensureEntry()
+			if registered or self._noFav then return end
+			registered = true
+			Library.KeybindEntries[#Library.KeybindEntries + 1] = { Name = tostring(o.Name or "Button") .. " (touche)",
+				Tab = self.Tab, Block = self, Frame = b, Item = keyItem, BadgeX = -(subOff + 80) }
+			if Library._onKeybindAdded then pcall(Library._onKeybindAdded) end
+		end
+
+		-- un seul écouteur clavier par bouton, créé seulement quand une touche est définie
+		local function ensureConn()
+			if bindConn then return end
+			bindConn = track(UIS.InputBegan:Connect(function(i, gp)
+				if gp or listening or Library._listening then return end
+				if not KBX.hit(i, key) then return end
+				if os.clock() - lastBind < 0.2 or not b.Parent then return end
+				if UIS:GetFocusedTextBox() then return end
+				local ov = b:FindFirstChild("DisabledOverlay")
+				if ov and ov.Active then return end   -- ligne désactivée (SetEnabled(false)) : la touche ne fait rien
+				press()
+			end))
+		end
+
+		local function setKey(k, silent)
+			key = k
+			chip.Text = keyLabel(k)
+			lastBind = os.clock()
+			if k ~= Enum.KeyCode.Unknown then ensureEntry() ensureConn() end
+			look()
+			if o.Flag then Library.Flags[o.Flag .. ".key"] = k.Name end
+			if Library.RefreshKeybindConflicts then Library:RefreshKeybindConflicts() end
+			if Library._onKeybindChanged then pcall(Library._onKeybindChanged) end
+			if not silent then
+				if Library._notifyKeyConflict then Library:_notifyKeyConflict(b, k) end
+				fire(o.KeyCallback, k)
+			end
+		end
+
+		local function startListen()
+			if listening or Library._listening then return end
+			listening = true
+			Library._listening = true
+			chip.Text = "..."
+			look()
+			uiSnd("focus")
+			tween(cst, { Transparency = 0.25 }, 0.2)
+			local c
+			local function stop()
+				if c then c:Disconnect() c = nil end
+				listening = false
+				Library._listening = false
+				Library._abortListen = nil
+				tween(cst, { Transparency = Sty.InputStroke }, 0.3)
+			end
+			-- l'interface se masque pendant l'écoute : on annule (sinon la prochaine touche du jeu serait capturée)
+			Library._abortListen = function() stop() chip.Text = keyLabel(key) look() end
+			c = KBX.listen(function(k)   -- touche du clavier OU clic gauche / droit / milieu
+				stop()
+				if k == Enum.KeyCode.Escape then
+					chip.Text = keyLabel(key)   -- annulé : la touche actuelle est gardée
+					look()
+				elseif k == Enum.KeyCode.Backspace or k == Enum.KeyCode.Delete then
+					setKey(Enum.KeyCode.Unknown)
+				else
+					setKey(k)
+				end
+			end)
+		end
+		chip.MouseButton1Click:Connect(startListen)
+		b.MouseButton2Click:Connect(startListen)   -- clic droit sur le bouton
+
+		keyItem.Set = function(...)
+			local k = unself(keyItem, ...)
+			if type(k) == "string" then k = KBX.parse(k) end
+			if typeof(k) == "EnumItem" then setKey(k, (Library._silentSound or 0) > 0) end   -- config / auto-load : silencieux
+		end
+		keyItem.Get = function() return key end
+		item.SetKey = function(...) keyItem.Set((unself(item, ...))) end
+		item.GetKey = function() return key end
+		if o.Flag then register(o.Flag .. ".key", keyItem, key.Name) end
+		-- « Réinitialiser les contrôles » (Paramètres) retire aussi la touche des boutons ({ Reset = false } pour exclure)
+		if o.Reset ~= false and not self._noFav and not (self.Tab and (self.Tab._isSettings or self.Tab._isHome)) then
+			Library.ResetEntries[#Library.ResetEntries + 1] = { Kind = "ButtonKey", Item = keyItem, Frame = b }
+		end
+		if key ~= Enum.KeyCode.Unknown then ensureEntry() ensureConn() end
+		look()
+		if explicitKey and Library.RefreshKeybindConflicts then Library:RefreshKeybindConflicts() end
+	end
+
 	item.Instance = b
 	return item
 end
@@ -11272,6 +11408,9 @@ function Library:ResetControls()
 					local _, ck = pcall(function() return it.GetKey() end)
 					if ck ~= Enum.KeyCode.Unknown then pcall(it.SetKey, it, Enum.KeyCode.Unknown) n += 1 end
 				end
+			elseif r.Kind == "ButtonKey" then   -- touche liée à un bouton (V9.19)
+				local _, cur = pcall(function() return it.Get() end)
+				if cur ~= Enum.KeyCode.Unknown then pcall(it.Set, it, Enum.KeyCode.Unknown) n += 1 end
 			elseif r.Kind == "DDKeys" then
 				local _, cur = pcall(function() return it.Get() end)
 				if type(cur) == "table" and next(cur) ~= nil then pcall(it.Set, it, {}) n += 1 end
@@ -17775,6 +17914,7 @@ function Window:CreateHomeTab(name, icon, cfg)
 	win._iconSize = nil
 	tab.Button.LayoutOrder = 0   -- toujours en premier
 	self._homeTab = tab
+	tab._isHome = true   -- les boutons internes de Home n'ont pas de touche assignable (V9.19)
 	Library.ShowChangelog = cfg.ChangeLog ~= false
 	local lp = LP
 	local started = os.clock()
