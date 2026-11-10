@@ -19446,8 +19446,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 	if win._ecStyleTab then win._ecStyleTab(tab) end
 	btn.MouseEnter:Connect(function()
 		if win.Current ~= tab then uiSnd("tabhover") tween(btn, { BackgroundTransparency = 0.95 }, 0.2) end
-		if not txt:GetAttribute("BaseX") then txt:SetAttribute("BaseX", txt.Position.X.Offset) end
-		tween(txt, { Position = UDim2.new(0, txt:GetAttribute("BaseX") + 4, 0, 0) }, 0.25)
+		-- plus de décalage du texte au survol : icônes et noms restent sur une ligne droite (le fond suffit à marquer le survol)
 	end)
 	btn.MouseLeave:Connect(function()
 		if win.Current ~= tab then tween(btn, { BackgroundTransparency = 1 }, 0.25) end
