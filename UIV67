@@ -2451,9 +2451,9 @@ end))
 -- Library.SmoothScrollSpeed (raideur, 20) · Library.SmoothScrollLegacy = true : ancien mode · tactile pur : ancien mode.
 -- Les cadres horizontaux (ScrollingDirection = X) ne sont pas touchés.
 -- ============================================================================
-Library.SmoothScrollStep  = 110      -- px par cran de molette (avant : 64)
-Library.SmoothScrollSpeed = 26      -- raideur du ressort : plus haut = plus vif (avant : 20)
-Library.SmoothScrollAccel = true    -- molette tournée en continu : le défilement accélère (jusqu'à x4)
+Library.SmoothScrollStep  = 260      -- px par cran de molette (avant : 110) : défilement bien plus rapide
+Library.SmoothScrollSpeed = 30      -- raideur du ressort : plus haut = plus vif (avant : 26) ; reste fluide (amortissement critique)
+Library.SmoothScrollAccel = false   -- accélération coupée par défaut : elle faisait tout casser (vitesse constante = fluide et prévisible)
 Library.ScrollBarHover    = 9       -- épaisseur de la barre quand on la survole / la tient (px)
 -- Bouton « remonter en haut » (bas à droite de chaque colonne qui défile, dès qu'on a descendu)
 Library.TopBtn = { Enabled = true, Bg = Color3.fromRGB(255, 255, 255), Alpha = 0.25, Arrow = Color3.fromRGB(35, 35, 42), Threshold = 220 }
@@ -2606,7 +2606,7 @@ local function resolve()
 	local nowT = os.clock()
 	if Library.SmoothScrollAccel ~= false and nowT - lastWheelT < 0.28 then streak = math.min(streak + 1, 10) else streak = 0 end
 	lastWheelT = nowT
-	local mult = 1 + streak * 0.3   -- crans enchaînés : jusqu'à x4
+	local mult = math.min(1 + streak * 0.15, 2)   -- crans enchaînés (seulement si Accélération activée) : plafonné à x2
 	st.target = math.clamp(st.target - z * (Library.SmoothScrollStep or 110) * mult, 0, maxOf(best))
 	if Library.Animations == false then
 		best.CanvasPosition = Vector2.new(best.CanvasPosition.X, st.target)
@@ -20473,14 +20473,14 @@ function Window:CreateSettingsTab(name, icon, docked)
 
 	-- Défilement (molette + barre)
 	local SC = BK("Interface", { Name = "Défilement", Side = "Right" })
-	SC:CreateSlider({ Name = "Vitesse de la molette", Flag = "ui.scroll.step", Min = 40, Max = 320, Step = 10, Suffix = " px",
+	SC:CreateSlider({ Name = "Vitesse de la molette", Flag = "ui.scroll.step", Min = 40, Max = 600, Step = 10, Suffix = " px",
 		Default = Library.SmoothScrollStep, Favorite = false, Tooltip = "Distance parcourue à chaque cran de molette.",
 		Callback = function(v) Library.SmoothScrollStep = v end })
 	SC:CreateSlider({ Name = "Vivacité", Flag = "ui.scroll.speed", Min = 8, Max = 50, Step = 2,
 		Default = Library.SmoothScrollSpeed, Favorite = false, Tooltip = "Plus haut = le contenu rattrape sa cible plus vite.",
 		Callback = function(v) Library.SmoothScrollSpeed = v end })
 	SC:CreateToggle({ Name = "Accélération", Flag = "ui.scroll.accel", Favorite = false, Keybind = false, Default = Library.SmoothScrollAccel,
-		Tooltip = "Plus tu tournes la molette sans t'arrêter, plus ça va vite (jusqu'à x4).",
+		Tooltip = "Plus tu tournes la molette sans t'arrêter, plus ça va vite (jusqu'à x2). Désactivée par défaut : vitesse constante.",
 		Callback = function(v) Library.SmoothScrollAccel = v end })
 	SC:CreateSlider({ Name = "Largeur de la barre (survol)", Flag = "ui.scroll.bar", Min = 4, Max = 18, Step = 1, Suffix = " px",
 		Default = Library.ScrollBarHover, Favorite = false,
