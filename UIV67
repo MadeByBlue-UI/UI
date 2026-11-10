@@ -2453,6 +2453,7 @@ end))
 -- ============================================================================
 Library.SmoothScrollStep  = 260      -- px par cran de molette (avant : 110) : défilement bien plus rapide
 Library.SmoothScrollSpeed = 30      -- raideur du ressort : plus haut = plus vif (avant : 26) ; reste fluide (amortissement critique)
+Library.IconSize = 22                -- TAILLE FIXE de toutes les icônes de l'UI (onglets, sous-onglets, blocs, réglages, listes) : 22 x 22 px
 Library.SmoothScrollAccel = false   -- accélération coupée par défaut : elle faisait tout casser (vitesse constante = fluide et prévisible)
 Library.ScrollBarHover    = 9       -- épaisseur de la barre quand on la survole / la tient (px)
 -- Bouton « remonter en haut » (bas à droite de chaque colonne qui défile, dès qu'on a descendu)
@@ -8706,12 +8707,12 @@ function Block:CreateDropdown(o)
 				TextYAlignment = (mt and mt.Desc) and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center,
 				AutoButtonColor = false, BorderSizePixel = 0, ClipsDescendants = true,
 			}, row)
-			local pad = new("UIPadding", { PaddingLeft = UDim.new(0, mt and mt.Icon and 34 or 10), PaddingRight = UDim.new(0, 26),
+			local pad = new("UIPadding", { PaddingLeft = UDim.new(0, mt and mt.Icon and (Library.IconSize + 16) or 10), PaddingRight = UDim.new(0, 26),
 				PaddingTop = UDim.new(0, (mt and mt.Desc) and 4 or 0) }, b)
 			if mt and mt.Icon then   -- icône : posée dans la marge gauche (le padding décale aussi les enfants, d'où le -24)
 				new("ImageLabel", { Name = "Icon", BackgroundTransparency = 1, Image = mt.Icon, ScaleType = Enum.ScaleType.Fit,
-					AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, -24, (mt.Desc and 0.5 or 0.5), (mt.Desc and -2 or 0)),
-					Size = UDim2.fromOffset(18, 18), ImageColor3 = mt.Color or Color3.new(1, 1, 1) }, b)
+					AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, -(Library.IconSize + 6), (mt.Desc and 0.5 or 0.5), (mt.Desc and -2 or 0)),
+					Size = UDim2.fromOffset(Library.IconSize, Library.IconSize), ImageColor3 = mt.Color or Color3.new(1, 1, 1) }, b)
 			end
 			if mt and mt.Desc then   -- description : petite ligne atténuée sous le nom
 				new("TextLabel", { Name = "Desc", BackgroundTransparency = 1, Text = mt.Desc, TextSize = 10, Font = F_REG,
@@ -18810,9 +18811,9 @@ function Tab:CreateBlock(o)
 		AutoButtonColor = false, LayoutOrder = 1 }, frame)
 	local x = 12
 	if o.ImageID and o.ImageID ~= "" then
-		new("ImageLabel", { BackgroundTransparency = 1, Image = o.ImageID, ImageColor3 = T.Text,
-			Size = UDim2.new(0, 16, 0, 16), Position = UDim2.new(0, 12, 0.5, -8) }, head)
-		x = 34
+		new("ImageLabel", { BackgroundTransparency = 1, Image = o.ImageID, ImageColor3 = T.Text, ScaleType = Enum.ScaleType.Fit,
+			Size = UDim2.fromOffset(Library.IconSize, Library.IconSize), Position = UDim2.new(0, 12, 0.5, -Library.IconSize / 2) }, head)
+		x = 12 + Library.IconSize + 8
 	end
 	local nameLbl = label(head, o.Name or "Block", 13, { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, x, 0.5, 0),
 		Size = UDim2.new(1, -x - 58, 1, 0), Font = F_BOLD })
@@ -19341,12 +19342,12 @@ function Window:CreateTab(name, _, icon, parentTab)
 	local x0 = 12 + depth * 10        -- retrait des onglets enfants
 	local x = x0
 	if icon and icon ~= "" then
-		local isz = win._iconSize or 16   -- V5.8 : l'icône de Home est plus grande (22)
+		local isz = Library.IconSize   -- toutes les icônes d'onglet : 22 x 22 px (Home compris)
 		if string.sub(icon, 1, 6) == "glyph:" then   -- icône dessinée par un caractère (ex. "glyph:⌂")
 			label(btn, string.sub(icon, 7), isz + 1, { Font = Enum.Font.GothamBold, TextXAlignment = CENTER, TextTruncate = Enum.TextTruncate.None,
 				Size = UDim2.new(0, isz, 0, isz), Position = UDim2.new(0, x0, 0.5, -isz / 2) })
 		else
-			new("ImageLabel", { BackgroundTransparency = 1, Image = icon, ImageColor3 = T.Text,
+			new("ImageLabel", { BackgroundTransparency = 1, Image = icon, ImageColor3 = T.Text, ScaleType = Enum.ScaleType.Fit,
 				Size = UDim2.new(0, isz, 0, isz), Position = UDim2.new(0, x0, 0.5, -isz / 2) }, btn)
 		end
 		x = x0 + isz + 6
@@ -19571,7 +19572,7 @@ function Tab:CreateSubTabs(list)
 		local name = type(d) == "table" and tostring(d.Name or d[1] or ("Page " .. idx)) or tostring(d)
 		local icon = type(d) == "table" and d.Icon or nil
 		local hasIcon = icon and icon ~= ""
-		local padL, padR = hasIcon and 30 or 14, 14   -- marges de la pastille (gauche / droite)
+		local padL, padR = hasIcon and (Library.IconSize + 16) or 14, 14   -- marges de la pastille (gauche / droite)
 
 		-- zone cliquable transparente ; la largeur est calculée depuis le texte (jamais d'AutomaticSize : voir plus haut)
 		local pill = new("TextButton", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, X0, 0.5, 0),
@@ -19580,15 +19581,15 @@ function Tab:CreateSubTabs(list)
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, pill)
 		local pic
 		if hasIcon then
-			pic = new("ImageLabel", { BackgroundTransparency = 1, Image = icon, ImageColor3 = T.ElementAccent,
-				Size = UDim2.fromOffset(14, 14), Position = UDim2.new(0, 10, 0.5, -7), ZIndex = 3 }, pill)
+			pic = new("ImageLabel", { BackgroundTransparency = 1, Image = icon, ImageColor3 = T.ElementAccent, ScaleType = Enum.ScaleType.Fit,
+				Size = UDim2.fromOffset(Library.IconSize, Library.IconSize), Position = UDim2.new(0, 10, 0.5, -Library.IconSize / 2), ZIndex = 3 }, pill)
 		end
 		local pl = new("TextLabel", { Position = UDim2.new(0, padL, 0, 0), Size = UDim2.new(1, -padL, 1, 0),
 			BackgroundTransparency = 1, Text = name, TextColor3 = T.ElementAccent, TextSize = 12, Font = F_MED,
 			TextXAlignment = Enum.TextXAlignment.Center, TextTruncate = Enum.TextTruncate.None, ZIndex = 3 }, pill)
 		-- texte centré dans la zone restante (après l'icône s'il y en a une) : une petite erreur de mesure se répartit des deux côtés
-		pl.Position = UDim2.new(0, hasIcon and 28 or 0, 0, 0)
-		pl.Size = UDim2.new(1, hasIcon and -28 or 0, 1, 0)
+		pl.Position = UDim2.new(0, hasIcon and padL or 0, 0, 0)
+		pl.Size = UDim2.new(1, hasIcon and -padL or 0, 1, 0)
 
 		local page = new("Frame", { Name = "Sub_" .. name, Position = UDim2.new(0, 0, 0, 36), Size = UDim2.new(1, 0, 1, -36),
 			BackgroundTransparency = 1, Visible = false }, parent.Page)
@@ -21358,7 +21359,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 		if win._ecStyleTab then win._ecStyleTab(tab) end
 		tab.Label.Position = UDim2.new(0, 40, 0, 0)
 		tab.Label.Size = UDim2.new(1, -52, 1, 0)
-		local ICO = 26   -- taille de l'icône des réglages
+		local ICO = Library.IconSize   -- taille de l'icône des réglages
 		local img = (icon and icon ~= "") and icon or "rbxassetid://13300915301"
 		if string.match(img, "^%d+$") then img = "rbxassetid://" .. img end
 		new("ImageLabel", { Name = "SettingsIcon", BackgroundTransparency = 1, Image = img, ImageColor3 = T.Text,
@@ -23409,9 +23410,9 @@ function Library:CreateWindow(cfg)
 	local dragZone = new("Frame", { Size = UDim2.new(1, -56, 1, 0), BackgroundTransparency = 1 }, titleBar)
 	local tx = 16
 	if cfg.CustomIcon and cfg.CustomIcon ~= "" then
-		ec.logo = new("ImageLabel", { BackgroundTransparency = 1, Image = cfg.CustomIcon, Size = UDim2.new(0, 20, 0, 20),
-			Position = UDim2.new(0, 14, 0.5, -10) }, titleBar)
-		tx = 42
+		ec.logo = new("ImageLabel", { BackgroundTransparency = 1, Image = cfg.CustomIcon, Size = UDim2.fromOffset(Library.IconSize, Library.IconSize),
+			Position = UDim2.new(0, 14, 0.5, -Library.IconSize / 2) }, titleBar)
+		tx = 44
 	else
 		-- petit trou noir en guise de logo
 		local logo = new("Frame", { Position = UDim2.new(0, 14, 0.5, -9), Size = UDim2.new(0, 18, 0, 18),
