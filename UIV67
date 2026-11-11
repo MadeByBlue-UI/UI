@@ -7,6 +7,23 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.20 — CORRECTIFS LISTES JOUEURS · RÈGLES ENTRE TOGGLES · 3D / EFFETS · FAVORIS DANS LES PARAMÈTRES
+		• Listes déroulantes avec icônes (CreatePlayerPicker simple ET multiple, ou Items = { { Name, Icon } }) : la miniature est maintenant posée
+		  dans la ligne, ronde et toujours à GAUCHE du pseudo (plus de décalage / chevauchement) ; la valeur affichée dans l'en-tête montre aussi
+		  l'avatar choisi (jusqu'à 3 avatars superposés en multiple). Option { Round = true | false } par entrée pour forcer rond / carré.
+		• Masquage fluide : CreateToggle({ Hides = { élément | bloc | onglet } }) ou HideDisabled = true : les cibles se replient et disparaissent en douceur.
+		• Règles sur les toggles : CreateToggle({ Disables = {...} }) couper d'autres toggles à l'activation · Excludes = {...} exclusion mutuelle ·
+		  Enables = {...} · Locks = {...} (cibles coupées ET grisées avec la raison). Cibles = toggle, nom de Flag ou fonction. Library:Exclusive({...}).
+		• Griser sans rien couper : CreateToggle({ Greys = { élément | bloc | onglet } }) = cibles grisées (visibles, non cliquables, état inchangé) tant que le
+		  toggle est ACTIVÉ · GreysWhenOff = { ... } = grisées tant qu'il est COUPÉ (réglages qui dépendent du toggle) · GreyReason / GreyReasonOff = texte au survol.
+		• Clic droit sur un slider (simple ou à deux poignées) : petite fenêtre « Réinitialiser » (valeur par défaut) / « Copier » (valeur dans le presse-papiers).
+		  CreateSlider({ ContextMenu = false }) ou Library.SliderMenu = false pour le couper.
+		• 3D : blk:CreateScene3D({ Effect = "BlackHole" | "Orbit" | "Helix" | "Vortex" | "Galaxy" | "Cube" | "Sparkles" | "Fireworks", Setup = function(scene) })
+		  scene.AddPart / AddRing / AddEmitter / Emit / AddEffect / OnUpdate / SetCamera ... (voir le bloc « V9.20 » avant V9.18 (A)) et
+		  Library:Scene3D(guiObject, { Effect = ... }) pour poser un effet 3D en surcouche sur n'importe quel élément.
+		• Paramètres > Favoris (nouveau sous-onglet) : liste des favoris (Aller / ✕), tout retirer, export / import par code, afficher / cacher les étoiles
+		  (Library.ShowFavStars).
+
 	V9.19 — KEYBINDS SUR LES BOUTONS (comme les toggles)
 		• blk:CreateButton({ Name = "Téléport", Keybind = Enum.KeyCode.T }) : appuyer sur la touche = cliquer sur le bouton (Confirm, Cooldown et
 		  DoubleClick respectés). Sans option : clic droit sur le bouton (ou clic sur la puce) pour assigner une touche — clavier ou clic gauche /
@@ -7977,6 +7994,27 @@ function Block:CreateSlider(o)
 	end
 	item.Get = function() return value end
 
+	-- clic droit : petite fenêtre « Réinitialiser » / « Copier » (voir Library._valueMenu)
+	local lastMenu = 0
+	local function openMenu()
+		if o.ContextMenu == false or Library.SliderMenu == false or not Library._valueMenu then return end
+		if item.IsEnabled and item.IsEnabled() == false then return end   -- ligne grisée : rien
+		if os.clock() - lastMenu < 0.15 then return end   -- la ligne et la zone du curseur peuvent signaler le même clic
+		lastMenu = os.clock()
+		Library._valueMenu({
+			Title = o.Name or "Slider",
+			Reset = function() apply(def, false, false, true) end,
+			CanReset = function() return value ~= snap(def, true) end,
+			Copy = function() return tostring(value) end,
+		})
+	end
+	f.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton2 then openMenu() end
+	end)
+	hit.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton2 then openMenu() end
+	end)
+
 	hit.InputBegan:Connect(function(i)
 		if isPress(i) then
 			Library._spring(knob, { Size = UDim2.new(0, 17, 0, 17) }, "bouncy")
@@ -8129,6 +8167,28 @@ function Block:CreateRangeSlider(o)
 		if v then setHigh(v) end
 	end
 
+	-- clic droit : petite fenêtre « Réinitialiser » / « Copier » (voir Library._valueMenu)
+	local defLow, defHigh = nil, nil   -- valeurs par défaut (après accroche), fixées à la fin de la création
+	local lastMenu = 0
+	local function openMenu()
+		if o.ContextMenu == false or Library.SliderMenu == false or not Library._valueMenu then return end
+		if item.IsEnabled and item.IsEnabled() == false then return end
+		if os.clock() - lastMenu < 0.15 then return end
+		lastMenu = os.clock()
+		Library._valueMenu({
+			Title = o.Name or "Plage",
+			Reset = function() if defLow then commit(defLow, defHigh) end end,
+			CanReset = function() return defLow ~= nil and (low ~= defLow or high ~= defHigh) end,
+			Copy = function() return tostring(low) .. ", " .. tostring(high) end,
+		})
+	end
+	f.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton2 then openMenu() end
+	end)
+	hit.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton2 then openMenu() end
+	end)
+
 	hit.InputBegan:Connect(function(i)
 		if not isPress(i) then return end
 		local function valueAt(p)
@@ -8171,9 +8231,150 @@ function Block:CreateRangeSlider(o)
 	boxEvents(highBox, function(n) setHigh(n) end)
 
 	commit(dl, dh, true, true)
+	defLow, defHigh = low, high
 	register(o.Flag, item, { Low = low, High = high })
 	if Library.FireDefaults then fire(o.Callback, low, high) end
 	return item
+end
+
+-- ============================================================================
+-- CLIC DROIT SUR UN SLIDER : petite fenêtre avec 2 boutons « Réinitialiser » (valeur par défaut) et « Copier » (presse-papiers)
+--   Marche sur CreateSlider et CreateRangeSlider (clic droit sur la ligne). Fenêtre posée près du curseur, en fondu ; se ferme au clic
+--   en dehors, avec Échap, ou juste après l'action. « Réinitialiser » est grisé quand la valeur est déjà celle par défaut.
+--   CreateSlider({ ContextMenu = false }) : pas de menu sur ce slider · Library.SliderMenu = false : plus de menu nulle part.
+--   Library._valueMenu({ Title, Reset = function, CanReset = function() -> bool, Copy = function() -> texte }) : réutilisable pour d'autres éléments.
+--   (bloc isolé dans un do ... end : la librairie est proche de la limite de 200 variables locales)
+-- ============================================================================
+Library.SliderMenu = true
+do
+	local CARD_W, CARD_H = 164, 102
+	local pop   -- fenêtre partagée : créée au premier clic droit
+
+	local function close()
+		local p = pop
+		if not (p and p.Open) then return end
+		p.Open = false
+		p.Tok += 1
+		local my = p.Tok
+		tween(p.Card, { GroupTransparency = 1, Position = UDim2.fromOffset(p.X or 0, (p.Y or 0) + 4) }, 0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		tween(p.Scale, { Scale = 0.97 }, 0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		task.delay(0.18 / math.max(Library.AnimSpeed or 1, 0.05), function()
+			if pop == p and p.Tok == my and not p.Open then p.Card.Visible = false end
+		end)
+	end
+
+	-- retour visuel dans le bouton (« Copié »...), puis fermeture
+	local function finish(p, btn, text)
+		p.Flash += 1
+		local my = p.Flash
+		btn.Text = text
+		task.delay(0.45, function()
+			if p.Flash == my then close() end
+		end)
+	end
+
+	local function build()
+		if pop and pop.Card and pop.Card.Parent then return pop end
+		local gui = Library.Window and Library.Window.Gui
+		if not gui then return nil end
+		local p = { Tok = 0, Flash = 0, Open = false }
+		local card = new("CanvasGroup", { Name = "SliderValueMenu", Size = UDim2.fromOffset(CARD_W, CARD_H),
+			BackgroundColor3 = T.Second, BackgroundTransparency = 0.04, BorderSizePixel = 0, Visible = false,
+			ZIndex = 600, GroupTransparency = 1, Active = true }, gui)
+		corner(card, 10)
+		stroke(card, 0.8)
+		p.Scale = new("UIScale", { Scale = 0.96 }, card)
+		p.Title = label(card, "", 11, { Position = UDim2.fromOffset(12, 8), Size = UDim2.new(1, -24, 0, 16),
+			TextColor3 = T.ElementAccent })
+
+		local function mkBtn(y, text)
+			local b = new("TextButton", { Position = UDim2.fromOffset(10, y), Size = UDim2.new(1, -20, 0, 28),
+				BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0, Text = text,
+				TextColor3 = T.Text, TextSize = 13, Font = F_BOLD, AutoButtonColor = false }, card)
+			corner(b, 8)
+			local st = stroke(b, 0.88)
+			b.MouseEnter:Connect(function() if b.Active then tween(st, { Transparency = 0.55 }, 0.15) end end)
+			b.MouseLeave:Connect(function() tween(st, { Transparency = 0.88 }, 0.2) end)
+			return b
+		end
+		p.ResetBtn, p.CopyBtn = mkBtn(30, "Réinitialiser"), mkBtn(64, "Copier")
+
+		p.ResetBtn.MouseButton1Click:Connect(function()
+			local op = p.Opts
+			if not (op and p.Open) then return end
+			if op.CanReset and op.CanReset() == false then return end
+			uiSnd("pick")
+			if type(op.Reset) == "function" then pcall(op.Reset) end
+			finish(p, p.ResetBtn, "Réinitialisé")
+		end)
+		p.CopyBtn.MouseButton1Click:Connect(function()
+			local op = p.Opts
+			if not (op and p.Open) then return end
+			uiSnd("pick")
+			local ok, txt = false, nil
+			if type(op.Copy) == "function" then ok, txt = pcall(op.Copy) end
+			ok = ok and txt ~= nil and Library:CopyText(tostring(txt)) == true
+			finish(p, p.CopyBtn, ok and "Copié" or "Indisponible")
+		end)
+
+		p.Card = card
+		pop = p
+		return p
+	end
+
+	-- ouvre la fenêtre près du curseur : fondu + léger glissement + zoom doux
+	Library._valueMenu = function(o)
+		if Library.SliderMenu == false then return end
+		local p = build()
+		if not p then return end
+		o = type(o) == "table" and o or {}
+		local card = p.Card
+		local fresh = (not card.Visible) or card.GroupTransparency > 0.85
+		p.Opts = o
+		p.Flash += 1
+		p.Tok += 1
+		p.Open = true
+		p.OpenedAt = os.clock()
+		p.Title.Text = tostring(o.Title or "")
+		p.ResetBtn.Text, p.CopyBtn.Text = "Réinitialiser", "Copier"
+		local canReset = not (type(o.CanReset) == "function" and o.CanReset() == false)
+		p.ResetBtn.Active = canReset
+		p.ResetBtn.TextTransparency = canReset and 0 or 0.55
+		local m, v = Library._mouse(), viewport()
+		local x = math.clamp(m.X + 8, 4, math.max(4, v.X - CARD_W - 4))
+		local y = m.Y + 8
+		if y + CARD_H > v.Y - 4 then y = math.max(4, m.Y - CARD_H - 8) end
+		p.X, p.Y = x, y
+		if fresh then
+			card.Position = UDim2.fromOffset(x, y + 6)
+			p.Scale.Scale = 0.96
+			card.GroupTransparency = 1
+			card.Visible = true
+		else
+			card.Position = UDim2.fromOffset(x, y)
+		end
+		tween(card, { Position = UDim2.fromOffset(x, y), GroupTransparency = 0 }, 0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		tween(p.Scale, { Scale = 1 }, 0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	end
+	Library._valueMenuClose = close
+
+	-- fermeture : clic en dehors / Échap
+	track(UIS.InputBegan:Connect(function(i)
+		local p = pop
+		if not (p and p.Open) then return end
+		local ut = i.UserInputType
+		if ut == Enum.UserInputType.MouseButton1 or ut == Enum.UserInputType.MouseButton2
+			or ut == Enum.UserInputType.MouseButton3 or ut == Enum.UserInputType.Touch then
+			if os.clock() - (p.OpenedAt or 0) > 0.2 then
+				local m = (ut == Enum.UserInputType.Touch) and Vector2.new(i.Position.X, i.Position.Y + guiInset().Y)
+					or Library._pointerPos(i.Position)
+				local ap, as = p.Card.AbsolutePosition, p.Card.AbsoluteSize
+				if m.X < ap.X or m.Y < ap.Y or m.X > ap.X + as.X or m.Y > ap.Y + as.Y then close() end
+			end
+		elseif ut == Enum.UserInputType.Keyboard and i.KeyCode == Enum.KeyCode.Escape then
+			close()
+		end
+	end))
 end
 
 -- ============================================================================
@@ -8535,7 +8736,7 @@ function Block:CreateDropdown(o)
 			if typeof(col) ~= "Color3" then col = nil end
 			local ds = v.Desc or v.Description
 			if ic or ds or col then
-				meta[t] = { Icon = ic and tostring(ic) or nil, Desc = ds ~= nil and tostring(ds) or nil, Color = col }
+				meta[t] = { Icon = ic and tostring(ic) or nil, Desc = ds ~= nil and tostring(ds) or nil, Color = col, Round = v.Round }
 			else
 				meta[t] = nil
 			end
@@ -8600,14 +8801,40 @@ function Block:CreateDropdown(o)
 			tween(obj, props, 0.32)
 		end
 	end
+	-- V9.20 : avatars / icônes de la sélection, à GAUCHE du pseudo affiché (1 en simple, jusqu'à 3 superposés en multiple)
+	local headIcons, headIconN, headIconW = {}, 0, 0
+	local HEAD_IC = 18
+	local function setHeadIcons(list)
+		local n = math.min(#list, 3)
+		for i = 1, 3 do
+			local im = headIcons[i]
+			if i <= n then
+				if not im then
+					im = new("ImageLabel", { Name = "HeadIcon" .. i, BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0,
+						ScaleType = Enum.ScaleType.Crop, Active = false, AnchorPoint = Vector2.new(0, 0.5), Size = UDim2.fromOffset(HEAD_IC, HEAD_IC),
+						ZIndex = 3 + i, Visible = false }, head)
+					new("UICorner", { CornerRadius = UDim.new(1, 0) }, im)
+					headIcons[i] = im
+				end
+				im.Image = list[i]
+			elseif im then
+				im.Visible = false
+			end
+		end
+		headIconN = n
+		headIconW = n > 0 and (HEAD_IC + (n - 1) * 12 + 6) or 0
+	end
 	local function layoutHead()
 		local W = head.AbsoluteSize.X / math.max(pxScale(), 0.05)
 		if W <= 0 then return end
 		local txt = valL.Text
-		local key = txt .. "|" .. math.floor(W) .. "|" .. nameL.Text
+		local key = txt .. "|" .. math.floor(W) .. "|" .. nameL.Text .. "|" .. headIconW .. "|" .. headIconN
 		if key == lastKey then return end
 		lastKey = key
 		if isLongText(txt) then
+			for i = 1, 3 do
+				if headIcons[i] then headIcons[i].Visible = false end
+			end
 			local bh = math.ceil(measureText(txt, valL.TextSize, valL.Font, math.max(W - 24 - 16, 40)).Y) + 12
 			nameL.TextXAlignment = CENTER   -- nom centré au-dessus de la boîte (marges égales : la flèche reste à droite)
 			valL.TextWrapped = true
@@ -8625,7 +8852,7 @@ function Block:CreateDropdown(o)
 			valL.TextTruncate = Enum.TextTruncate.AtEnd
 			valL.TextXAlignment = RIGHT
 			valL.TextYAlignment = Enum.TextYAlignment.Center
-			local avail = W - 12 - 34 - 8
+			local avail = W - 12 - 34 - 8 - headIconW
 			local nameNeed = measureText(nameL.Text, nameL.TextSize, nameL.Font).X + 2
 			local valNeed = measureText(txt, valL.TextSize, valL.Font).X + 2
 			local valW
@@ -8635,6 +8862,13 @@ function Block:CreateDropdown(o)
 				valW = math.min(valNeed, math.max(avail * 0.5, avail - nameNeed))
 			end
 			valW = math.max(valW, 20)
+			for i = 1, headIconN do
+				local im = headIcons[i]
+				if im then
+					im.Position = UDim2.new(1, -34 - valW - headIconW + (i - 1) * 12, 0.5, 0)
+					im.Visible = true
+				end
+			end
 			go(nameL, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0, math.max(avail - valW, 20), 1, 0) })
 			go(valL, { Position = UDim2.new(1, -34 - valW, 0, 0), Size = UDim2.new(0, valW, 1, 0), BackgroundTransparency = 1 })
 			go(boxPad, { PaddingLeft = UDim.new(0, 0), PaddingRight = UDim.new(0, 0), PaddingTop = UDim.new(0, 0), PaddingBottom = UDim.new(0, 0) })
@@ -8693,7 +8927,23 @@ function Block:CreateDropdown(o)
 		end
 		return selected or "Choisir..."
 	end
-	local function show() valL.Text = valueText() end
+	local function show()
+		-- V9.20 : avatars à gauche de la valeur affichée
+		local ics = {}
+		if multi then
+			for _, t in ipairs(getMulti()) do
+				if #ics >= 3 then break end
+				local m = meta[t]
+				if m and m.Icon then ics[#ics + 1] = m.Icon end
+			end
+		else
+			local m = selected and meta[selected]
+			if m and m.Icon then ics[1] = m.Icon end
+		end
+		setHeadIcons(ics)
+		valL.Text = valueText()
+		layoutHead()
+	end
 	local function isOn(text)
 		if multi then return selSet[text] == true end
 		return selected == text
@@ -8852,10 +9102,14 @@ function Block:CreateDropdown(o)
 			}, row)
 			local pad = new("UIPadding", { PaddingLeft = UDim.new(0, mt and mt.Icon and (Library.IconSize + 16) or 10), PaddingRight = UDim.new(0, 26),
 				PaddingTop = UDim.new(0, (mt and mt.Desc) and 4 or 0) }, b)
-			if mt and mt.Icon then   -- icône : posée dans la marge gauche (le padding décale aussi les enfants, d'où le -24)
-				new("ImageLabel", { Name = "Icon", BackgroundTransparency = 1, Image = mt.Icon, ScaleType = Enum.ScaleType.Fit,
-					AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, -(Library.IconSize + 6), (mt.Desc and 0.5 or 0.5), (mt.Desc and -2 or 0)),
-					Size = UDim2.fromOffset(Library.IconSize, Library.IconSize), ImageColor3 = mt.Color or Color3.new(1, 1, 1) }, b)
+			if mt and mt.Icon then   -- V9.20 : icône / avatar posé dans la LIGNE (et non dans le bouton à padding) : toujours à gauche du pseudo, centré
+				local isz = math.min(Library.IconSize, rh - 4)
+				local round = mt.Round == true or (mt.Round == nil and string.find(mt.Icon, "rbxthumb://type=Avatar", 1, true) ~= nil)
+				local icn = new("ImageLabel", { Name = "Icon", BackgroundColor3 = T.Off, BackgroundTransparency = round and 0.4 or 1,
+					Image = mt.Icon, ScaleType = round and Enum.ScaleType.Crop or Enum.ScaleType.Fit, Active = false,
+					AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0, (rh - 2) / 2), Size = UDim2.fromOffset(isz, isz),
+					ImageColor3 = (not round and mt.Color) or Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = b.ZIndex + 1 }, row)
+				if round then new("UICorner", { CornerRadius = UDim.new(1, 0) }, icn) end
 			end
 			if mt and mt.Desc then   -- description : petite ligne atténuée sous le nom
 				new("TextLabel", { Name = "Desc", BackgroundTransparency = 1, Text = mt.Desc, TextSize = 10, Font = F_REG,
@@ -10636,6 +10890,7 @@ function Library:SetFavorite(key, on)
 	local star = Library.FavStars[key]
 	if star and star.Parent then tween(star, { TextTransparency = on and 0.05 or 0.8 }, 0.2) end
 	Library.Flags["__favorites"] = favList()
+	if Library._onFavChanged then pcall(Library._onFavChanged) end
 	local w = Library.Window
 	local ft = w and w.FavTab
 	if ft and w.Current == ft and ft.OnSelect then
@@ -11047,10 +11302,11 @@ for _, kind in ipairs(WRAP_KINDS) do
 					Name = "FavStar", Size = UDim2.fromOffset(12, 12), Position = UDim2.fromOffset(1, 1),
 					BackgroundTransparency = 1, Text = "★", TextSize = 10, Font = F_BOLD, TextColor3 = T.Accent,
 					TextTransparency = Library.Favorites[key] and 0.05 or 0.8, AutoButtonColor = false, ZIndex = 6,
+					Visible = Library.ShowFavStars ~= false,
 				}, host)
 				Library.FavStars[key] = star
 				Library.FavEntries[key] = { Kind = kind, Opts = opts, Item = item, Key = key,
-					Tab = tabName, Block = self.Name }
+					Tab = tabName, Block = self.Name, TabObj = self.Tab, BlockObj = self, Frame = e.Frame }
 				star.MouseButton1Click:Connect(function()
 					Library:SetFavorite(key, not Library.Favorites[key])
 				end)
@@ -17832,7 +18088,15 @@ function Library:_buildHomeExplain(sub)
 	live1:CreateSlider({ Name = "Curseur", Min = 0, Max = 100, Step = 5, Default = 40, Suffix = " %" })
 	live1:CreateRangeSlider({ Name = "Curseur à deux poignées", Min = 0, Max = 100, Step = 1, MinGap = 5, Default = { Low = 20, High = 70 } })
 	live1:CreateStepper({ Name = "Compteur", Min = 0, Max = 10, Step = 1, Default = 3, Wrap = true })
-	live1:CreateLabel({ Text = "Astuce : clique sur la valeur d'un curseur pour taper un nombre exact." })
+	live1:CreateLabel({ Text = "Onglets dans un bloc (CreateTabbox) : change d'onglet, le contenu et la hauteur du bloc s'adaptent." })
+	local demoTabbox = live1:CreateTabbox({ Tabs = { "Combat", "Visuel", "Divers" } })
+	demoTabbox.Combat:CreateToggle({ Name = "Aimbot", Keybind = false })
+	demoTabbox.Combat:CreateSlider({ Name = "Portée", Min = 10, Max = 200, Step = 10, Default = 80, Suffix = " m" })
+	demoTabbox.Combat:CreateStepper({ Name = "Cibles max", Min = 1, Max = 10, Step = 1, Default = 3 })
+	demoTabbox.Visuel:CreateToggle({ Name = "ESP", Keybind = false })
+	demoTabbox.Visuel:CreateSlider({ Name = "Champ de vision", Min = 30, Max = 120, Step = 5, Default = 70, Suffix = "°" })
+	demoTabbox.Divers:CreateButton({ Name = "Dire bonjour", Callback = function() say("Onglets", "Bonjour depuis l'onglet « Divers » !", "Success") end })
+	live1:CreateLabel({ Text = "Astuce : clique sur la valeur d'un curseur pour taper un nombre exact · clic droit sur un curseur : réinitialiser ou copier." })
 
 	-- ===================== COLONNE DROITE =====================
 	local start = block("API · démarrage rapide", "Right")
@@ -17881,6 +18145,8 @@ function Library:_buildHomeExplain(sub)
 	}, Default = "Pistolet" })
 	local demoCond = live2:CreateToggle({ Name = "Réglage conditionnel (ShowIf)", Keybind = false })
 	live2:CreateSlider({ Name = "Visible si le toggle est activé", Min = 0, Max = 10, Default = 5, ShowIf = demoCond })
+	local demoGrey = live2:CreateSlider({ Name = "Clic droit : réinit. / copier", Min = 0, Max = 10, Default = 5 })
+	live2:CreateToggle({ Name = "Griser le curseur ci-dessus (Greys)", Keybind = false, Greys = { demoGrey } })
 	live2:CreateColorPicker({ Name = "Sélecteur de couleur", Default = Color3.fromRGB(150, 110, 255) })
 	live2:CreateTextArea({ Name = "Zone de texte", Height = 64, Placeholder = "Plusieurs lignes possibles..." })
 
@@ -19138,11 +19404,11 @@ local function applySearch(win, q)
 					if vis and mf then vis = Library:_isModifiedFrame(e.Frame) end
 				end
 				e.SearchVis = vis
-				e.Frame.Visible = vis and not e.CondHidden   -- ShowIf / HideIf (V9.6) : un élément masqué par sa condition reste masqué
-				if active and vis and not e.CondHidden then n = n + 1 end
+				e.Frame.Visible = vis and not e.CondHidden and not e.RuleHidden   -- ShowIf / HideIf (V9.6) : un élément masqué par sa condition reste masqué
+				if active and vis and not e.CondHidden and not e.RuleHidden then n = n + 1 end
 			end
 			local show = (not active) or n > 0 or (blockHit and not mf)
-			blk.Frame.Visible = show
+			blk.Frame.Visible = show and not blk.RuleHidden
 			if active and show then total = total + math.max(n, 1) end
 			if expand and n > 0 and blk._isCollapsed and blk._isCollapsed() then blk:SetCollapsed(false) end
 		end
@@ -20464,7 +20730,7 @@ function Window:CreateSettingsTab(name, icon, docked)
 	tab._isSettings = true   -- ses toggles ne sont pas listés dans le HUD des actifs
 
 	-- Rangement : les blocs sont répartis en pages (pastilles en haut) au lieu d'une seule liste interminable
-	local subs = tab:CreateSubTabs({ "Apparence", "Thèmes", "Interface", "Curseur", "Notifications", "Joueurs", "Raccourcis & configs" })
+	local subs = tab:CreateSubTabs({ "Apparence", "Thèmes", "Interface", "Curseur", "Notifications", "Joueurs", "Favoris", "Raccourcis & configs" })
 	local blkCount = {}
 	local function BK(group, o)
 		blkCount[group] = (blkCount[group] or 0) + 1
@@ -21375,6 +21641,122 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Content = "Double-clic sur la barre de titre : réduire / restaurer.\nCtrl+R : recentrer la fenêtre.\nBouton = dans la barre de titre : tout replier / déplier.\nLa position et la taille de la fenêtre sont retenues automatiquement (Paramètres > Fenêtre > Verrouiller la position pour les figer).\nCtrl+K : palette de commandes (roue au centre de l'écran, choix de 1 à 0)." })
 
 	-- ───────────── Raccourcis clavier : tous les keybinds, avec saut vers leur emplacement ─────────────
+	-- ───────────── Favoris (V9.20) ─────────────
+	local FV = BK("Favoris", { Name = "Mes favoris", Side = "Left" })
+	FV._noFav = true
+	local FG = BK("Favoris", { Name = "Gestion des favoris", Side = "Right" })
+	FG._noFav = true
+	local fvBuilding = false
+	local rebuildFavs
+	local function favKeys()
+		local out = {}
+		for k, v in pairs(Library.Favorites) do
+			if v then out[#out + 1] = k end
+		end
+		table.sort(out)
+		return out
+	end
+	local function buildFavRow(k)
+		local ent = Library.FavEntries[k]
+		local nm = ent and tostring(ent.Opts and ent.Opts.Name or ent.Kind) or tostring(string.match(k, "[^/]*$") or k)
+		local f, st = makeRow(FV, 42, nm)
+		hover(f, st)
+		label(f, nm, 13, { Position = UDim2.new(0, 12, 0, 4), Size = UDim2.new(1, -118, 0, 18) })
+		label(f, ent and (tostring(ent.Tab) .. " › " .. tostring(ent.Block) .. "  ·  " .. tostring(ent.Kind))
+			or "Élément absent pour l'instant (script rechargé ?)", 10,
+			{ Position = UDim2.new(0, 12, 0, 23), Size = UDim2.new(1, -118, 0, 14), TextColor3 = T.ElementAccent, TextTransparency = 0.2 })
+		local function smallBtn(text, x, w, cb)
+			local btn = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, x, 0.5, 0),
+				Size = UDim2.new(0, w, 0, 26), BackgroundColor3 = T.Off, BackgroundTransparency = 0.4, BorderSizePixel = 0,
+				Text = text, TextColor3 = T.Text, TextSize = 12, Font = F_MED, AutoButtonColor = false }, f)
+			corner(btn, 6)
+			trackStyled(btn, stroke(btn, 0.9), "input")
+			btn.MouseButton1Click:Connect(cb)
+			return btn
+		end
+		smallBtn("✕", -8, 28, function()
+			Library:SetFavorite(k, false)   -- le hook _onFavChanged reconstruit la liste
+		end)
+		smallBtn("Aller", -42, 56, function()
+			local tgt = ent and ent.Frame and { Tab = ent.TabObj, Block = ent.BlockObj, Frame = ent.Frame }
+			if not (tgt and Library:RevealElement(tgt)) then
+				Library:Notify({ Title = "Favoris", Content = "Élément introuvable (onglet fermé ou script rechargé).", Type = "Warning", Duration = 2.5 })
+			end
+		end)
+	end
+	rebuildFavs = function()
+		if fvBuilding then return end
+		fvBuilding = true
+		for _, c in ipairs(FV.Body:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		table.clear(FV.Entries)
+		local keys = favKeys()
+		if #keys == 0 then
+			FV:CreateParagraph({ Title = "Aucun favori",
+				Content = "Clique sur l'étoile ★ en haut à gauche d'un élément pour l'ajouter ici." })
+		else
+			FV:CreateParagraph({ Title = #keys .. (#keys > 1 and " favoris" or " favori"),
+				Content = "« Aller » t'emmène à l'élément · ✕ le retire des favoris." })
+			for _, k in ipairs(keys) do buildFavRow(k) end
+		end
+		fvBuilding = false
+	end
+	Library._onFavChanged = function()
+		if win.Current == tab and tab.CurrentSub == subs.Favoris then task.defer(rebuildFavs) end
+	end
+	subs.Favoris.OnShow = rebuildFavs
+
+	FG:CreateSection("Affichage")
+	FG:CreateToggle({ Name = "Afficher l'étoile ★ sur les éléments", Flag = "ui.favstars", Default = Library.ShowFavStars ~= false,
+		Favorite = false, Keybind = false,
+		Tooltip = "Cache ou montre la petite étoile en haut à gauche de chaque élément. Les favoris déjà choisis restent enregistrés.",
+		Callback = function(v)
+			Library.ShowFavStars = v and true or false
+			for _, s in pairs(Library.FavStars) do
+				if s and s.Parent then s.Visible = Library.ShowFavStars end
+			end
+		end })
+	FG:CreateButton({ Name = "Ouvrir l'onglet Favoris", Favorite = false, Callback = function()
+		local ft = win.FavTab
+		if ft and ft.Select then
+			ft:Select()
+		else
+			Library:Notify({ Title = "Favoris", Content = "Aucun onglet Favoris (Window:CreateFavoritesTab).", Type = "Info", Duration = 3 })
+		end
+	end })
+	FG:CreateSection("Liste")
+	FG:CreateButton({ Name = "Tout retirer des favoris", Favorite = false, Confirm = true, ConfirmText = "Tout retirer ?", Callback = function()
+		local n = 0
+		for _, k in ipairs(favKeys()) do
+			Library:SetFavorite(k, false)
+			n = n + 1
+		end
+		rebuildFavs()
+		Library:Notify({ Title = "Favoris", Content = n .. " favori(s) retiré(s).", Type = "Success", Duration = 2.5 })
+	end })
+	FG:CreateSection("Partage")
+	local fvCode = FG:CreateInput({ Name = "Code", Placeholder = "colle un code de favoris ici", Favorite = false })
+	FG:CreateButton({ Name = "Exporter (copie le code)", Favorite = false, Callback = function()
+		local s = HttpService:JSONEncode(favKeys())
+		fvCode.Set(s)
+		local ok = Library:CopyText(s)
+		Library:Notify({ Title = "Favoris", Content = ok and "Code copié dans le presse-papiers." or "Presse-papiers indisponible : copie le code du champ.",
+			Type = ok and "Success" or "Info", Duration = 3 })
+	end })
+	FG:CreateButton({ Name = "Importer (remplace la liste)", Favorite = false, Confirm = true, ConfirmText = "Remplacer ?", Callback = function()
+		local ok, list = pcall(function() return HttpService:JSONDecode(fvCode.Get()) end)
+		local it = Library.Items["__favorites"]
+		if not ok or type(list) ~= "table" or not it then
+			Library:Notify({ Title = "Favoris", Content = "Code invalide.", Type = "Error", Duration = 3 })
+			return
+		end
+		it:Set(list)
+		rebuildFavs()
+		Library:Notify({ Title = "Favoris", Content = #list .. " favori(s) importé(s).", Type = "Success", Duration = 3 })
+	end })
+	rebuildFavs()
+
 	local KB = BK("Raccourcis & configs", { Name = "Raccourcis clavier", Side = "Right", Collapsed = true })
 	KB._noFav = true
 	local kbRows = {}
@@ -21492,7 +21874,10 @@ function Window:CreateSettingsTab(name, icon, docked)
 		end)
 	end
 	Library._onKeybindChanged = refreshSubs
-	tab.OnSelect = rebuildKeybinds   -- la liste se remet à jour à chaque ouverture de l'onglet
+	tab.OnSelect = function()   -- les listes se remettent à jour à chaque ouverture de l'onglet
+		rebuildKeybinds()
+		if rebuildFavs then rebuildFavs() end
+	end
 	rebuildKeybinds()
 
 	-- ───────────── Configurations ─────────────
@@ -25835,6 +26220,1036 @@ do
 end
 
 -- ============================================================================
+-- V9.20 : RÈGLES ENTRE TOGGLES · SCÈNES 3D / EFFETS
+--
+--   RÈGLES (options de CreateToggle, cibles = toggle, nom de Flag, ou fonction qui renvoie l'un des deux ; une liste ou un seul) :
+--     Disables = { "fly", autreToggle }   activer CE toggle coupe les cibles (une seule fois, à l'activation)
+--     Excludes = { "noclip" }             exclusion MUTUELLE : activer l'un coupe l'autre, dans les deux sens
+--     Enables  = { "esp" }                activer CE toggle active aussi les cibles
+--     Locks    = { "vitesse" }            tant que CE toggle est actif, les cibles sont coupées ET grisées (non cliquables)
+--                                         avec la raison « Désactivé par ... » (DisabledReason)
+--     Hides    = { "noclip", unBloc, unOnglet }   tant que CE toggle est actif, les cibles DISPARAISSENT en se repliant en douceur
+--                                         (ligne, bloc entier ou onglet du menu) et reviennent en s'ouvrant quand il est coupé
+--     HideDisabled = true                 les cibles de Disables / Excludes / Locks sont aussi masquées pendant ce temps
+--     Greys    = { "vitesse", unBloc, unOnglet }   tant que CE toggle est ACTIF, les cibles sont GRISÉES (visibles, non cliquables, voile + raison
+--                                         au survol) mais leur état ne change pas : rien n'est coupé ni masqué
+--     GreysWhenOff = { "portée" }         l'inverse : cibles grisées tant que CE toggle est COUPÉ (réglages qui dépendent du toggle)
+--     GreyReason = "texte" / GreyReasonOff = "texte"   raison affichée au survol d'une cible grisée (sinon un texte par défaut)
+--     Les cibles peuvent être créées PLUS TARD que ce toggle (résolution à l'usage). Exemple :
+--       blk:CreateToggle({ Name = "Vol", Flag = "fly", Excludes = { "noclip" }, Disables = { "walkfast" } })
+--     Library:Exclusive({ t1, t2, t3 }) = raccourci de Library:Group({ ... }, { Exclusive = true }).
+--
+--   3D : blk:CreateScene3D({ Name, Height, Effect = "BlackHole", Color, AutoRotate, Distance, Setup = function(scene) end })
+--     Effets prêts : "BlackHole" · "Orbit" · "Helix" · "Vortex" · "Galaxy" · "Cube" · "Sparkles" · "Fireworks"
+--     scene.AddEffect(nom, { Color = ... })  → handle:Destroy()
+--     scene.AddPart({ Shape = "Block"|"Ball"|"Cylinder"|"Wedge"|"CornerWedge", Size = 1 | Vector3, Position = Vector3, Rotation = Vector3 (degrés),
+--                     Color, Material, Neon = true, Transparency, Reflectance,
+--                     MeshId = "rbxassetid://...", TextureId, MeshScale   (modèle importé),
+--                     Spin = Vector3 (deg/s), Orbit = { Center, Axis, Radius, Speed (deg/s), Phase },
+--                     Float = { Amplitude, Speed }, Pulse = { Amount, Speed }, Velocity = Vector3, Gravity = n,
+--                     Life = secondes (disparaît en fondu), Shrink = true, Update = function(part, dt, age) end })
+--       → handle { Part, Destroy(), SetPosition(v), SetColor(c) }
+--     scene.AddRing({ Radius, Segments, Size, Color, Axis, Speed, Phase })    · scene.AddEmitter({ Rate, Speed, Life, Size, Gravity, Spread, Direction, Origin, Area, Color / Colors })
+--     scene.Emit({ Count, Speed, Life, Size, Origin, Gravity, Spread, Direction, Color / Colors })   (explosion de particules)
+--     scene.OnUpdate(function(dt, temps) end) → h:Disconnect()
+--     scene.SetCamera({ Distance, Yaw, Pitch, FOV, Target }) · scene.GetCamera() · scene.SetAutoRotate(deg/s | false) · scene.Pause(bool) ·
+--     scene.Clear() · scene.SetBackground(Color3 | false) · scene.Destroy() · scene.Instance (cadre) · scene.Viewport (ViewportFrame)
+--     Souris / doigt : glisser = tourner · molette = zoom · clic = étincelles (ClickBurst = false pour couper) · Draggable = false · Zoom = false
+--     Library:Scene3D(unGuiObject, { Effect = "Galaxy" }) : la même scène en SURCOUCHE transparente sur n'importe quel élément d'interface.
+-- ============================================================================
+do
+	-- ---- 1) RÈGLES ENTRE TOGGLES ---------------------------------------------------------------------------------------
+	local origToggle = Block.CreateToggle
+	local ruleDepth = 0
+	local function resolveTarget(x)
+		if type(x) == "function" then
+			local ok, r = pcall(x)
+			x = ok and r or nil
+		end
+		if type(x) == "string" then x = Library.Items[x] end
+		if type(x) == "table" and type(x.Set) == "function" then return x end
+		return nil
+	end
+	local function asList(v)
+		if v == nil or v == false then return {} end
+		if type(v) == "table" and v.Set == nil and v.Get == nil then return v end
+		return { v }
+	end
+	local function isOn(it)
+		if type(it.Get) ~= "function" then return false end
+		local ok, v = pcall(it.Get)
+		return ok and v == true
+	end
+
+	-- ---- masquage FLUIDE (Hides) : la ligne / le bloc / l'onglet se replie en glissant puis disparaît ----
+	local ruleEntries = setmetatable({}, { __mode = "k" })   -- élément -> ses entrées de bloc (rempli par l'enveloppe en bas de section)
+	local hideCount = setmetatable({}, { __mode = "k" })     -- cible -> nombre de toggles qui la masquent
+	local anim = setmetatable({}, { __mode = "k" })
+	local function animateFrame(fr, hidden, instant, e)
+		if not (fr and fr.Parent) then return end
+		local st = anim[fr]
+		if not st then st = { tok = 0 } anim[fr] = st end
+		st.tok = st.tok + 1
+		local my = st.tok
+		local function restore()
+			local o0 = st.orig
+			if o0 then
+				fr.Size, fr.AutomaticSize, fr.ClipsDescendants = o0.Size, o0.Auto, o0.Clip
+				st.orig = nil
+			end
+		end
+		local sc = math.max(pxScale(), 0.05)
+		local animate = Library.Animations ~= false and not instant
+		if hidden then
+			if not fr.Visible then return end
+			if not st.orig then
+				local ah = fr.AbsoluteSize.Y / sc
+				if ah <= 1 and fr.AutomaticSize == Enum.AutomaticSize.None and fr.Size.Y.Scale == 0 then ah = fr.Size.Y.Offset end
+				if ah > 1 then st.fullH = ah end
+			end
+			if not animate then
+				restore()
+				fr.Visible = false
+				return
+			end
+			if not st.orig then st.orig = { Size = fr.Size, Auto = fr.AutomaticSize, Clip = fr.ClipsDescendants } end
+			local sx = st.orig.Size.X
+			local cur = fr.AbsoluteSize.Y / sc
+			fr.AutomaticSize = Enum.AutomaticSize.None
+			fr.ClipsDescendants = true
+			fr.Size = UDim2.new(sx.Scale, sx.Offset, 0, cur)
+			local tw = tween(fr, { Size = UDim2.new(sx.Scale, sx.Offset, 0, 0) }, 0.3)
+			tw.Completed:Connect(function()
+				if st.tok ~= my then return end
+				restore()
+				fr.Visible = false
+			end)
+		else
+			if fr.Visible and not st.orig then return end
+			if e and (e.SearchVis == false or e.CondHidden) then   -- la recherche / ShowIf gardent la main
+				restore()
+				return
+			end
+			local h = st.fullH
+			if not animate or not h or h <= 1 then
+				restore()
+				fr.Visible = true
+				return
+			end
+			if not st.orig then st.orig = { Size = fr.Size, Auto = fr.AutomaticSize, Clip = fr.ClipsDescendants } end
+			local sx = st.orig.Size.X
+			local cur = fr.Visible and (fr.AbsoluteSize.Y / sc) or 0
+			fr.AutomaticSize = Enum.AutomaticSize.None
+			fr.ClipsDescendants = true
+			fr.Size = UDim2.new(sx.Scale, sx.Offset, 0, cur)
+			fr.Visible = true
+			local tw = tween(fr, { Size = UDim2.new(sx.Scale, sx.Offset, 0, h) }, 0.3)
+			tw.Completed:Connect(function()
+				if st.tok ~= my then return end
+				restore()
+			end)
+		end
+	end
+	-- cible = élément (ligne), bloc, ou onglet
+	local function setRuleHidden(t, hidden, instant)
+		if type(t) ~= "table" then return end
+		local ents = ruleEntries[t]
+		if ents then
+			for _, e in ipairs(ents) do
+				e.RuleHidden = hidden or nil
+				animateFrame(e.Frame, hidden, instant, e)
+			end
+		elseif t.Button and t.Page then
+			t.RuleHidden = hidden or nil
+			animateFrame(t.Button, hidden, instant)
+			local w = Library.Window
+			if hidden and w and w.Current == t then   -- l'onglet affiché disparaît : on bascule sur le premier onglet encore visible
+				for _, t2 in ipairs(w.Tabs) do
+					if t2 ~= t and not t2.RuleHidden then
+						pcall(t2.Select, t2)
+						break
+					end
+				end
+			end
+		elseif t.Frame and t.Body then
+			t.RuleHidden = hidden or nil
+			animateFrame(t.Frame, hidden, instant)
+		end
+		if Library._hudRefresh then pcall(Library._hudRefresh) end
+	end
+	local function resolveHide(x)
+		if type(x) == "function" then
+			local ok, r = pcall(x)
+			x = ok and r or nil
+		end
+		if type(x) == "string" then x = Library.Items[x] end
+		return type(x) == "table" and x or nil
+	end
+
+	-- ---- GRISAGE (Greys / GreysWhenOff) : la cible reste visible mais devient grisée et non cliquable, SANS changer son état ----
+	-- cible = élément (ligne), bloc, ou onglet. Plusieurs toggles peuvent griser la même cible : elle se dégrise quand le dernier lâche.
+	local greyCount = setmetatable({}, { __mode = "k" })   -- cible -> nombre de toggles qui la grisent
+	local greyState = setmetatable({}, { __mode = "k" })   -- bloc / onglet -> { Veils, Conns, Reason }
+	local function newVeil(parent, sink, rad, size, st)
+		local ov = Instance.new("TextButton")
+		ov.Name = "GreyOverlay"
+		ov.Size = size
+		ov.BackgroundColor3 = Color3.new(0, 0, 0)
+		ov.BackgroundTransparency = 1
+		ov.BorderSizePixel = 0
+		ov.Text = ""
+		ov.AutoButtonColor = false
+		ov.Active = sink
+		ov.ZIndex = 50
+		ov.Parent = parent
+		corner(ov, rad)
+		if sink then   -- la raison s'affiche au survol du voile
+			local tk = 0
+			ov.MouseEnter:Connect(function()
+				tk += 1
+				local my = tk
+				task.delay(0.2, function()
+					if tk == my and ov.Parent and st.Reason and st.Reason ~= "" and Library._tipShow then
+						Library._tipShow(tostring(st.Reason), ov)
+					end
+				end)
+			end)
+			ov.MouseLeave:Connect(function()
+				tk += 1
+				if Library._tipHide then Library._tipHide() end
+			end)
+		end
+		return ov
+	end
+	-- après le fondu de sortie : si la cible n'a pas été regrisée entre-temps, on retire les voiles et on coupe le suivi de taille
+	local function dropVeils(st)
+		task.delay(0.25, function()
+			if st.On then return end
+			for _, c in ipairs(st.Conns) do c:Disconnect() end
+			table.clear(st.Conns)
+			for k, v in pairs(st.Veils) do
+				st.Veils[k] = nil
+				pcall(function() v:Destroy() end)
+			end
+		end)
+	end
+	local function greyBlock(t, grey, reason)
+		local fr = t.Frame
+		if not (fr and fr.Parent) then return end
+		local st = greyState[t]
+		if not st then st = { Veils = {}, Conns = {} } greyState[t] = st end
+		st.Reason = reason
+		st.On = grey
+		if grey then
+			local body = t.Body
+			local clip = body and body.Parent
+			if not (st.Veils.clip and st.Veils.clip.Parent) and clip and clip ~= fr and clip.Parent == fr then
+				-- ⚠️ pas de Size en Scale sur l'axe Y dans un parent en AutomaticSize : la hauteur du voile suit celle du CORPS (pas celle de clip)
+				local v = newVeil(clip, true, 10, UDim2.new(1, 0, 0, 0), st)
+				local function sync()
+					if v.Parent and body.Parent then
+						v.Size = UDim2.new(1, 0, 0, math.floor(body.AbsoluteSize.Y / math.max(pxScale(), 0.05) + 0.5))
+					end
+				end
+				sync()
+				st.Conns[#st.Conns + 1] = body:GetPropertyChangedSignal("AbsoluteSize"):Connect(sync)
+				st.Veils.clip = v
+			end
+			if not (st.Veils.head and st.Veils.head.Parent) then   -- l'en-tête s'assombrit aussi mais reste cliquable (on peut replier le bloc)
+				local head
+				for _, c in ipairs(fr:GetChildren()) do
+					if c:IsA("TextButton") and c.LayoutOrder == 1 then head = c break end
+				end
+				if head then st.Veils.head = newVeil(head, false, 10, UDim2.new(1, 0, 1, 0), st) end
+			end
+			for k, v in pairs(st.Veils) do
+				v.Active = (k ~= "head")
+				tween(v, { BackgroundTransparency = 0.55 }, 0.2)
+			end
+		else
+			for _, v in pairs(st.Veils) do
+				v.Active = false
+				tween(v, { BackgroundTransparency = 1 }, 0.2)
+			end
+			dropVeils(st)
+		end
+	end
+	local function greyTab(t, grey, reason)
+		local btn = t.Button
+		if not (btn and btn.Parent) then return end
+		local st = greyState[t]
+		if not st then st = { Veils = {}, Conns = {} } greyState[t] = st end
+		st.Reason = reason
+		st.On = grey
+		if grey then
+			if not (st.Veils.btn and st.Veils.btn.Parent) then
+				st.Veils.btn = newVeil(btn, true, 8, UDim2.new(1, 0, 1, 0), st)
+			end
+			st.Veils.btn.Active = true
+			tween(st.Veils.btn, { BackgroundTransparency = 0.5 }, 0.2)
+		else
+			local v = st.Veils.btn
+			if v then
+				v.Active = false
+				tween(v, { BackgroundTransparency = 1 }, 0.2)
+				dropVeils(st)
+			end
+		end
+	end
+	local function setRuleGrey(t, grey, reason)
+		if type(t) ~= "table" then return end
+		if ruleEntries[t] and type(t.SetEnabled) == "function" then
+			pcall(t.SetEnabled, not grey, grey and reason or nil)
+		elseif t.Button and t.Page then
+			greyTab(t, grey, reason)
+		elseif t.Frame and t.Body then
+			greyBlock(t, grey, reason)
+		end
+	end
+
+	function Block:CreateToggle(o)
+		if type(o) ~= "table" or not (o.Disables or o.TurnsOff or o.Excludes or o.Enables or o.Locks or o.Hides
+			or o.Greys or o.GreysWhenOff) then
+			return origToggle(self, o)
+		end
+		local disables, excludes = asList(o.Disables or o.TurnsOff), asList(o.Excludes)
+		local enables, locks = asList(o.Enables), asList(o.Locks)
+		local hideList = {}
+		for _, x in ipairs(asList(o.Hides)) do hideList[#hideList + 1] = x end
+		if o.HideDisabled then   -- les cibles de Disables / Excludes / Locks sont aussi masquées (en fondu) pendant que ce toggle est actif
+			for _, list in ipairs({ disables, excludes, locks }) do
+				for _, x in ipairs(list) do hideList[#hideList + 1] = x end
+			end
+		end
+		local function asTargets(v)   -- une cible seule (élément, bloc, onglet) ou une liste
+			if type(v) == "table" and (v.Frame or v.Button or v.Set or v.Get) then return { v } end
+			return asList(v)
+		end
+		local greyOn, greyOff = asTargets(o.Greys), asTargets(o.GreysWhenOff)   -- grisées quand ce toggle est activé / quand il est coupé
+		local hasGrey = #greyOn > 0 or #greyOff > 0
+		local o2 = table.clone(o)
+		o2.Disables, o2.TurnsOff, o2.Excludes, o2.Enables, o2.Locks, o2.Hides, o2.HideDisabled = nil, nil, nil, nil, nil, nil, nil
+		o2.Greys, o2.GreysWhenOff, o2.GreyReason, o2.GreyReasonOff = nil, nil, nil, nil
+		local item = origToggle(self, o2)
+		if type(item) ~= "table" or type(item.OnChanged) ~= "function" then return item end
+		local title = tostring(o.Name or "un toggle")
+		local reasonOn = o.GreyReason or ("Indisponible tant que « " .. title .. " » est activé")
+		local reasonOff = o.GreyReasonOff or o.GreyReason or ("Active « " .. title .. " » pour utiliser ceci")
+
+		local held = {}
+		local function applyHides(v, instant)   -- renvoie true s'il reste des cibles introuvables (créées plus tard)
+			local pending = false
+			for _, x in ipairs(hideList) do
+				local t = resolveHide(x)
+				if not t then
+					pending = true
+				elseif v and not held[t] then
+					held[t] = true
+					hideCount[t] = (hideCount[t] or 0) + 1
+					setRuleHidden(t, true, instant)
+				elseif not v and held[t] then
+					held[t] = nil
+					hideCount[t] = math.max((hideCount[t] or 1) - 1, 0)
+					if hideCount[t] == 0 then setRuleHidden(t, false, instant) end
+				end
+			end
+			return pending
+		end
+		local heldOn, heldOff = {}, {}
+		local function applyGreys(v)   -- renvoie true s'il reste des cibles introuvables (créées plus tard)
+			local pending = false
+			local function pass(list, held, active, reason)
+				for _, x in ipairs(list) do
+					local t = resolveHide(x)
+					if not t then
+						pending = true
+					elseif active and not held[t] then
+						held[t] = true
+						greyCount[t] = (greyCount[t] or 0) + 1
+						setRuleGrey(t, true, reason)
+					elseif not active and held[t] then
+						held[t] = nil
+						greyCount[t] = math.max((greyCount[t] or 1) - 1, 0)
+						if greyCount[t] == 0 then setRuleGrey(t, false) end
+					end
+				end
+			end
+			pass(greyOn, heldOn, v, reasonOn)
+			pass(greyOff, heldOff, not v, reasonOff)
+			return pending
+		end
+		local function apply(v)
+			if ruleDepth >= 4 then return end
+			ruleDepth = ruleDepth + 1
+			if v then
+				for _, list in ipairs({ disables, excludes }) do
+					for _, x in ipairs(list) do
+						local it = resolveTarget(x)
+						if it and it ~= item and isOn(it) then pcall(it.Set, false) end
+					end
+				end
+				for _, x in ipairs(enables) do
+					local it = resolveTarget(x)
+					if it and it ~= item and not isOn(it) then pcall(it.Set, true) end
+				end
+			end
+			for _, x in ipairs(locks) do
+				local it = resolveTarget(x)
+				if it and it ~= item then
+					if v and isOn(it) then pcall(it.Set, false) end
+					if type(it.SetEnabled) == "function" then
+						pcall(it.SetEnabled, not v, v and ("Désactivé par « " .. title .. " »") or nil)
+					end
+				end
+			end
+			ruleDepth = ruleDepth - 1
+		end
+		item.OnChanged(function(v)
+			v = v and true or false
+			apply(v)
+			if #hideList > 0 then applyHides(v) end
+			if hasGrey then applyGreys(v) end
+		end)
+
+		-- exclusion mutuelle : quand une cible de Excludes s'active, ce toggle-ci se coupe aussi
+		if #excludes > 0 then
+			local hooked = {}
+			task.spawn(function()
+				for _ = 1, 20 do
+					local pending = false
+					for _, x in ipairs(excludes) do
+						local it = resolveTarget(x)
+						if it then
+							if not hooked[it] and type(it.OnChanged) == "function" then
+								hooked[it] = true
+								it.OnChanged(function(v)
+									if v and ruleDepth < 4 and isOn(item) then
+										ruleDepth = ruleDepth + 1
+										pcall(item.Set, false)
+										ruleDepth = ruleDepth - 1
+									end
+								end)
+							end
+						else
+							pending = true   -- la cible n'existe pas encore : on réessaie
+						end
+					end
+					if not pending then return end
+					task.wait(0.5)
+				end
+			end)
+		end
+		-- état de départ (Default = true)
+		task.defer(function()
+			if isOn(item) then
+				apply(true)
+				if #hideList > 0 then applyHides(true, true) end   -- état de départ : sans animation
+			end
+			if hasGrey then applyGreys(isOn(item)) end   -- GreysWhenOff : un toggle coupé au départ grise tout de suite ses cibles
+		end)
+		if hasGrey then   -- cibles créées après ce toggle : on réessaie un peu
+			task.spawn(function()
+				for _ = 1, 20 do
+					task.wait(0.5)
+					if not applyGreys(isOn(item)) then return end
+				end
+			end)
+		end
+		if #hideList > 0 then   -- cibles créées après ce toggle : on réessaie un peu
+			task.spawn(function()
+				for _ = 1, 20 do
+					task.wait(0.5)
+					if not isOn(item) then return end
+					if not applyHides(true, true) then return end
+				end
+			end)
+		end
+		return item
+	end
+
+	function Library.Exclusive(...)
+		local items, opts = unself(Library, ...)
+		opts = type(opts) == "table" and opts or {}
+		opts.Exclusive = true
+		return Library.Group(items, opts)
+	end
+
+	-- ---- 2) SCÈNES 3D ---------------------------------------------------------------------------------------------------
+	local function vec3(v, d)
+		if typeof(v) == "Vector3" then return v end
+		if type(v) == "number" then return Vector3.new(v, v, v) end
+		if type(v) == "table" then return Vector3.new(v[1] or v.X or 0, v[2] or v.Y or 0, v[3] or v.Z or 0) end
+		return d or Vector3.new(0, 0, 0)
+	end
+	local function matOf(m)
+		if typeof(m) == "EnumItem" then return m end
+		if type(m) == "string" then
+			local ok, e = pcall(function() return Enum.Material[m] end)
+			if ok and e then return e end
+		end
+		return Enum.Material.SmoothPlastic
+	end
+	local function rotCF(r)
+		r = vec3(r)
+		return CFrame.Angles(math.rad(r.X), math.rad(r.Y), math.rad(r.Z))
+	end
+
+	local function buildScene(parent, o)
+		local overlay = o.Overlay == true
+		local h = math.clamp(tonumber(o.Height) or 220, 100, 520)
+		local scene = {}
+		local cap = math.clamp(tonumber(o.MaxParts) or 450, 20, 1500)
+		local accent = typeof(o.Color) == "Color3" and o.Color or T.Accent
+
+		local pos = overlay and UDim2.new(0, 0, 0, 0) or UDim2.new(0, 8, 0, 6)
+		local size = overlay and UDim2.new(1, 0, 1, 0) or UDim2.new(1, -16, 0, h)
+		local bg
+		local function makeBg(c)
+			if bg then bg:Destroy() bg = nil end
+			if c == false or overlay then return end
+			bg = new("Frame", { Position = pos, Size = size, BackgroundColor3 = typeof(c) == "Color3" and c or Color3.new(1, 1, 1),
+				BorderSizePixel = 0 }, parent)
+			corner(bg, 6)
+			if typeof(c) ~= "Color3" then
+				new("UIGradient", { Rotation = 90, Color = ColorSequence.new(Color3.fromRGB(40, 40, 48), Color3.fromRGB(8, 8, 11)) }, bg)
+			end
+			bg.ZIndex = 0
+			scene.Background = bg
+		end
+		makeBg(o.Background)
+
+		local vp = new("ViewportFrame", { Position = pos, Size = size, BackgroundTransparency = 1, BorderSizePixel = 0,
+			Ambient = Color3.fromRGB(150, 150, 158), LightColor = Color3.new(1, 1, 1), LightDirection = Vector3.new(-0.6, -1, -0.5),
+			ClipsDescendants = true, Active = (not overlay) and o.Draggable ~= false, ZIndex = overlay and (tonumber(o.ZIndex) or 5) or 1 }, parent)
+		if not overlay then corner(vp, 6) end
+		local cam = Instance.new("Camera")
+		cam.FieldOfView = tonumber(o.FOV) or 40
+		cam.Parent = vp
+		vp.CurrentCamera = cam
+		local world = Instance.new("WorldModel")
+		world.Name = "Scene3D"
+		world.Parent = vp
+
+		local cs = { Yaw = math.rad(tonumber(o.Yaw) or 25), Pitch = math.rad(tonumber(o.Pitch) or -18),
+			Dist = tonumber(o.Distance) or 9, Target = vec3(o.Target) }
+		local auto = (o.AutoRotate == false) and 0 or (tonumber(o.AutoRotate) or 18)
+		local entries, hooks, effHooks = {}, {}, {}
+		local clock, paused, destroyed = 0, false, false
+		local dragging, moved, idleSince = false, 0, 0
+
+		local function placeCam()
+			cam.CFrame = CFrame.new(cs.Target) * CFrame.Angles(0, cs.Yaw, 0) * CFrame.Angles(cs.Pitch, 0, 0) * CFrame.new(0, 0, cs.Dist)
+		end
+		placeCam()
+
+		local function mkPart(p)
+			local shape = string.lower(tostring(p.Shape or "Block"))
+			local part
+			if shape == "wedge" then
+				part = Instance.new("WedgePart")
+			elseif shape == "cornerwedge" then
+				part = Instance.new("CornerWedgePart")
+			else
+				part = Instance.new("Part")
+				if shape == "ball" or shape == "sphere" then part.Shape = Enum.PartType.Ball
+				elseif shape == "cylinder" then part.Shape = Enum.PartType.Cylinder end
+			end
+			part.Anchored, part.CanCollide, part.CanTouch, part.CanQuery, part.CastShadow = true, false, false, false, false
+			part.TopSurface, part.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
+			part.Size = vec3(p.Size, Vector3.new(1, 1, 1))
+			part.Color = typeof(p.Color) == "Color3" and p.Color or accent
+			part.Material = p.Neon and Enum.Material.Neon or matOf(p.Material)
+			part.Transparency = tonumber(p.Transparency) or 0
+			part.Reflectance = tonumber(p.Reflectance) or 0
+			if p.MeshId then
+				local m = Instance.new("SpecialMesh")
+				m.MeshType = Enum.MeshType.FileMesh
+				m.MeshId = tostring(p.MeshId)
+				if p.TextureId then m.TextureId = tostring(p.TextureId) end
+				m.Scale = vec3(p.MeshScale, Vector3.new(1, 1, 1))
+				m.Parent = part
+			end
+			return part
+		end
+
+		local function addEntry(p)
+			if #entries >= cap then return nil end
+			p = type(p) == "table" and p or {}
+			local part = mkPart(p)
+			local life = tonumber(p.Life)
+			local e = { Part = part, born = clock, life = life, pos = vec3(p.Position), rot = rotCF(p.Rotation),
+				baseSize = part.Size, baseT = part.Transparency, grav = tonumber(p.Gravity) or 0,
+				vel = p.Velocity and vec3(p.Velocity) or nil, spin = p.Spin and vec3(p.Spin) or nil,
+				shrink = p.Shrink == true, fade = (life ~= nil) and p.Fade ~= false,
+				update = type(p.Update) == "function" and p.Update or nil }
+			if type(p.Orbit) == "table" then
+				local ob = p.Orbit
+				local axis = vec3(ob.Axis, Vector3.new(0, 1, 0))
+				if axis.Magnitude < 0.001 then axis = Vector3.new(0, 1, 0) end
+				axis = axis.Unit
+				local perp = axis:Cross(Vector3.new(0, 0, 1))
+				if perp.Magnitude < 0.001 then perp = axis:Cross(Vector3.new(1, 0, 0)) end
+				e.orbit = { Center = vec3(ob.Center), Axis = axis, Start = perp.Unit * (tonumber(ob.Radius) or 3),
+					Speed = tonumber(ob.Speed) or 40, Phase = tonumber(ob.Phase) or 0 }
+			end
+			if type(p.Float) == "table" then
+				e.float = { Amp = tonumber(p.Float.Amplitude) or 0.3, Speed = tonumber(p.Float.Speed) or 2, Phase = tonumber(p.Float.Phase) or 0 }
+			end
+			if type(p.Pulse) == "table" then
+				e.pulse = { Amt = tonumber(p.Pulse.Amount) or 0.2, Speed = tonumber(p.Pulse.Speed) or 3, Phase = tonumber(p.Pulse.Phase) or 0 }
+			end
+			part.CFrame = CFrame.new(e.pos) * e.rot
+			part.Parent = world
+			entries[#entries + 1] = e
+			local handle = { Part = part }
+			handle.Destroy = function() e.dead = true end
+			handle.SetPosition = function(...) e.pos = vec3((unself(handle, ...))) end
+			handle.SetColor = function(...)
+				local c = unself(handle, ...)
+				if typeof(c) == "Color3" then part.Color = c end
+			end
+			return handle
+		end
+
+		local function step(dt)
+			clock = clock + dt
+			for i = #entries, 1, -1 do
+				local e = entries[i]
+				local part = e.Part
+				local age = clock - e.born
+				if e.dead or not part.Parent or (e.life and age >= e.life) then
+					part:Destroy()
+					table.remove(entries, i)
+				else
+					if e.vel then
+						e.pos = e.pos + e.vel * dt
+						if e.grav ~= 0 then e.vel = e.vel - Vector3.new(0, e.grav * dt, 0) end
+					end
+					if e.spin then
+						e.rot = e.rot * CFrame.Angles(math.rad(e.spin.X * dt), math.rad(e.spin.Y * dt), math.rad(e.spin.Z * dt))
+					end
+					local pp = e.pos
+					if e.orbit then
+						local ob = e.orbit
+						pp = ob.Center + (CFrame.fromAxisAngle(ob.Axis, math.rad(ob.Phase + ob.Speed * age)) * ob.Start) + e.pos
+					end
+					if e.float then
+						pp = pp + Vector3.new(0, e.float.Amp * math.sin(e.float.Speed * age + e.float.Phase), 0)
+					end
+					part.CFrame = CFrame.new(pp) * e.rot
+					local k = 1
+					if e.pulse then k = 1 + e.pulse.Amt * math.sin(e.pulse.Speed * age + e.pulse.Phase) end
+					if e.life then
+						local r = math.clamp(age / e.life, 0, 1)
+						if e.shrink then k = k * (1 - r) end
+						if e.fade then part.Transparency = e.baseT + (1 - e.baseT) * r * r end
+					end
+					if k ~= 1 then part.Size = e.baseSize * math.max(k, 0.02) end
+					if e.update then
+						local ok, err = pcall(e.update, part, dt, age)
+						if not ok then
+							warn("[Ui-Lib] Scene3D Update : " .. tostring(err))
+							e.update = nil
+						end
+					end
+				end
+			end
+		end
+
+		-- particules
+		local function randDir(dir, spread)
+			local cosMax = math.cos(math.rad(math.clamp(spread, 0, 360) / 2))
+			local v
+			for _ = 1, 10 do
+				v = Vector3.new(math.random() * 2 - 1, math.random() * 2 - 1, math.random() * 2 - 1)
+				if v.Magnitude > 0.05 then
+					v = v.Unit
+					if spread >= 360 or v:Dot(dir) >= cosMax then return v end
+				end
+			end
+			return dir
+		end
+		local function emit(p)
+			p = type(p) == "table" and p or {}
+			local n = math.clamp(math.floor(tonumber(p.Count) or 20), 1, 200)
+			local speed = tonumber(p.Speed) or 3
+			local spread = tonumber(p.Spread) or 360
+			local origin = vec3(p.Origin)
+			local dir = p.Direction and vec3(p.Direction) or Vector3.new(0, 1, 0)
+			dir = dir.Magnitude > 0.001 and dir.Unit or Vector3.new(0, 1, 0)
+			local area = tonumber(p.Area) or 0
+			local colors = type(p.Colors) == "table" and #p.Colors > 0 and p.Colors or nil
+			for _ = 1, n do
+				local v = randDir(dir, spread)
+				local from = origin
+				if area > 0 then from = origin + Vector3.new((math.random() - 0.5) * 2 * area, 0, (math.random() - 0.5) * 2 * area) end
+				addEntry({ Shape = p.Shape or "Ball", Size = tonumber(p.Size) or 0.12, Neon = p.Neon ~= false, Material = p.Material,
+					Color = colors and colors[math.random(#colors)] or p.Color, Position = from,
+					Velocity = v * speed * (0.5 + math.random()), Gravity = p.Gravity,
+					Life = (tonumber(p.Life) or 1.2) * (0.7 + math.random() * 0.6), Shrink = p.Shrink ~= false })
+			end
+		end
+
+		local function addHook(list, fn)
+			local hk = { Connected = true, Fn = fn }
+			hk.Disconnect = function()
+				hk.Connected = false
+				local i = table.find(list, hk)
+				if i then table.remove(list, i) end
+			end
+			hk.disconnect = hk.Disconnect
+			list[#list + 1] = hk
+			return hk
+		end
+
+		-- ---- boucle de rendu (ne tourne que si la scène est réellement visible) ----
+		local lastCheck, shown = 0, true
+		local function isShown()
+			local now = os.clock()
+			if now - lastCheck < 0.3 then return shown end
+			lastCheck = now
+			local s, cur = true, vp
+			while cur and cur ~= game do
+				if cur:IsA("GuiObject") and not cur.Visible then s = false break end
+				if cur:IsA("ScreenGui") then
+					s = s and cur.Enabled
+					break
+				end
+				cur = cur.Parent
+			end
+			shown = s and vp.AbsoluteSize.X > 0
+			return shown
+		end
+		local conn
+		local function destroy()
+			if destroyed then return end
+			destroyed = true
+			if conn then conn:Disconnect() end
+			table.clear(hooks)
+			table.clear(effHooks)
+			for _, e in ipairs(entries) do pcall(function() e.Part:Destroy() end) end
+			table.clear(entries)
+			if bg then pcall(function() bg:Destroy() end) end
+			pcall(function() vp:Destroy() end)
+		end
+		conn = RunService.RenderStepped:Connect(function(dt)
+			if destroyed then return end
+			if not vp.Parent then destroy() return end
+			if paused or not isShown() then return end
+			dt = math.min(dt, 0.1)
+			if auto ~= 0 and not dragging and (os.clock() - idleSince) > 1.2 then cs.Yaw = cs.Yaw + math.rad(auto) * dt end
+			placeCam()
+			step(dt)
+			for _, hk in ipairs(table.clone(hooks)) do
+				if hk.Connected then
+					local ok, err = pcall(hk.Fn, dt, clock)
+					if not ok then
+						warn("[Ui-Lib] Scene3D.OnUpdate : " .. tostring(err))
+						hk.Disconnect()
+					end
+				end
+			end
+		end)
+		track(conn)
+
+		-- ---- souris / doigt : glisser = tourner, molette = zoom, clic = étincelles ----
+		if not overlay and o.Draggable ~= false then
+			vp.InputBegan:Connect(function(i)
+				if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+					dragging, moved = true, 0
+				end
+			end)
+			track(UIS.InputChanged:Connect(function(i)
+				if not dragging then return end
+				if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then
+					local d = i.Delta
+					cs.Yaw = cs.Yaw - d.X * 0.01
+					cs.Pitch = math.clamp(cs.Pitch - d.Y * 0.01, -1.4, 1.4)
+					moved = moved + math.abs(d.X) + math.abs(d.Y)
+				end
+			end))
+			track(UIS.InputEnded:Connect(function(i)
+				if not dragging then return end
+				if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+					dragging = false
+					idleSince = os.clock()
+					if moved < 4 and o.ClickBurst ~= false then
+						emit({ Count = 22, Speed = 3, Size = 0.1, Life = 0.9, Color = accent })
+					end
+				end
+			end))
+			if o.Zoom ~= false then
+				vp.InputChanged:Connect(function(i)
+					if i.UserInputType == Enum.UserInputType.MouseWheel then
+						cs.Dist = math.clamp(cs.Dist - i.Position.Z * 0.8, 2, 40)
+					end
+				end)
+			end
+		end
+
+		-- ---- API ----
+		scene.Instance, scene.Viewport, scene.Camera, scene.World = parent, vp, cam, world
+		scene.AddPart = function(...) return addEntry((unself(scene, ...))) end
+		scene.Emit = function(...) emit((unself(scene, ...))) end
+		scene.OnUpdate = function(...)
+			local fn = unself(scene, ...)
+			if type(fn) ~= "function" then error("Scene3D.OnUpdate : une fonction est attendue", 2) end
+			return addHook(hooks, fn)
+		end
+		scene.AddEmitter = function(...)
+			local p = unself(scene, ...)
+			p = type(p) == "table" and p or {}
+			local rate, acc, hd = tonumber(p.Rate) or 20, 0, {}
+			local hk = addHook(hooks, function(dt)
+				if hd.Paused then return end
+				acc = acc + dt * rate
+				local n = math.floor(acc)
+				if n > 0 then
+					acc = acc - n
+					local q = table.clone(p)
+					q.Count = n
+					emit(q)
+				end
+			end)
+			effHooks[#effHooks + 1] = hk
+			hd.Destroy = function() hk.Disconnect() end
+			return hd
+		end
+		scene.AddRing = function(...)
+			local p = unself(scene, ...)
+			p = type(p) == "table" and p or {}
+			local n = math.clamp(math.floor(tonumber(p.Segments) or 36), 3, 200)
+			local group = {}
+			for i = 1, n do
+				group[#group + 1] = addEntry({ Shape = p.Shape or "Ball", Size = tonumber(p.Size) or 0.1, Neon = p.Neon ~= false,
+					Color = p.Color, Transparency = p.Transparency, Material = p.Material,
+					Orbit = { Axis = p.Axis, Radius = tonumber(p.Radius) or 3, Speed = tonumber(p.Speed) or 0,
+						Phase = (tonumber(p.Phase) or 0) + i * 360 / n, Center = p.Center } })
+			end
+			return { Destroy = function() for _, g in ipairs(group) do g.Destroy() end end }
+		end
+
+		-- ---- effets prêts à l'emploi ----
+		local PRE = {}
+		local function bag()
+			local g = {}
+			return g, function(x) if x then g[#g + 1] = x end end
+		end
+		local function dispose(g) return { Destroy = function() for _, x in ipairs(g) do x.Destroy() end end } end
+		local grey = Color3.fromRGB(150, 150, 160)
+
+		PRE.blackhole = function(p)
+			local c = p.Color or accent
+			local g, add = bag()
+			add(addEntry({ Shape = "Ball", Size = 1.5, Color = Color3.new(0, 0, 0), Material = "SmoothPlastic" }))
+			add(addEntry({ Shape = "Ball", Size = 1.8, Color = c, Neon = true, Transparency = 0.82, Pulse = { Amount = 0.06, Speed = 2.4 } }))
+			local tilt = Vector3.new(0.18, 1, 0.12)
+			local rings = { { 2.3, 30, 55 }, { 3.0, 40, 38 }, { 3.8, 52, 26 } }
+			for ri, r in ipairs(rings) do
+				for i = 1, r[2] do
+					add(addEntry({ Shape = "Ball", Size = 0.09 + 0.03 * (ri % 2), Neon = true, Color = c:Lerp(grey, (ri - 1) / 3),
+						Transparency = 0.05 + 0.12 * (ri - 1),
+						Orbit = { Axis = tilt, Radius = r[1], Speed = r[3], Phase = i * 360 / r[2] + ri * 17 } }))
+				end
+			end
+			return dispose(g)
+		end
+		PRE.orbit = function(p)
+			local c = p.Color or accent
+			local g, add = bag()
+			add(addEntry({ Shape = "Ball", Size = 1.4, Color = c, Neon = true, Pulse = { Amount = 0.08, Speed = 2 } }))
+			local axes = { Vector3.new(0, 1, 0), Vector3.new(1, 0.4, 0), Vector3.new(-0.5, 0.3, 1) }
+			for i, ax in ipairs(axes) do
+				local rad = 1.9 + i * 0.7
+				for s = 1, 28 do
+					add(addEntry({ Shape = "Ball", Size = 0.05, Neon = true, Color = c, Transparency = 0.5,
+						Orbit = { Axis = ax, Radius = rad, Speed = 0, Phase = s * 360 / 28 } }))
+				end
+				add(addEntry({ Shape = "Ball", Size = 0.32, Neon = true, Color = c,
+					Orbit = { Axis = ax, Radius = rad, Speed = 78 - i * 14, Phase = i * 90 } }))
+			end
+			return dispose(g)
+		end
+		PRE.helix = function(p)
+			local c = p.Color or accent
+			local g, add = bag()
+			local n = 34
+			for strand = 0, 1 do
+				for i = 1, n do
+					add(addEntry({ Shape = "Ball", Size = 0.16, Neon = true, Color = strand == 0 and c or grey,
+						Orbit = { Axis = Vector3.new(0, 1, 0), Radius = 1.2, Speed = 60, Phase = i * 20 + strand * 180,
+							Center = Vector3.new(0, (i - n / 2) * 0.17, 0) } }))
+				end
+			end
+			for i = 2, n, 3 do   -- barreaux : tournent à la même vitesse que les brins
+				add(addEntry({ Shape = "Block", Size = Vector3.new(2.4, 0.03, 0.03), Neon = true, Color = c, Transparency = 0.6,
+					Position = Vector3.new(0, (i - n / 2) * 0.17, 0), Rotation = Vector3.new(0, i * 20, 0), Spin = Vector3.new(0, 60, 0) }))
+			end
+			return dispose(g)
+		end
+		PRE.vortex = function(p)
+			local c = p.Color or accent
+			local g, add = bag()
+			local n = 120
+			for i = 1, n do
+				local t = i / n
+				add(addEntry({ Shape = "Ball", Size = 0.08 + 0.06 * (1 - t), Neon = true, Color = c:Lerp(grey, t * 0.6), Transparency = 0.1 + 0.5 * t,
+					Orbit = { Axis = Vector3.new(0, 1, 0), Radius = 0.3 + 2.2 * t, Speed = 140 - 100 * t, Phase = i * 47,
+						Center = Vector3.new(0, (t - 0.5) * 4, 0) } }))
+			end
+			return dispose(g)
+		end
+		PRE.galaxy = function(p)
+			local c = p.Color or accent
+			local g, add = bag()
+			local rnd = Random.new(7)
+			add(addEntry({ Shape = "Ball", Size = 0.5, Color = c, Neon = true, Transparency = 0.2, Pulse = { Amount = 0.1, Speed = 1.6 } }))
+			for _ = 1, 170 do
+				local r = 0.6 + math.sqrt(rnd:NextNumber()) * 4
+				add(addEntry({ Shape = "Ball", Size = 0.05 + rnd:NextNumber() * 0.07, Neon = true,
+					Color = c:Lerp(grey, rnd:NextNumber() * 0.8), Transparency = rnd:NextNumber() * 0.5,
+					Orbit = { Axis = Vector3.new(0.12, 1, 0.08), Radius = r, Speed = 120 / (r + 0.5), Phase = rnd:NextNumber() * 360,
+						Center = Vector3.new(0, (rnd:NextNumber() - 0.5) * 0.4 / (r * 0.5), 0) } }))
+			end
+			return dispose(g)
+		end
+		PRE.cube = function(p)
+			local c = p.Color or accent
+			local g, add = bag()
+			local hf = 1.1
+			for a = 1, 3 do
+				local b, cc = (a % 3) + 1, ((a + 1) % 3) + 1
+				for _, sa in ipairs({ -1, 1 }) do
+					for _, sb in ipairs({ -1, 1 }) do
+						local ps, sz = { 0, 0, 0 }, { 0.05, 0.05, 0.05 }
+						ps[b], ps[cc] = sa * hf, sb * hf
+						sz[a] = 2 * hf + 0.05
+						add(addEntry({ Shape = "Block", Size = Vector3.new(sz[1], sz[2], sz[3]), Position = Vector3.new(ps[1], ps[2], ps[3]),
+							Neon = true, Color = c }))
+					end
+				end
+			end
+			add(addEntry({ Shape = "Block", Size = 0.9, Neon = true, Color = c, Transparency = 0.35, Spin = Vector3.new(40, 60, 25),
+				Pulse = { Amount = 0.12, Speed = 2 } }))
+			return dispose(g)
+		end
+		PRE.sparkles = function(p)
+			return scene.AddEmitter({ Rate = 14, Speed = 0.8, Direction = Vector3.new(0, 1, 0), Spread = 80, Life = 2.2, Size = 0.08,
+				Gravity = -0.3, Origin = Vector3.new(0, -1.6, 0), Area = 2.5, Color = p.Color or accent })
+		end
+		PRE.fireworks = function(p)
+			local c = p.Color or accent
+			local colors = type(p.Colors) == "table" and p.Colors or { c, Color3.new(1, 1, 1), grey }
+			local acc = 0
+			local hk = addHook(hooks, function(dt)
+				acc = acc + dt
+				if acc >= (tonumber(p.Interval) or 1.1) then
+					acc = 0
+					emit({ Count = 36, Speed = 3.2, Size = 0.1, Life = 1.3, Gravity = 2.5, Colors = colors,
+						Origin = Vector3.new((math.random() - 0.5) * 4, (math.random() - 0.3) * 2.5, (math.random() - 0.5) * 3) })
+				end
+			end)
+			effHooks[#effHooks + 1] = hk
+			return { Destroy = function() hk.Disconnect() end }
+		end
+
+		local EFFECT_NAMES = { "BlackHole", "Orbit", "Helix", "Vortex", "Galaxy", "Cube", "Sparkles", "Fireworks" }
+		scene.Effects = EFFECT_NAMES
+		scene.AddEffect = function(...)
+			local name, p = unself(scene, ...)
+			if type(name) == "table" then name, p = name.Name or name.Effect, name end
+			local fn = PRE[string.lower(tostring(name or ""))]
+			if not fn then
+				warn("[Ui-Lib] Scene3D.AddEffect : effet inconnu « " .. tostring(name) .. " » (" .. table.concat(EFFECT_NAMES, ", ") .. ")")
+				return nil
+			end
+			return fn(type(p) == "table" and p or {})
+		end
+		scene.Clear = function()
+			for _, hk in ipairs(table.clone(effHooks)) do hk.Disconnect() end
+			table.clear(effHooks)
+			for _, e in ipairs(entries) do pcall(function() e.Part:Destroy() end) end
+			table.clear(entries)
+		end
+		scene.SetCamera = function(...)
+			local c = unself(scene, ...)
+			if type(c) ~= "table" then return end
+			if c.Distance then cs.Dist = math.clamp(tonumber(c.Distance) or cs.Dist, 1, 80) end
+			if c.Yaw then cs.Yaw = math.rad(tonumber(c.Yaw) or 0) end
+			if c.Pitch then cs.Pitch = math.rad(math.clamp(tonumber(c.Pitch) or 0, -80, 80)) end
+			if c.FOV then cam.FieldOfView = math.clamp(tonumber(c.FOV) or 40, 10, 100) end
+			if c.Target then cs.Target = vec3(c.Target) end
+			placeCam()
+		end
+		scene.GetCamera = function()
+			return { Distance = cs.Dist, Yaw = math.deg(cs.Yaw), Pitch = math.deg(cs.Pitch), FOV = cam.FieldOfView, Target = cs.Target }
+		end
+		scene.SetAutoRotate = function(...)
+			local v = unself(scene, ...)
+			auto = (v == false or v == nil) and 0 or (tonumber(v) or 0)
+		end
+		scene.Pause = function(...) paused = (unself(scene, ...)) ~= false end
+		scene.SetBackground = function(...)
+			local c = unself(scene, ...)
+			makeBg(c == nil and false or c)
+		end
+		scene.Destroy = destroy
+
+		local eff = o.Effect or o.Preset
+		if type(eff) == "string" then scene.AddEffect(eff, o)
+		elseif type(eff) == "table" then
+			for _, nm in ipairs(eff) do scene.AddEffect(nm, o) end
+		end
+		if type(o.Setup) == "function" then
+			local ok, err = pcall(o.Setup, scene)
+			if not ok then warn("[Ui-Lib] Scene3D Setup : " .. tostring(err)) end
+		end
+		return scene
+	end
+
+	function Block:CreateScene3D(o)
+		if type(o) ~= "table" then o = {} end
+		local h = math.clamp(tonumber(o.Height) or 220, 100, 520)
+		local f = makeRow(self, h + 12, o.Name or "Scène 3D")
+		local o2 = table.clone(o)
+		o2.Overlay = false
+		return buildScene(f, o2)
+	end
+
+	function Library.Scene3D(...)
+		local parent, o = unself(Library, ...)
+		if typeof(parent) ~= "Instance" or not parent:IsA("GuiObject") then
+			error("Library:Scene3D : un GuiObject parent est attendu", 2)
+		end
+		o = type(o) == "table" and table.clone(o) or {}
+		o.Overlay = true
+		if o.Draggable == nil then o.Draggable = false end
+		return buildScene(parent, o)
+	end
+
+	-- ---- 3) SUIVI DES LIGNES (pour Hides : retrouver les lignes d'un élément à partir de l'élément) ----
+	local names = {}
+	for k, fn in pairs(Block) do
+		if type(k) == "string" and string.sub(k, 1, 6) == "Create" and type(fn) == "function" then names[#names + 1] = k end
+	end
+	for _, k in ipairs(names) do
+		local orig = Block[k]
+		Block[k] = function(self, o, ...)
+			if type(self) ~= "table" or not self.Entries then return orig(self, o, ...) end
+			local n0 = #self.Entries
+			local a, b, c = orig(self, o, ...)
+			if type(a) == "table" then
+				local ents = {}
+				for i = n0 + 1, #self.Entries do ents[#ents + 1] = self.Entries[i] end
+				if #ents > 0 then ruleEntries[a] = ents end
+			end
+			return a, b, c
+		end
+	end
+end
+
+
+-- ============================================================================
 -- V9.18 (A) : TABBOX · BOÎTE DE DÉPENDANCE · VIDÉO
 --   Placé AVANT les systèmes ShowIf / SetEnabled / Risky : ces trois méthodes en héritent automatiquement
 --   (ShowIf, HideIf, Enabled, Risky, DisabledReason, Destroy, SetEnabled fonctionnent dessus).
@@ -26087,7 +27502,7 @@ do
 		for _, e in ipairs(rec.Entries) do
 			e.CondHidden = hidden or nil
 			if e.Frame and e.Frame.Parent then
-				e.Frame.Visible = (not hidden) and e.SearchVis ~= false   -- la recherche en cours garde la main si elle filtre déjà la ligne
+				e.Frame.Visible = (not hidden) and e.SearchVis ~= false and not e.RuleHidden   -- la recherche en cours garde la main si elle filtre déjà la ligne
 			end
 		end
 		if Library._hudRefresh then Library._hudRefresh() end
@@ -27165,6 +28580,7 @@ function Library:Destroy()
 	Library._modToken = (Library._modToken or 0) + 1
 	table.clear(Library.NotifSilenced)
 	Library._onKeybindAdded, Library._onKeybindChanged, Library._onSilencedChanged = nil, nil, nil
+	Library._onFavChanged = nil
 	if Library._destroyHud then pcall(Library._destroyHud) end
 	if Library._destroyDraggables then pcall(Library._destroyDraggables) end
 	if Library._destroyUISound then pcall(Library._destroyUISound) end
