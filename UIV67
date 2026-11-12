@@ -27373,7 +27373,7 @@ function Library:CreateWindow(cfg)
 			local bw, bh = cb.AbsoluteSize.X, math.max(cb.AbsoluteSize.Y, 28)
 			local gap = tonumber(Library.DecorBubbleGap) or 24
 			local top = ap.Y + as.Y + gap
-			if Library.DecorBottom == false and Library.DecorStrip ~= false and dScale > 0.5 and lastPY then
+			if Library.DecorStrip ~= false and dScale > 0.5 and lastPY then
 				top = math.max(top, lastPY + lt + 14)
 			end
 			local roomBelow = (v.Y - 6) - (top + bh)
@@ -27580,21 +27580,20 @@ function Library:CreateWindow(cfg)
 			local full = Library.DecorBottom ~= false
 			local w, gy, cx
 			if full then   -- collé tout en bas de l'écran, sur toute la largeur
-				w, gy, cx = math.max(0, floor(v.X)), v.Y, v.X / 2
+				-- sol posé juste SOUS la fenêtre (les personnages ne passent plus devant la barre « Réglages »),
+				-- sans jamais sortir de l'écran ; on se base sur la fenêtre et la caméra, pas sur la taille du ScreenGui
+				local vc = viewport()
+				local winBottom = ap.Y + as.Y
+				w, gy, cx = math.max(0, floor(v.X)), math.min(winBottom + Hs + 4, math.max(vc.Y, winBottom + 12)), v.X / 2
 			else
 				w = math.max(0, floor(as.X - 44))
 				gy = math.min(ap.Y + as.Y + (tonumber(Library.DecorGap) or 10), v.Y - 4)
 				cx = ap.X + as.X / 2
 			end
 			local px, py = floor(cx + 0.5), floor(gy + 0.5)
-			if px ~= lastPX or py ~= lastPY or full ~= lastFull then
+			if px ~= lastPX or py ~= lastPY then
 				lastPX, lastPY = px, py
-				if full then
-					-- collé au vrai bord bas du ScreenGui, quelle que soit la taille mesurée en pixels
-					decor.Position = UDim2.new(0, px, 1, 0)
-				else
-					decor.Position = UDim2.fromOffset(px, py)
-				end
+				decor.Position = UDim2.fromOffset(px, py)
 			end
 			if w ~= curW or full ~= lastFull then
 				curW, lastFull = w, full
