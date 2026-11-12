@@ -7,6 +7,20 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.26 — DEUX STYLES POUR LE DÉCOR : « Pixel » (pixel art avec contours sombres, sol en blocs, étincelles qui brillent sur le sol, coffre au trésor)
+		  et « Dessin » (formes lisses et arrondies avec contours, façon cartoon). Library.DecorStyle = "Pixel" | "Dessin"
+		  (Paramètres > Apparence > « Étoiles & forme » > Décor & neige > Style du décor). Marche avec les thèmes Hiver et Été.
+
+	V9.25 — THÈME « ÉTÉ » POUR LE DÉCOR : palmier, parasol + serviette, château de sable, balle qui rebondit, glace, planche de surf, étoile de mer,
+		  crabe qui se balade, soleil dans le coin de l'écran et poussières dorées qui montent. Library.DecorTheme = "Hiver" | "Été"
+		  (Paramètres > Apparence > « Étoiles & forme » > Décor & neige > Thème du décor).
+
+	V9.24 — DÉCOR DE FÊTE : PETITS PERSONNAGES SOUS LA FENÊTRE + NEIGE SUR L'ÉCRAN
+		• Sous la fenêtre : un sol de neige avec un sapin (guirlande qui clignote), un bonhomme de neige, un renard qui dort (zzz), un feu de camp,
+		  une tasse qui fume, des cadeaux, et un pingouin qui se balade. Clique sur un personnage : il saute, parle et lance des étincelles.
+		• Neige qui tombe sur tout l'écran (derrière ou devant la fenêtre).
+		• Library.DecorStrip · DecorScale · DecorGap · SnowCount · SnowSpeed · SnowOnWindow (Paramètres > Apparence > « Étoiles & forme » > Décor & neige).
+
 	V9.23 — LA MÉTHODE CHOISIE S'AFFICHE SUR LE TOGGLE
 		• CreateDropdown({ ..., BadgeOn = toggle | "flag" | { ... }, BadgeNames = { valeur = "nom affiché" } }) : une pastille avec la valeur choisie apparaît à côté
 		  du nom du toggle (n'importe quel nom de méthode) · dd.LinkBadge(toggle) · dd.SetBadgeName(valeur, texte) · toggle.SetBadge(texte) / GetBadge()
@@ -563,6 +577,14 @@ local Library = {
 	ResizeMode        = "Contour", -- "Contour" (rapide : contour pendant le geste) | "Direct" (ancien : suit en direct, lent)
 	NoCanvasGroup     = true,  -- true = fenêtre en simple Frame (beaucoup plus fluide) ; false = fondu d'ouverture mais plus lourd
 	StarCount         = 20,    -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 pour désactiver)
+	DecorStrip        = true,  -- petits personnages sur un sol de neige sous la fenêtre
+	DecorTheme        = "Hiver", -- "Hiver" (neige) | "Été" (plage, soleil)
+	DecorStyle        = "Pixel", -- "Pixel" (pixel art) | "Dessin" (formes lisses, cartoon)
+	DecorScale        = 1,     -- taille des personnages (0.5 - 2)
+	DecorGap          = 10,    -- px entre le bas de la fenêtre et le sol de neige
+	SnowCount         = 40,    -- flocons qui tombent sur l'écran (0 pour désactiver)
+	SnowSpeed         = 1,     -- vitesse de la neige
+	SnowOnWindow      = true,  -- true = la neige passe aussi devant la fenêtre
 	ConfigFolder      = "Ui-Lib",
 	Scale             = 1,
 	Animations        = true,  -- false = aucune animation (PC faibles)
@@ -6579,6 +6601,7 @@ function Library:SetOption(name, v)
 	if p == "Hole" then w:RefreshHole()
 	elseif p == "Titl" then w:ApplyTitle()
 	elseif p == "Star" then w:RefreshSky()
+	elseif p == "Deco" or p == "Snow" then if w.RefreshDecor then w:RefreshDecor() end
 	else w:RefreshShape() end
 end
 function Library:SetShape(n)
@@ -6662,6 +6685,14 @@ function Library:GetTheme()
 		StarSpeed = Library.StarSpeed,
 		StarsThroughWindow = Library.StarsThroughWindow,
 		HoleStars = Library.HoleStars,
+		DecorStrip = Library.DecorStrip,
+		DecorTheme = Library.DecorTheme,
+		DecorStyle = Library.DecorStyle,
+		DecorScale = Library.DecorScale,
+		DecorGap = Library.DecorGap,
+		SnowCount = Library.SnowCount,
+		SnowSpeed = Library.SnowSpeed,
+		SnowOnWindow = Library.SnowOnWindow,
 		Breathing = Library.Breathing,
 		TitleFont = Library.TitleFont,
 		TitleShine = Library.TitleShine,
@@ -6744,6 +6775,14 @@ function Library:ApplyTheme(t)
 		{ "StarSpeed", "ui.starspeed", pct, opt("StarSpeed") },
 		{ "StarsThroughWindow", "ui.starsthrough", nil, opt("StarsThroughWindow") },
 		{ "HoleStars", "ui.holestars", nil, opt("HoleStars") },
+		{ "DecorStrip", "ui.decor", nil, opt("DecorStrip") },
+		{ "DecorTheme", "ui.decortheme", nil, opt("DecorTheme") },
+		{ "DecorStyle", "ui.decorstyle", nil, opt("DecorStyle") },
+		{ "DecorScale", "ui.decorscale", pct, opt("DecorScale") },
+		{ "DecorGap", "ui.decorgap", nil, opt("DecorGap") },
+		{ "SnowCount", "ui.snow", nil, opt("SnowCount") },
+		{ "SnowSpeed", "ui.snowspeed", pct, opt("SnowSpeed") },
+		{ "SnowOnWindow", "ui.snowwin", nil, opt("SnowOnWindow") },
 		{ "Background", "ui.bg", function(v) return N.Background[v] or v end, function(v) Library:SetBackground(v) end },
 		{ "Animations", "ui.anim", nil, function(v) Library:SetAnimations(v) end },
 		{ "AnimSpeed", "ui.animspeed", function(v) return tostring(v) .. "x" end, function(v) Library:SetAnimSpeed(v) end },
@@ -21306,6 +21345,26 @@ function Window:CreateSettingsTab(name, icon, docked)
 	F:CreateToggle({ Name = "Visibles à travers la fenêtre", Flag = "ui.starsthrough", Default = Library.StarsThroughWindow,
 		Tooltip = "Désactivé : les étoiles disparaissent sous la fenêtre, elles ne sont jamais dedans.",
 		Callback = opt("StarsThroughWindow") })
+	F:CreateSection("Décor & neige")
+	F:CreateDropdown({ Name = "Thème du décor", Flag = "ui.decortheme", Items = { "Hiver", "Été" }, Search = false,
+		Default = Library.DecorTheme, Tooltip = "Hiver : neige, sapin, bonhomme de neige. Été : plage, palmier, crabe, soleil.",
+		Callback = opt("DecorTheme") })
+	F:CreateDropdown({ Name = "Style du décor", Flag = "ui.decorstyle", Items = { "Pixel", "Dessin" }, Search = false,
+		Default = Library.DecorStyle, Tooltip = "Pixel : pixel art avec contours sombres. Dessin : formes lisses et arrondies, façon cartoon.",
+		Callback = opt("DecorStyle") })
+	F:CreateToggle({ Name = "Petits personnages sous la fenêtre", Flag = "ui.decor", Default = Library.DecorStrip,
+		Tooltip = "Sapin, bonhomme de neige, renard, feu de camp, cadeaux et un pingouin qui se promène. Clique dessus !",
+		Callback = opt("DecorStrip") })
+	F:CreateSlider({ Name = "Taille des personnages", Flag = "ui.decorscale", Min = 50, Max = 200, Step = 25, Suffix = "%",
+		Default = pct(Library.DecorScale), Callback = optPct("DecorScale") })
+	F:CreateSlider({ Name = "Hauteur du sol", Flag = "ui.decorgap", Min = -20, Max = 40, Step = 2, Suffix = " px",
+		Default = Library.DecorGap, Tooltip = "Distance entre le bas de la fenêtre et le sol de neige.", Callback = opt("DecorGap") })
+	F:CreateSlider({ Name = "Particules (neige / poussières de soleil)", Flag = "ui.snow", Min = 0, Max = 120, Step = 5,
+		Default = Library.SnowCount, Tooltip = "Neige (hiver) ou poussières dorées et soleil (été) sur l'écran. 0 = aucune.", Callback = opt("SnowCount") })
+	F:CreateSlider({ Name = "Vitesse des particules", Flag = "ui.snowspeed", Min = 20, Max = 300, Step = 10, Suffix = "%",
+		Default = pct(Library.SnowSpeed), Callback = optPct("SnowSpeed") })
+	F:CreateToggle({ Name = "Particules devant la fenêtre", Flag = "ui.snowwin", Default = Library.SnowOnWindow,
+		Tooltip = "Désactivé : la neige reste derrière l'interface.", Callback = opt("SnowOnWindow") })
 	F:CreateSection("Forme")
 	F:CreateDropdown({ Name = "Forme", Flag = "ui.shape", Items = { "Arrondie", "Douce", "Classique" }, Search = false,
 		Default = (Library.Shape == "Vague") and "Arrondie" or Library.Shape,
@@ -21410,6 +21469,8 @@ function Window:CreateSettingsTab(name, icon, docked)
 			set("ui.titleshine", false)
 			set("ui.breath", false)
 			set("ui.holestars", false)
+			set("ui.snow", 0)
+			set("ui.decor", false)
 			Library:Notify({ Title = "Performance", Type = "Success", Duration = 3,
 				Content = "Fond, étoiles et flou coupés." })
 		end })
@@ -25993,6 +26054,794 @@ function Library:CreateWindow(cfg)
 		end
 	end, { deco = true, gate = function() return skyLim > 0 and not Library._resizing and (skyTarget > 0 or skyFade > 0.01 or sky.Visible) end }))
 	refreshSky()
+
+	-- ------------------------------------------------------------------
+	-- Décor de fête : petits personnages (sapin, bonhomme de neige, renard qui dort, feu de camp, cadeaux, tasse...) sur un
+	-- sol de neige sous la fenêtre + un pingouin qui se balade + neige qui tombe sur l'écran.
+	--   Library.DecorStrip (bool) · DecorScale (0.5 - 2) · DecorGap (px entre la fenêtre et le sol)
+	--   Library.SnowCount (0 - 120) · SnowSpeed (0.2 - 3) · SnowOnWindow (neige aussi devant la fenêtre)
+	--   Clique sur un personnage : il saute, dit un mot et lance des étincelles.
+	-- Tout est fait de petits carrés (pixel art) : aucune image à charger.
+	-- ------------------------------------------------------------------
+	do
+		local rng = Random.new()
+		local floor, clamp, sin, abs, exp = math.floor, math.clamp, math.sin, math.abs, math.exp
+		local function C(r, g, b) return Color3.fromRGB(r, g, b) end
+		local PAL = {
+			W = C(246, 249, 255), w = C(196, 212, 232), G = C(52, 168, 96), g = C(30, 116, 66), B = C(124, 80, 44),
+			Y = C(255, 216, 70), R = C(226, 56, 64), r = C(166, 34, 46), K = C(34, 36, 46), O = C(255, 152, 44),
+			U = C(72, 152, 236), u = C(42, 102, 192), F = C(238, 128, 48), f = C(252, 224, 196), C = C(84, 168, 240),
+			D = C(98, 58, 38), S = C(222, 176, 96), s = C(196, 150, 76), M = C(240, 100, 150), L = C(255, 240, 160),
+			N = C(24, 26, 46),
+		}
+		local function swap(rows, map)
+			local out = {}
+			for i, r in ipairs(rows) do out[i] = (string.gsub(r, ".", function(ch) return map[ch] end)) end
+			return out
+		end
+
+		-- sprites : une chaîne par ligne, une lettre = une couleur de PAL, « . » = vide
+		local TREE = {
+			".....Y.....", "....GGG....", "....GGG....", "...GGGGG...", "..GGGGGGG..", "....GGG....", "...GGGGG...",
+			"..GGGGGGG..", ".gGGGGGGGG.", "....GGG....", "...GGGGG...", ".gGGGGGGGG.", "ggGGGGGGGGG", "....BBB....",
+		}
+		local SNOWMAN = {
+			"...KKKK...", "...KKKK...", "..KKKKKK..", "...WWWW...", "...KWWK...", "..WWOOWW..", "...WWWW...",
+			"..RRRRRR..", "BWWWWWWWWB", ".WWWKWWWW.", "WWWWWWWWWW", "WWWWKWWWWW", "WWWWWWWWWW", ".WWWWWWWW.",
+		}
+		local PENGUIN = {
+			"...KKKK...", "..KKKKKK..", "..KWKKWK..", "..KKOOKK..", ".KRRRRRRK.", "KKWWWWWWKK", "KKWWWWWWKK",
+			"KKWWWWWWKK", ".KKWWWWKK.", "..KKKKKK..", "..OO..OO..",
+		}
+		local GIFT = {
+			"..YY..YY..", "...YYYY...", "RRRRYYRRRR", "RRRRYYRRRR", ".RRRYYRRR.", ".RRRYYRRR.", ".RRRYYRRR.", ".rrrYYrrr.",
+		}
+		local FOX = {
+			".F.F........", "FFFFFFFFF...", "FKFFFFFFFFF.", "FffFFFFFFFFW", ".FFFFFFFFFWW", "..FFFFFFFWWW",
+		}
+		local MUG = { "CCCCCC..", "CDDDDCCC", "CCCCCC.C", "CCCCCCCC", ".CCCCC.." }
+		local FIRE = {
+			"..........", "..........", "..........", "..........", "..........", "..........",
+			".BB....BB.", "BBBBBBBBBB", ".BBBBBBBB.",
+		}
+
+		local CHEST = {
+			"..BBBBBB..", ".BBBBBBBB.", "BBYBBBBYBB", "DDDDDDDDDD", "BBYBBBBYBB", "BBYBYYBYBB", "BBYBBBBYBB", "DDDDDDDDDD",
+		}
+		local WDEFS = {
+			tree     = { rows = TREE, say = "Joyeux Noël !", burst = { "Y", "R", "U", "W" },
+				lights = { { 3, 4 }, { 6, 4 }, { 3, 7 }, { 6, 7 }, { 2, 11 }, { 8, 11 }, { 1, 12 }, { 5, 12 }, { 9, 12 } } },
+			snowman  = { rows = SNOWMAN, say = "Brrr, il fait froid !", burst = { "W", "w" }, sway = true },
+			gift     = { rows = GIFT, say = "Surprise !", burst = { "Y", "R", "U", "G" }, shake = true },
+			gift2    = { rows = swap(GIFT, { R = "U", r = "u" }), say = "Pour toi !", burst = { "Y", "U", "W", "R" }, shake = true },
+			chest    = { rows = CHEST, say = "Un trésor !", burst = { "Y", "O", "W" } },
+			fox      = { rows = FOX, say = "Zzz... encore 5 minutes", burst = { "W", "U" }, zzz = true },
+			campfire = { rows = FIRE, say = "Ça crépite !", burst = { "O", "Y", "R" }, fire = true },
+			mug      = { rows = MUG, say = "Slurp, c'est chaud !", burst = { "W", "D" }, steam = true },
+			walker   = { rows = PENGUIN, say = "Noot noot !", burst = { "W", "U", "Y" } },
+		}
+		-- ── thème ÉTÉ ──
+		local PALM = {
+			".GG..G..GG.", "GGGGGGGGGGG", ".gGGGBGGGg.", "..g.YBY.g..", ".....B.....", ".....B.....", "....BB.....",
+			"....B......", "....B......", "....BB.....", ".....B.....", ".....B.....", ".....B.....", "....BBB....",
+		}
+		local PARASOL = {
+			"....RRR....", "..RRRWRRR..", ".RRRWWWRRR.", "RRRWWWWWRRR", ".....B.....", ".....B.....", ".....B.....",
+			".....B.....", ".....B.....", ".....B.....", "UWUWUWUWUWU", "WUWUWUWUWUW",
+		}
+		local CASTLE = {
+			".R...R...R.", ".B...B...B.", "S.S.S.S.S.S", "SSSSSSSSSSS", "SSSsSSSsSSS", "SSSSDDSSSSS", "SSSSDDSSSSS",
+			"SSSSSSSSSSS", "sSSSSSSSSSs",
+		}
+		local BALL = { "..YWY..", ".RYWYU.", "RRYWYUU", "RRYWYUU", "RRYWYUU", ".RYWYU.", "..YWY.." }
+		local ICE = { "..MMM..", ".MMMMM.", "MMMMMMM", "WWWWWWW", ".WWWWW.", ".OFOFO.", "..OFO..", "...O..." }
+		local SURF = { "..M..", ".MMM.", ".MWM.", ".MWM.", ".MWM.", ".MWM.", ".MWM.", ".MWM.", ".MMM.", "..M.." }
+		local STAR = { "...O...", "..OOO..", "OOOOOOO", ".OOOOO.", ".OO.OO.", "OO...OO" }
+		local CRAB = { "RR..K.K..RR", "RR.RRRRR.RR", ".RRRRRRRRR.", "..RRRRRRR..", ".R.R.R.R.R.", "R..R...R..R" }
+		local SDEFS = {
+			palm     = { rows = PALM, say = "Vive les vacances !", burst = { "G", "g", "Y" }, sway = true },
+			surf     = { rows = SURF, say = "Surf's up !", burst = { "M", "W", "U" }, tilt = 8 },
+			parasol  = { rows = PARASOL, say = "Un peu d'ombre ?", burst = { "R", "W", "U" }, sway = true },
+			ball     = { rows = BALL, say = "Boing !", burst = { "R", "Y", "U", "W" }, bounce = true },
+			castle   = { rows = CASTLE, say = "Attention aux vagues !", burst = { "S", "Y", "W" } },
+			icecream = { rows = ICE, say = "Miam, une glace !", burst = { "M", "W", "O" }, sway = true },
+			starfish = { rows = STAR, say = "Je suis une étoile !", burst = { "O", "Y" } },
+			walker   = { rows = CRAB, say = "Clac clac !", burst = { "R", "O", "W" } },
+		}
+		-- thèmes : sprites, ordre (gauche -> droite), priorité (gardés si la fenêtre est étroite), sol, particules, marche du promeneur
+		local THEMES = {
+			winter = { defs = WDEFS, order = { "tree", "gift", "chest", "fox", "campfire", "mug", "snowman", "gift2" },
+				priority = { "tree", "snowman", "campfire", "gift", "chest", "fox", "mug", "gift2" },
+				ground = PAL.W, bump = PAL.W, flake = PAL.W, spark = C(200, 228, 255), up = false, mul = 1, twinkle = false, sun = false, wspeed = 22, wfreq = 11, wrot = 7 },
+			summer = { defs = SDEFS, order = { "palm", "surf", "parasol", "ball", "castle", "icecream", "starfish" },
+				priority = { "palm", "parasol", "castle", "ball", "icecream", "surf", "starfish" },
+				ground = C(246, 226, 170), bump = C(238, 212, 148), flake = C(255, 236, 150), spark = C(255, 248, 200), up = true, mul = 0.5, twinkle = true, sun = true,
+				wspeed = 30, wfreq = 16, wrot = 4 },
+		}
+		local theme = THEMES.winter
+		-- ── style DESSIN : mêmes personnages, en formes lisses (ellipses, pilules, dômes) avec contour ──
+		--   unités = cases du pixel art (1 case = ps pixels). E = ellipse · Rr = rectangle arrondi · Dm = dôme (moitié haute) · Vv = triangle pointe en bas · Ro = anneau
+		local function E(x, y, w, h, c, rot, tr, ns) return { k = "e", x = x, y = y, w = w, h = h, c = c, rot = rot, tr = tr, ns = ns } end
+		local function Rr(x, y, w, h, c, rad, rot, tr, ns) return { k = "r", x = x, y = y, w = w, h = h, c = c, rad = rad, rot = rot, tr = tr, ns = ns } end
+		local function Dm(x, y, w, h, c, st) return { k = "d", x = x, y = y, w = w, h = h, c = c, st = st } end
+		local function Vv(x, y, w, c) return { k = "v", x = x, y = y, w = w, c = c } end
+		local function Ro(x, y, w, h, c, th) return { k = "o", x = x, y = y, w = w, h = h, c = c, th = th } end
+		local function V(w, h, shapes) return { w = w, h = h, shapes = shapes } end
+		local function recolor(vec, map)
+			local shapes = {}
+			for i, s in ipairs(vec.shapes) do
+				local n = {}
+				for k, v in pairs(s) do n[k] = v end
+				if type(n.c) == "string" and map[n.c] then n.c = map[n.c] end
+				shapes[i] = n
+			end
+			return { w = vec.w, h = vec.h, shapes = shapes }
+		end
+		local function star5(cx, cy, r, len, wd, c)
+			local t = {}
+			for i = 0, 4 do
+				local a = -90 + 72 * i
+				t[#t + 1] = E(cx + math.cos(math.rad(a)) * r - len / 2, cy + math.sin(math.rad(a)) * r - wd / 2, len, wd, c, a)
+			end
+			return t
+		end
+
+		-- hiver
+		WDEFS.tree.vec = V(11, 14, {
+			Rr(4.2, 11.4, 2.6, 2.6, "B", 0.5),
+			Rr(0.6, 8.4, 9.8, 4.2, "g", 2.0), Rr(1.4, 4.8, 8.2, 4.2, "G", 2.0), Rr(2.4, 1.6, 6.2, 3.8, "G", 1.8),
+			Rr(3.4, 1.9, 2.4, 0.8, "W", 0.4, 0, 0, true), Rr(2.2, 5.1, 2.6, 0.8, "W", 0.4, 0, 0, true), Rr(1.4, 8.7, 2.8, 0.8, "W", 0.4, 0, 0, true),
+			Rr(4.7, 0.2, 1.7, 1.7, "Y", 0.3, 45),
+		})
+		WDEFS.tree.vlights = { { 4.3, 3.2 }, { 6.2, 2.6 }, { 5.4, 4.2 }, { 3.8, 6.4 }, { 7.2, 6.2 }, { 5.4, 7.3 },
+			{ 2.6, 10.4 }, { 4.6, 9.4 }, { 6.6, 10.8 }, { 8.6, 10.0 }, { 5.6, 11.2 } }
+		WDEFS.snowman.vec = V(10, 14, {
+			Rr(0.2, 7.3, 2.6, 0.45, "B", 0.2, -25, 0, true), Rr(7.2, 7.3, 2.6, 0.45, "B", 0.2, 25, 0, true),
+			E(0.8, 8.8, 8.4, 5.2, "W"), E(1.9, 5.3, 6.2, 4.6, "W"), E(2.5, 1.9, 5, 4.2, "W"),
+			Rr(2.5, 5.4, 5, 1.1, "R", 0.5), Rr(6.1, 5.9, 1.2, 2.4, "R", 0.4),
+			Rr(3.3, 0, 3.4, 2.2, "K", 0.5), Rr(2.3, 1.7, 5.4, 0.8, "K", 0.3),
+			Rr(4.6, 3.8, 2.4, 0.75, "O", 0.35),
+			E(3.5, 3.1, 0.6, 0.6, "K", 0, 0, true), E(5.6, 3.1, 0.6, 0.6, "K", 0, 0, true),
+			E(4.6, 7.4, 0.8, 0.8, "K", 0, 0, true), E(4.6, 9.2, 0.8, 0.8, "K", 0, 0, true), E(4.6, 11.0, 0.8, 0.8, "K", 0, 0, true),
+		})
+		WDEFS.walker.vec = V(10, 11, {
+			Rr(0.1, 4.6, 2.2, 4, "K", 1.0, 14), Rr(7.7, 4.6, 2.2, 4, "K", 1.0, -14),
+			Rr(2.0, 9.9, 2.6, 1.1, "O", 0.5), Rr(5.4, 9.9, 2.6, 1.1, "O", 0.5),
+			E(1.2, 2.6, 7.6, 7.8, "K"), E(1.4, 0.1, 7.2, 5.6, "K"),
+			E(2.5, 4.4, 5, 5.6, "W", 0, 0, true),
+			E(2.6, 1.8, 1.7, 1.8, "W", 0, 0, true), E(5.7, 1.8, 1.7, 1.8, "W", 0, 0, true),
+			E(3.2, 2.4, 0.7, 0.7, "K", 0, 0, true), E(6.2, 2.4, 0.7, 0.7, "K", 0, 0, true),
+			Rr(4.1, 3.5, 1.8, 0.95, "O", 0.45), Rr(1.8, 5.2, 6.4, 1.0, "R", 0.5),
+		})
+		WDEFS.gift.vec = V(10, 8, {
+			Rr(0.6, 3.2, 8.8, 4.8, "R", 0.6), Rr(0.1, 2.2, 9.8, 2.2, "r", 0.6), Rr(4.2, 2.2, 1.6, 5.8, "Y", 0.3, 0, 0, true),
+			E(2.1, 0.2, 2.8, 2.2, "Y", -25), E(5.1, 0.2, 2.8, 2.2, "Y", 25), E(4.2, 1.0, 1.6, 1.5, "Y"),
+		})
+		WDEFS.gift2.vec = recolor(WDEFS.gift.vec, { R = "U", r = "u" })
+		WDEFS.chest.vec = V(10, 8, {
+			Rr(0.3, 3.0, 9.4, 5.0, "B", 0.6), Dm(0.3, 0.4, 9.4, 5.6, "B"),
+			Rr(1.5, 0.9, 0.9, 7.1, "Y", 0.2, 0, 0, true), Rr(7.6, 0.9, 0.9, 7.1, "Y", 0.2, 0, 0, true),
+			Rr(4.1, 2.6, 1.8, 2.0, "Y", 0.4), E(4.7, 3.3, 0.6, 0.6, "K", 0, 0, true),
+		})
+		WDEFS.fox.vec = V(12, 6, {
+			E(6.6, 2.4, 5.4, 3.5, "F"), E(1.6, 1.6, 8.6, 4.4, "F"), E(9.8, 3.2, 2.2, 2.4, "W"),
+			Rr(0.6, 0.3, 1.2, 1.8, "F", 0.5, -8), Rr(2.6, 0.5, 1.2, 1.7, "F", 0.5, 8),
+			E(0, 1.7, 4.4, 3.8, "F"), E(0.3, 3.5, 3.4, 2.2, "f", 0, 0, true),
+			Rr(0.9, 2.9, 1.2, 0.28, "K", 0.1, 0, 0, true), E(0.1, 3.6, 0.8, 0.7, "K", 0, 0, true),
+		})
+		WDEFS.campfire.vec = V(10, 9, {
+			Rr(0.3, 6.9, 9.4, 1.6, "B", 0.8, 9), Rr(0.3, 6.9, 9.4, 1.6, "B", 0.8, -9),
+			E(0, 7.4, 1.6, 1.4, "w"), E(8.4, 7.4, 1.6, 1.4, "w"),
+		})
+		WDEFS.mug.vec = V(8, 5, {
+			Ro(5.0, 0.9, 2.6, 2.6, "C", 0.55), Rr(0.3, 0.4, 5.6, 4.5, "C", 1.0), E(0.6, 0.35, 5.0, 1.2, "D", 0, 0, true),
+		})
+
+		-- été
+		SDEFS.palm.vec = V(11, 14, {
+			Rr(4.5, 3.2, 1.9, 10.8, "B", 0.9, -5),
+			E(0.3, 1.9, 5.6, 1.7, "g", -28), E(5.1, 1.9, 5.6, 1.7, "g", 28),
+			E(0.1, 3.4, 5.2, 1.6, "G", 32), E(5.7, 3.4, 5.2, 1.6, "G", -32), E(2.8, 0.2, 5.4, 1.8, "G"),
+			E(4.4, 3.4, 1.2, 1.2, "D"), E(5.9, 3.5, 1.2, 1.2, "D"),
+		})
+		SDEFS.surf.vec = V(5, 10, { E(0.2, 0, 4.6, 10, "M"), Rr(2.1, 0.9, 0.8, 7.8, "W", 0.4, 0, 0, true), Rr(2.0, 8.6, 1.0, 1.2, "U", 0.3) })
+		SDEFS.parasol.vec = V(11, 12, {
+			Rr(1.0, 9.2, 9.0, 2.6, "U", 0.5),
+			Rr(2.8, 9.2, 0.9, 2.6, "W", 0, 0, 0, true), Rr(5.0, 9.2, 0.9, 2.6, "W", 0, 0, 0, true), Rr(7.2, 9.2, 0.9, 2.6, "W", 0, 0, 0, true),
+			Rr(5.1, 3.0, 0.8, 6.8, "B", 0.3), Dm(0.1, 0.1, 10.8, 8.4, "R", "W"),
+		})
+		SDEFS.castle.vec = V(11, 9, {
+			Rr(0.9, 3.6, 9.2, 5.4, "S", 0.6), Rr(0.0, 1.8, 2.9, 7.2, "S", 0.5), Rr(8.1, 1.8, 2.9, 7.2, "S", 0.5), Rr(3.6, 0.9, 3.8, 3.4, "S", 0.5),
+			Rr(4.6, 5.4, 1.8, 3.6, "D", 0.9),
+			Rr(1.35, 0, 0.2, 1.9, "B", 0.1, 0, 0, true), Rr(1.5, 0, 1.2, 0.8, "R", 0.1, 0, 0, true),
+			Rr(9.45, 0, 0.2, 1.9, "B", 0.1, 0, 0, true), Rr(9.6, 0, 1.2, 0.8, "R", 0.1, 0, 0, true),
+			E(1.0, 3.4, 0.8, 0.8, "s", 0, 0, true), E(9.2, 3.4, 0.8, 0.8, "s", 0, 0, true),
+		})
+		SDEFS.ball.vec = V(7, 7, { E(0, 0, 7, 7, "R"), E(1.3, 0, 4.4, 7, "W"), E(2.6, 0, 1.8, 7, "U") })
+		SDEFS.icecream.vec = V(7, 8, {
+			Rr(1.3, 4.4, 4.4, 1.0, "O", 0.3), Vv(1.3, 5.2, 4.4, "O"),
+			E(1.0, 2.4, 5, 3, "M"), E(1.4, 0.8, 4.2, 2.8, "W"), E(3.1, 0, 1.1, 1.1, "R"),
+		})
+		do
+			local sh = star5(3.5, 3.1, 1.3, 2.8, 1.4, "O")
+			sh[#sh + 1] = E(2.3, 1.9, 2.4, 2.4, "O", 0, 0, true)
+			sh[#sh + 1] = E(3.2, 2.8, 0.6, 0.6, "Y", 0, 0, true)
+			SDEFS.starfish.vec = V(7, 6, sh)
+		end
+		SDEFS.walker.vec = V(11, 6, {
+			Rr(1.2, 4.5, 0.8, 1.5, "r", 0.3, 25, 0, true), Rr(2.4, 4.7, 0.8, 1.3, "r", 0.3, 10, 0, true), Rr(3.6, 4.8, 0.8, 1.2, "r", 0.3, 0, 0, true),
+			Rr(7.6, 4.8, 0.8, 1.2, "r", 0.3, 0, 0, true), Rr(8.8, 4.7, 0.8, 1.3, "r", 0.3, -10, 0, true), Rr(10.0, 4.5, 0.8, 1.5, "r", 0.3, -25, 0, true),
+			Rr(3.5, 0.5, 0.4, 1.6, "r", 0.2, 0, 0, true), Rr(7.1, 0.5, 0.4, 1.6, "r", 0.2, 0, 0, true),
+			E(1.6, 1.7, 7.8, 3.5, "R"), E(0, 0, 2.7, 2.5, "R"), E(8.3, 0, 2.7, 2.5, "R"),
+			E(3.0, 0, 1.5, 1.5, "W"), E(6.5, 0, 1.5, 1.5, "W"), E(3.5, 0.5, 0.6, 0.6, "K", 0, 0, true), E(7.0, 0.5, 0.6, 0.6, "K", 0, 0, true),
+		})
+
+		local LIGHTC   = { PAL.R, PAL.Y, PAL.U, PAL.W }
+
+		-- état
+		local curPs, curW, Hs, lt = 0, 0, 40, 4
+		local critters, walker = {}, nil
+		local flakes, parts, free = {}, {}, {}
+		local dScale, sFade = 0, 0
+		local bubbleOwner, bubbleT = nil, 0
+		local lastPX, lastPY = nil, nil
+		local emberT = 0
+		local style = "pixel"
+
+		local decor = new("Frame", { Name = "Decor", AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(10, 40),
+			BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 3, Visible = false }, gui)
+		local dUi = new("UIScale", { Scale = 0.05 }, decor)
+		local snow = new("Frame", { Name = "Snow", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+			BorderSizePixel = 0, ZIndex = 4, Visible = false }, gui)
+
+		-- soleil (thème Été) : coin haut droit de l'écran, dans la couche des particules
+		local sun = new("Frame", { Name = "Sun", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(44, 44),
+			BackgroundColor3 = C(255, 214, 80), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, snow)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, sun)
+		local sunGlow = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(130, 130),
+			BackgroundColor3 = C(255, 226, 120), BackgroundTransparency = 1, BorderSizePixel = 0 }, sun)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, sunGlow)
+
+		-- sol (neige ou sable) : ligne + petites bosses
+		local ground = new("Frame", { Name = "Ground", AnchorPoint = Vector2.new(0, 1), BackgroundColor3 = PAL.W,
+			BorderSizePixel = 0, ZIndex = 1 }, decor)
+		local gCorner = new("UICorner", { CornerRadius = UDim.new(0, 0) }, ground)
+		new("UIGradient", { Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.06, 0),
+			NumberSequenceKeypoint.new(0.94, 0), NumberSequenceKeypoint.new(1, 1) }) }, ground)
+		local bumps = {}
+		for i = 1, 16 do
+			local b = new("Frame", { AnchorPoint = Vector2.new(0.5, 1), BackgroundColor3 = PAL.W, BorderSizePixel = 0, ZIndex = 1 }, decor)
+			local bc = new("UICorner", { CornerRadius = UDim.new(0, 0) }, b)
+			bumps[i] = { f = b, cr = bc, fx = 0.05 + 0.9 * (i - 0.5) / 16 + rng:NextNumber(-0.015, 0.015), w = rng:NextNumber(10, 26), h = rng:NextNumber(5, 9) }
+		end
+
+		-- étincelles qui brillent sur le sol
+		local sparks = {}
+		for i = 1, 10 do
+			local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(2, 2), BackgroundColor3 = PAL.W,
+				BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 1 }, decor)
+			local cr = new("UICorner", { CornerRadius = UDim.new(0, 0) }, f)
+			sparks[i] = { f = f, cr = cr, fx = (i - 0.5) / 10 + rng:NextNumber(-0.04, 0.04), dy = rng:NextNumber(1, 9),
+				ph = rng:NextNumber(0, 6.28), fr = rng:NextNumber(1.5, 3.5) }
+		end
+
+		-- bulle de texte (au clic)
+		local bubble = new("TextLabel", { Name = "Bubble", AnchorPoint = Vector2.new(0.5, 1), AutomaticSize = Enum.AutomaticSize.X,
+			Size = UDim2.fromOffset(0, 20), BackgroundColor3 = C(18, 20, 28), BackgroundTransparency = 1, BorderSizePixel = 0,
+			TextColor3 = PAL.W, TextTransparency = 1, Font = F_BOLD, TextSize = 11, Text = "", ZIndex = 6, Visible = false }, decor)
+		new("UICorner", { CornerRadius = UDim.new(0, 8) }, bubble)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, bubble)
+
+		local function burst(x, y, keys, n, soft)
+			for _ = 1, n do
+				if #parts >= 60 then return end
+				local f = table.remove(free)
+				if not f then
+					f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(3, 3), BorderSizePixel = 0, ZIndex = 5 }, decor)
+				end
+				f.BackgroundColor3 = PAL[keys[rng:NextInteger(1, #keys)]] or PAL.W
+				f.BackgroundTransparency = 0
+				f.Visible = true
+				local life = soft and rng:NextNumber(1, 1.6) or rng:NextNumber(0.7, 1.2)
+				parts[#parts + 1] = { f = f, x = x, y = y, life = life, g = soft and 14 or 320,
+					vx = soft and rng:NextNumber(-10, 10) or rng:NextNumber(-70, 70),
+					vy = soft and rng:NextNumber(-55, -30) or rng:NextNumber(-150, -50) }
+			end
+		end
+
+		local function poke(o)
+			o.hop = 0.5
+			o.flash = 1.2
+			if o.mode then o.mode, o.wait = "idle", 1.6 end
+			bubbleOwner, bubbleT = o, 1.9
+			bubble.Text = o.def.say
+			bubble.Visible = true
+			burst(o.x, o.feet - o.sh * curPs * 0.5, o.def.burst, 12)
+		end
+
+		-- contour sombre autour d'un sprite pixel (haut / gauche / droite ; le bas reste collé au sol)
+		local function outline(rows)
+			local h, w = #rows, #rows[1]
+			local W, H = w + 2, h + 1
+			local function at(y, x)
+				local oy, ox = y - 1, x - 1
+				if oy < 1 or oy > h or ox < 1 or ox > w then return "." end
+				return string.sub(rows[oy], ox, ox)
+			end
+			local out = {}
+			for y = 1, H do
+				local t = {}
+				for x = 1, W do
+					local ch = at(y, x)
+					if ch == "." and (at(y - 1, x) ~= "." or at(y + 1, x) ~= "." or at(y, x - 1) ~= "." or at(y, x + 1) ~= ".") then ch = "N" end
+					t[x] = ch
+				end
+				out[y] = table.concat(t)
+			end
+			return out
+		end
+
+		-- construit un sprite en carrés (les suites de même couleur d'une ligne = un seul carré)
+		local function buildPixel(def, ps)
+			local rows = outline(def.rows)
+			local sw, sh = #rows[1], #rows
+			local root = new("Frame", { Name = "Critter", AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(sw * ps, sh * ps),
+				BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 2 }, decor)
+			for y = 1, sh do
+				local row, x = rows[y], 1
+				while x <= sw do
+					local ch = string.sub(row, x, x)
+					if ch ~= "." then
+						local x2 = x
+						while x2 < sw and string.sub(row, x2 + 1, x2 + 1) == ch do x2 = x2 + 1 end
+						new("Frame", { Position = UDim2.fromOffset((x - 1) * ps, (y - 1) * ps),
+							Size = UDim2.fromOffset((x2 - x + 1) * ps, ps), BackgroundColor3 = PAL[ch] or PAL.W, BorderSizePixel = 0 }, root)
+						x = x2 + 1
+					else
+						x = x + 1
+					end
+				end
+			end
+			return root, sw, sh
+		end
+
+		-- style dessin : formes lisses avec contour
+		local function buildVector(def, ps)
+			local vec = def.vec
+			local sw, sh = vec.w, vec.h
+			local root = new("Frame", { Name = "Critter", AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(floor(sw * ps), floor(sh * ps)),
+				BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 2 }, decor)
+			local th = math.max(1, floor(ps / 2 + 0.5))
+			local function px(v) return floor(v * ps + 0.5) end
+			local function stroke(f, ns)
+				if not ns then new("UIStroke", { Color = PAL.N, Thickness = th, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, f) end
+			end
+			for _, s in ipairs(vec.shapes) do
+				local col = PAL[s.c] or s.c
+				if s.k == "e" or s.k == "r" then
+					local f = new("Frame", { Position = UDim2.fromOffset(px(s.x), px(s.y)),
+						Size = UDim2.fromOffset(math.max(1, px(s.w)), math.max(1, px(s.h))), BackgroundColor3 = col,
+						BackgroundTransparency = s.tr or 0, BorderSizePixel = 0, Rotation = s.rot or 0 }, root)
+					new("UICorner", { CornerRadius = (s.k == "e") and UDim.new(0.5, 0) or UDim.new(0, math.max(1, px(s.rad or 0.4))) }, f)
+					stroke(f, s.ns)
+				elseif s.k == "d" then
+					local clip = new("Frame", { Position = UDim2.fromOffset(px(s.x), px(s.y)), Size = UDim2.fromOffset(px(s.w), px(s.h / 2)),
+						BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true }, root)
+					local f = new("Frame", { Size = UDim2.fromOffset(px(s.w), px(s.h)), BackgroundColor3 = col, BorderSizePixel = 0 }, clip)
+					new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, f)
+					stroke(f)
+					if s.st then
+						local sf = new("Frame", { Position = UDim2.fromOffset(px(s.w * 0.33), 0), Size = UDim2.fromOffset(px(s.w * 0.34), px(s.h)),
+							BackgroundColor3 = PAL[s.st] or s.st, BorderSizePixel = 0 }, clip)
+						new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, sf)
+					end
+					new("Frame", { Position = UDim2.fromOffset(0, px(s.h / 2) - th), Size = UDim2.fromOffset(px(s.w), th),
+						BackgroundColor3 = PAL.N, BorderSizePixel = 0 }, clip)
+				elseif s.k == "v" then
+					local wpx = px(s.w)
+					local clip = new("Frame", { Position = UDim2.fromOffset(px(s.x), px(s.y)), Size = UDim2.fromOffset(wpx, floor(wpx / 2)),
+						BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true }, root)
+					local side = floor(wpx / 1.41421 + 0.5)
+					local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, 0), Size = UDim2.fromOffset(side, side),
+						Rotation = 45, BackgroundColor3 = col, BorderSizePixel = 0 }, clip)
+					stroke(f)
+				elseif s.k == "o" then
+					local f = new("Frame", { Position = UDim2.fromOffset(px(s.x), px(s.y)), Size = UDim2.fromOffset(px(s.w), px(s.h)),
+						BackgroundTransparency = 1, BorderSizePixel = 0 }, root)
+					new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, f)
+					new("UIStroke", { Color = col, Thickness = math.max(1, px(s.th or 0.5)), ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, f)
+				end
+			end
+			return root, sw, sh
+		end
+
+		local function buildSprite(def, ps)
+			if style == "dessin" and def.vec then return buildVector(def, ps) end
+			return buildPixel(def, ps)
+		end
+
+		local function addHit(root, o)
+			local hit = new("TextButton", { Name = "Hit", Position = UDim2.fromOffset(-3, -3), Size = UDim2.new(1, 6, 1, 6),
+				BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 5 }, root)
+			hit.MouseButton1Click:Connect(function() poke(o) end)
+		end
+
+		local function clearAll()
+			for _, c in ipairs(critters) do
+				c.root:Destroy()
+				for _, k in ipairs({ "zs", "steam" }) do
+					if c[k] then for _, f in ipairs(c[k]) do f:Destroy() end end
+				end
+			end
+			critters = {}
+			if walker then walker.root:Destroy() walker = nil end
+			bubbleOwner, bubbleT = nil, 0
+			bubble.Visible = false
+		end
+
+		local function buildAll()
+			clearAll()
+			local ps = curPs
+			for idx, key in ipairs(theme.order) do
+				local def = theme.defs[key]
+				local root, sw, sh = buildSprite(def, ps)
+				local c = { key = key, def = def, root = root, sw = sw, sh = sh, x = 0, tx = 0, hop = 0, flash = 0, shown = false,
+					ph = rng:NextNumber(0, 6.28), jit = rng:NextInteger(-4, 4) * ps / 2, feet = 0, li = {} }
+				if def.lights then
+					c.lights = {}
+					local vecMode = style == "dessin" and def.vec and def.vlights
+					local list = vecMode and def.vlights or def.lights
+					for i, p in ipairs(list) do
+						local lx, ly = p[1], p[2]
+						if not vecMode then lx, ly = lx + 1, ly + 1 end   -- le contour décale le pixel art d'une case
+						c.lights[i] = new("Frame", { Position = UDim2.fromOffset(floor(lx * ps), floor(ly * ps)), Size = UDim2.fromOffset(ps, ps),
+							BackgroundColor3 = PAL.Y, BorderSizePixel = 0 }, root)
+						if vecMode then new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, c.lights[i]) end
+					end
+				end
+				if def.fire then
+					c.glow = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(sw * ps / 2, (sh - 4) * ps),
+						Size = UDim2.fromOffset(sw * ps * 2, sw * ps * 2), BackgroundColor3 = PAL.O, BackgroundTransparency = 0.9,
+						BorderSizePixel = 0, ZIndex = 0 }, root)
+					new("UICorner", { CornerRadius = UDim.new(1, 0) }, c.glow)
+					c.flames = {}
+					local cols, wid = { PAL.R, PAL.O, PAL.Y }, { 4, 2, 2 }
+					for i = 1, 3 do
+						c.flames[i] = new("Frame", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.fromOffset(sw * ps / 2, (sh - 3) * ps),
+							Size = UDim2.fromOffset(wid[i] * ps, ps * 3), BackgroundColor3 = cols[i], BorderSizePixel = 0, ZIndex = 1 + i }, root)
+						if style == "dessin" then new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, c.flames[i]) end
+					end
+				end
+				if def.zzz then
+					c.zs = {}
+					for i = 1, 3 do
+						c.zs[i] = new("TextLabel", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(14, 14), BackgroundTransparency = 1,
+							Text = "z", Font = F_BOLD, TextSize = 10, TextColor3 = PAL.W, TextTransparency = 1, ZIndex = 2 }, decor)
+					end
+				end
+				if def.steam then
+					c.steam = {}
+					for i = 1, 3 do
+						local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(math.max(2, ps), math.max(2, ps)),
+							BackgroundColor3 = PAL.W, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 2 }, decor)
+						new("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
+						c.steam[i] = f
+					end
+				end
+				addHit(root, c)
+				critters[idx] = c
+			end
+			-- le pingouin qui se balade (créé en dernier = devant les autres)
+			local wdef = theme.defs.walker
+			local root, sw, sh = buildSprite(wdef, ps)
+			walker = { key = "walker", def = wdef, root = root, sw = sw, sh = sh, x = clamp(curW / 2, 14, math.max(14, curW - 14)),
+				mode = "idle", wait = 1.5, dir = 1, hop = 0, flash = 0, feet = 0 }
+			root.ZIndex = 3
+			addHit(root, walker)
+		end
+
+		-- positions qui dépendent de la largeur / de la taille
+		local function relayout()
+			local ps = curPs
+			Hs = 16 * ps + 8
+			lt = math.max(3, ps * 2)
+			decor.Size = UDim2.fromOffset(curW, Hs)
+			ground.Size = UDim2.fromOffset(curW, lt)
+			ground.Position = UDim2.fromOffset(0, Hs)
+			local s = ps / 2
+			for _, b in ipairs(bumps) do
+				local bw, bh = floor(b.w * s), floor(b.h * s)
+				if style == "pixel" then   -- congères en blocs
+					bw, bh = math.max(ps * 2, floor(bw / ps + 0.5) * ps), math.max(ps, floor(bh / ps + 0.5) * ps)
+				end
+				b.f.Size = UDim2.fromOffset(bw, bh)
+				b.f.Position = UDim2.fromOffset(floor(b.fx * curW), Hs - floor(lt / 2))
+			end
+			for _, sp in ipairs(sparks) do
+				local z = (style == "pixel") and ps or math.max(2, floor(ps * 0.8))
+				sp.f.Size = UDim2.fromOffset(z, z)
+				sp.f.Position = UDim2.fromOffset(floor(sp.fx * curW), Hs - lt - floor(sp.dy * s))
+			end
+			local n = 0
+			if curW >= 120 then n = clamp(floor(curW / (30 * s + 8)), 0, #theme.priority) end
+			local vis = {}
+			for i = 1, n do vis[theme.priority[i]] = true end
+			local k = 0
+			for _, c in ipairs(critters) do
+				c.feet = Hs - lt + 1
+				if vis[c.key] then
+					k = k + 1
+					c.tx = curW * (k - 0.5) / n + c.jit
+					if not c.shown then c.x = c.tx end
+					c.shown = true
+				else
+					c.shown = false
+				end
+				c.root.Visible = c.shown
+			end
+			if walker then
+				walker.feet = Hs - 1
+				walker.x = clamp(walker.x, 14, math.max(14, curW - 14))
+			end
+		end
+
+		local function place()
+			local ap, as = main.AbsolutePosition, main.AbsoluteSize
+			local v = viewport()
+			local w = math.max(0, floor(as.X - 44))
+			local gy = math.min(ap.Y + as.Y + (tonumber(Library.DecorGap) or 10), v.Y - 4)
+			local px, py = floor(ap.X + as.X / 2 + 0.5), floor(gy + 0.5)
+			if px ~= lastPX or py ~= lastPY then
+				lastPX, lastPY = px, py
+				decor.Position = UDim2.fromOffset(px, py)
+			end
+			if w ~= curW then
+				curW = w
+				if curPs > 0 then relayout() end
+			end
+		end
+
+		local function syncFlakes()
+			local want = clamp(floor(tonumber(Library.SnowCount) or 0), 0, 120)
+			local v = viewport()
+			while #flakes < want do
+				local sz = rng:NextInteger(2, 4)
+				local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(sz, sz), BackgroundColor3 = theme.flake,
+					BackgroundTransparency = 1, BorderSizePixel = 0 }, snow)
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
+				flakes[#flakes + 1] = { f = f, x = rng:NextNumber(0, v.X), y = rng:NextNumber(-20, v.Y), vy = rng:NextNumber(22, 60) * (sz / 3),
+					sw = rng:NextNumber(4, 16), ph = rng:NextNumber(0, 6.28), fr = rng:NextNumber(0.5, 1.5), a = rng:NextNumber(0.45, 0.95) }
+			end
+			while #flakes > want do table.remove(flakes).f:Destroy() end
+		end
+
+		local function refreshDecor()
+			local ps = clamp(floor(2 * (tonumber(Library.DecorScale) or 1) + 0.5), 1, 4)
+			local th = Library.DecorTheme
+			local nt = (th == "Été" or th == "Ete" or th == "summer") and THEMES.summer or THEMES.winter
+			local ns = (Library.DecorStyle == "Dessin" or Library.DecorStyle == "drawn") and "dessin" or "pixel"
+			if ps ~= curPs or nt ~= theme or ns ~= style or #critters == 0 then
+				theme, curPs, style = nt, ps, ns
+				local rad = (style == "pixel") and 0 or 1
+				gCorner.CornerRadius = UDim.new(rad, 0)
+				for _, b in ipairs(bumps) do b.cr.CornerRadius = UDim.new(rad * 0.5, 0) end
+				for _, sp in ipairs(sparks) do sp.cr.CornerRadius = UDim.new(rad, 0) sp.f.BackgroundColor3 = theme.spark end
+				ground.BackgroundColor3 = theme.ground
+				for _, b in ipairs(bumps) do b.f.BackgroundColor3 = theme.bump end
+				for _, f in ipairs(flakes) do f.f.BackgroundColor3 = theme.flake end
+				buildAll()
+				relayout()
+			end
+			syncFlakes()
+			snow.ZIndex = (Library.SnowOnWindow == false) and 0 or 4
+			place()
+			Ticker.wake()
+		end
+		win.RefreshDecor = refreshDecor
+
+		main:GetPropertyChangedSignal("AbsolutePosition"):Connect(place)
+		main:GetPropertyChangedSignal("AbsoluteSize"):Connect(place)
+
+		track(Ticker.connect(function(dt, now)
+			dt = math.min(dt, 0.1)
+			local anim = Library.Animations ~= false
+			local open = skyTarget > 0 and main.Visible
+			local tD = (open and Library.DecorStrip ~= false and curW >= 120) and 1 or 0
+			local tS = (open and anim and bgMode ~= "off" and #flakes > 0) and 1 or 0
+			if Library._skyInstant then
+				dScale, sFade = tD, tS
+			else
+				dScale = dScale + (tD - dScale) * (1 - exp(-dt * 9))
+				sFade = sFade + (tS - sFade) * (1 - exp(-dt * 6))
+			end
+			if tD == 0 and dScale < 0.02 then dScale = 0 end
+			if tS == 0 and sFade < 0.02 then sFade = 0 end
+
+			-- ── personnages ──
+			if dScale > 0 then
+				place()
+				decor.Visible = true
+				dUi.Scale = math.max(0.05, dScale)
+				local ps, s = curPs, curPs / 2
+				for _, sp in ipairs(sparks) do
+					local a = anim and (0.5 + 0.5 * sin(now * sp.fr + sp.ph)) or 0.4
+					sp.f.BackgroundTransparency = 1 - a * a * 0.95
+				end
+				for _, c in ipairs(critters) do
+					if c.shown then
+						local def = c.def
+						c.x = c.x + (c.tx - c.x) * math.min(1, dt * 10)
+						local lift, rot = 0, 0
+						if c.hop > 0 then
+							c.hop = c.hop - dt
+							lift = sin(clamp(1 - c.hop / 0.5, 0, 1) * math.pi) * 9 * s
+						end
+						if anim then
+							if def.sway then rot = sin(now * 1.3 + c.ph) * 2.5 end
+							if def.bounce then lift = lift + abs(sin(now * 3 + c.ph)) * 8 * s end
+							if def.shake then
+								local t = (now + c.ph) % 5
+								if t < 0.5 then rot = sin(now * 38) * 7 * (1 - t / 0.5) end
+							end
+						end
+						if def.tilt then rot = def.tilt end
+						c.root.Position = UDim2.fromOffset(floor(c.x + 0.5), floor(c.feet - lift + 0.5))
+						c.root.Rotation = rot
+						-- guirlande du sapin
+						if c.lights and anim then
+							if c.flash > 0 then c.flash = c.flash - dt end
+							local rate = c.flash > 0 and 9 or 1.6
+							for i, f in ipairs(c.lights) do
+								local idx = floor(now * rate + i * 0.7) % 4 + 1
+								if c.li[i] ~= idx then c.li[i] = idx f.BackgroundColor3 = LIGHTC[idx] end
+							end
+						end
+						-- feu de camp
+						if c.flames and anim then
+							local base = { 5, 3.6, 2.2 }
+							local wob = { 4, 2, 2 }
+							for i, f in ipairs(c.flames) do
+								local nz = math.noise(now * 5, i * 1.7)
+								f.Size = UDim2.fromOffset(wob[i] * ps, math.max(ps, floor((base[i] + nz * 2.4) * ps)))
+							end
+							c.glow.BackgroundTransparency = 0.9 - 0.04 * sin(now * 7 + c.ph)
+							emberT = emberT - dt
+							if emberT <= 0 then
+								emberT = rng:NextNumber(0.4, 0.9)
+								burst(c.x + rng:NextNumber(-3, 3) * s, c.feet - c.sh * ps * 0.55, { "O", "Y" }, 1, true)
+							end
+						end
+						-- zzz du renard
+						if c.zs then
+							for i, lbl in ipairs(c.zs) do
+								if anim then
+									local p = (now * 0.45 + i / 3) % 1
+									lbl.Position = UDim2.fromOffset(floor(c.x - c.sw * ps / 2 + 3 * ps + p * 8), floor(c.feet - c.sh * ps - 2 - p * 16))
+									lbl.TextSize = floor(9 + p * 5)
+									lbl.TextTransparency = 1 - sin(p * math.pi) * 0.85
+								else
+									lbl.TextTransparency = 1
+								end
+							end
+						end
+						-- vapeur de la tasse
+						if c.steam then
+							for i, f in ipairs(c.steam) do
+								if anim then
+									local p = (now * 0.7 + i / 3) % 1
+									f.Position = UDim2.fromOffset(floor(c.x - ps + sin(p * 6 + i * 2) * 2), floor(c.feet - c.sh * ps - 2 - p * 14))
+									f.BackgroundTransparency = 1 - sin(p * math.pi) * 0.6
+								else
+									f.BackgroundTransparency = 1
+								end
+							end
+						end
+					else
+						if c.zs then for _, l in ipairs(c.zs) do l.TextTransparency = 1 end end
+						if c.steam then for _, f in ipairs(c.steam) do f.BackgroundTransparency = 1 end end
+					end
+				end
+
+				-- pingouin promeneur
+				local wk = walker
+				if wk then
+					local walking = false
+					if anim then
+						wk.wait = wk.wait - dt
+						if wk.mode == "idle" then
+							if wk.wait <= 0 then
+								wk.mode, wk.wait = "walk", rng:NextNumber(2, 5)
+								wk.dir = (rng:NextNumber(0, 1) < 0.5) and -1 or 1
+								if wk.x < 40 then wk.dir = 1 elseif wk.x > curW - 40 then wk.dir = -1 end
+							end
+						else
+							walking = true
+							wk.x = wk.x + wk.dir * theme.wspeed * s * dt
+							if wk.x < 14 then wk.x, wk.dir = 14, 1 elseif wk.x > curW - 14 then wk.x, wk.dir = curW - 14, -1 end
+							if wk.wait <= 0 then wk.mode, wk.wait = "idle", rng:NextNumber(1.5, 4) end
+						end
+					end
+					local lift, rot = 0, 0
+					if walking then
+						rot = sin(now * theme.wfreq) * theme.wrot
+						lift = abs(sin(now * theme.wfreq)) * 1.5 * s
+					else
+						rot = sin(now * 1.5) * 1.2
+					end
+					if wk.hop > 0 then
+						wk.hop = wk.hop - dt
+						lift = lift + sin(clamp(1 - wk.hop / 0.5, 0, 1) * math.pi) * 9 * s
+					end
+					wk.root.Position = UDim2.fromOffset(floor(wk.x + 0.5), floor(wk.feet - lift + 0.5))
+					wk.root.Rotation = rot
+				end
+
+				-- bulle
+				if bubbleT > 0 and bubbleOwner then
+					bubbleT = bubbleT - dt
+					local a = clamp(math.min(bubbleT / 0.35, (1.9 - bubbleT) / 0.12), 0, 1)
+					local bw = bubble.AbsoluteSize.X / math.max(0.05, dScale)
+					local bx = clamp(bubbleOwner.x, bw / 2 + 4, math.max(curW - bw / 2 - 4, bw / 2 + 4))
+					bubble.Position = UDim2.fromOffset(floor(bx), floor(bubbleOwner.feet - bubbleOwner.sh * ps - 6))
+					bubble.BackgroundTransparency = 1 - 0.9 * a
+					bubble.TextTransparency = 1 - a
+					if bubbleT <= 0 then bubble.Visible = false end
+				end
+
+				-- étincelles
+				for i = #parts, 1, -1 do
+					local p = parts[i]
+					p.life = p.life - dt
+					if p.life <= 0 then
+						p.f.Visible = false
+						free[#free + 1] = p.f
+						table.remove(parts, i)
+					else
+						p.vy = p.vy + p.g * dt
+						p.x = p.x + p.vx * dt
+						p.y = p.y + p.vy * dt
+						p.f.Position = UDim2.fromOffset(floor(p.x + 0.5), floor(p.y + 0.5))
+						p.f.BackgroundTransparency = 1 - clamp(p.life / 0.4, 0, 1)
+					end
+				end
+			elseif decor.Visible then
+				decor.Visible = false
+			end
+
+			-- ── neige ──
+			if sFade > 0 then
+				snow.Visible = true
+				local v = viewport()
+				local vw, vh = v.X, v.Y
+				local spd = tonumber(Library.SnowSpeed) or 1
+				local dir = theme.up and -1 or 1
+				for _, f in ipairs(flakes) do
+					f.y = f.y + dir * f.vy * theme.mul * dt * spd
+					if f.y > vh + 6 then f.y = -6 f.x = rng:NextNumber(0, vw)
+					elseif f.y < -6 then f.y = vh + 6 f.x = rng:NextNumber(0, vw) end
+					local x = f.x + sin(now * f.fr + f.ph) * f.sw
+					f.f.Position = UDim2.fromOffset(floor(x + 0.5), floor(f.y + 0.5))
+					local a = f.a
+					if theme.twinkle then a = a * (0.65 + 0.35 * sin(now * f.fr * 3 + f.ph)) end
+					f.f.BackgroundTransparency = 1 - a * sFade
+				end
+				if theme.sun then
+					sun.Visible = true
+					sun.Position = UDim2.fromOffset(floor(vw - 90), 90)
+					sun.BackgroundTransparency = 1 - 0.7 * sFade
+					sunGlow.BackgroundTransparency = 1 - (0.1 + 0.04 * sin(now * 1.5)) * sFade
+				elseif sun.Visible then
+					sun.Visible = false
+				end
+			elseif snow.Visible then
+				snow.Visible = false
+			end
+		end, { rate = 40, deco = true, gate = function()
+			return (skyTarget > 0 or dScale > 0 or sFade > 0) and (Library.DecorStrip ~= false or #flakes > 0 or dScale > 0 or sFade > 0)
+		end }))
+
+		refreshDecor()
+	end
 
 	-- Animation d'apparition
 	if useCanvas then main.GroupTransparency = 1 end
