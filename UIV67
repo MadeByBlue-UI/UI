@@ -7,6 +7,12 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.22 — TABBOX : ICÔNES · TEXTE PLUS GRAND · NOM ÉTIRÉ · POLICE
+		• blk:CreateTabbox({ Tabs = { "A", "B" }, Icons = { "sword", "eye" } }) (ou Tabs = { { Name = "A", Icon = "sword" } }) · tb.SetIcon(nom, icône).
+		• Texte des onglets à 14 px (avant 12) · réglages globaux dans Paramètres > Apparence (taille, police, nom étiré, icônes, taille des icônes)
+		  = Library:SetTabboxOption("TextSize" | "Font" | "Stretch" | "Icons" | "IconSize", valeur) · par Tabbox : { TextSize, Font, Stretch, ShowIcons, IconSize }
+		  et tb.SetTextSize / SetFont / SetStretch / ShowIcons / SetIconSize (nil = suivre le réglage global).
+
 	V9.21 — ICÔNES PAR NOM (Icon = "shield-check", noms Lucide comme Apex) SUR TOUS LES ÉLÉMENTS · ICÔNES AUTOMATIQUES (Library.IconRules)
 		• Voir le bloc « V9.21 : ICÔNES PAR NOM » juste après Library.IconSize.
 
@@ -2482,6 +2488,23 @@ end))
 Library.SmoothScrollStep  = 260      -- px par cran de molette (avant : 110) : défilement bien plus rapide
 Library.SmoothScrollSpeed = 30      -- raideur du ressort : plus haut = plus vif (avant : 26) ; reste fluide (amortissement critique)
 Library.IconSize = 22                -- TAILLE FIXE de toutes les icônes de l'UI (onglets, sous-onglets, blocs, réglages, listes) : 22 x 22 px
+
+-- V9.22 : apparence des Tabbox (valeurs par défaut de toutes les Tabbox ; chaque Tabbox peut avoir les siennes)
+--   Font = "Auto" (suit la police de l'UI) ou un nom de Library.FontFamilies · Stretch = lettres espacées comme le titre
+Library.TabboxStyle = { TextSize = 14, Stretch = false, Font = "Auto", Icons = true, IconSize = 16 }
+Library._tabboxList = {}
+function Library:SetTabboxOption(key, v)
+	if Library.TabboxStyle[key] == nil then return end
+	Library.TabboxStyle[key] = v
+	local keep = {}
+	for _, e in ipairs(Library._tabboxList) do
+		if e.box and e.box.Parent then
+			keep[#keep + 1] = e
+			pcall(e.fn)
+		end
+	end
+	Library._tabboxList = keep
+end
 
 -- ============================================================================
 -- V9.21 : ICÔNES PAR NOM (style Apex)  ·  Icon = "shield-check"  (noms Lucide, https://lucide.dev)
@@ -18246,7 +18269,7 @@ function Library:_buildHomeExplain(sub)
 	live1:CreateRangeSlider({ Name = "Curseur à deux poignées", Min = 0, Max = 100, Step = 1, MinGap = 5, Default = { Low = 20, High = 70 } })
 	live1:CreateStepper({ Name = "Compteur", Min = 0, Max = 10, Step = 1, Default = 3, Wrap = true })
 	live1:CreateLabel({ Text = "Onglets dans un bloc (CreateTabbox) : change d'onglet, le contenu et la hauteur du bloc s'adaptent." })
-	local demoTabbox = live1:CreateTabbox({ Tabs = { "Combat", "Visuel", "Divers" } })
+	local demoTabbox = live1:CreateTabbox({ Tabs = { "Combat", "Visuel", "Divers" }, Icons = { "sword", "eye", "settings" } })
 	demoTabbox.Combat:CreateToggle({ Name = "Aimbot", Keybind = false })
 	demoTabbox.Combat:CreateSlider({ Name = "Portée", Min = 10, Max = 200, Step = 10, Default = 80, Suffix = " m" })
 	demoTabbox.Combat:CreateStepper({ Name = "Cibles max", Min = 1, Max = 10, Step = 1, Default = 3 })
@@ -21238,6 +21261,22 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Default = pct(Library.FontScale), Callback = function(v) Library:SetFontScale(v / 100) end })
 	A:CreateDropdown({ Name = "Police", Flag = "ui.fontfamily", Items = Library.FontFamilies, Search = false,
 		Default = Library.FontFamily, Callback = function(v) Library:SetFont(v) end })
+	local tbs = Library.TabboxStyle
+	local tbFonts = { "Auto" }
+	for _, f in ipairs(Library.FontFamilies) do tbFonts[#tbFonts + 1] = f end
+	A:CreateSlider({ Name = "Tabbox : taille du texte", Flag = "ui.tabbox_size", Min = 10, Max = 24, Step = 1, Suffix = " px",
+		Default = tbs.TextSize, Callback = function(v) Library:SetTabboxOption("TextSize", v) end })
+	A:CreateDropdown({ Name = "Tabbox : police", Flag = "ui.tabbox_font", Items = tbFonts, Search = false, Default = tbs.Font,
+		Tooltip = "Auto = la même police que le reste de l'interface.",
+		Callback = function(v) Library:SetTabboxOption("Font", v) end })
+	A:CreateToggle({ Name = "Tabbox : nom étiré", Flag = "ui.tabbox_stretch", Default = tbs.Stretch,
+		Tooltip = "Espace les lettres du nom des onglets des Tabbox (comme le titre).",
+		Callback = function(v) Library:SetTabboxOption("Stretch", v) end })
+	A:CreateToggle({ Name = "Tabbox : icônes", Flag = "ui.tabbox_icons", Default = tbs.Icons,
+		Tooltip = "Affiche l'icône à gauche du nom des onglets (quand il y en a une).",
+		Callback = function(v) Library:SetTabboxOption("Icons", v) end })
+	A:CreateSlider({ Name = "Tabbox : taille des icônes", Flag = "ui.tabbox_iconsize", Min = 10, Max = 28, Step = 1, Suffix = " px",
+		Default = tbs.IconSize, Callback = function(v) Library:SetTabboxOption("IconSize", v) end })
 	A:CreateDropdown({ Name = "Police du titre", Flag = "ui.titlefont", Items = Library.TitleFonts, Search = false,
 		Default = Library.TitleFont, Callback = opt("TitleFont") })
 	A:CreateToggle({ Name = "Titre qui brille", Flag = "ui.titleshine", Default = Library.TitleShine,
@@ -27507,15 +27546,39 @@ do
 	end
 
 	-- ---- TABBOX ------------------------------------------------------------------------------------------------------
+	--   V9.22 : ICÔNES · TAILLE DU TEXTE · NOM ÉTIRÉ · POLICE (globaux dans Paramètres > Apparence, et par Tabbox)
+	--   blk:CreateTabbox({ Tabs = { "Combat", "Visuel" }, Icons = { "sword", "eye" } })
+	--   blk:CreateTabbox({ Tabs = { { Name = "Combat", Icon = "sword" }, "Visuel" }, TextSize = 16, Stretch = true, Font = "Fredoka", IconSize = 18, ShowIcons = true })
+	--   (sans option, la Tabbox suit les réglages globaux Library.TabboxStyle ; Library:SetTabboxOption("TextSize" | "Stretch" | "Font" | "Icons" | "IconSize", v))
+	--   tb.SetIcon("Combat", "zap") · tb.SetTextSize(16) · tb.SetStretch(true) · tb.SetFont("Nunito" | "Auto") · tb.SetIconSize(18) · tb.ShowIcons(false)
+	--   (passer nil à SetTextSize / SetStretch / SetFont / SetIconSize / ShowIcons = suivre à nouveau le réglage global)
 	function Block:CreateTabbox(o)
 		if type(o) == "table" and o[1] ~= nil and o.Tabs == nil then o = { Tabs = o } end
 		o = type(o) == "table" and o or {}
-		local list = {}
+		local list, icons = {}, {}
 		for _, t in ipairs(o.Tabs or o.Items or {}) do
-			list[#list + 1] = type(t) == "table" and tostring(t.Name or t[1] or "Tab") or tostring(t)
+			local nm
+			if type(t) == "table" then
+				nm = tostring(t.Name or t[1] or "Tab")
+				if t.Icon ~= nil then icons[nm] = t.Icon end
+			else
+				nm = tostring(t)
+			end
+			list[#list + 1] = nm
 		end
 		if #list == 0 then list = { "Tab 1", "Tab 2" } end
+		if type(o.Icons) == "table" then
+			for k, v in pairs(o.Icons) do
+				local nm = type(k) == "number" and list[k] or tostring(k)
+				if nm then icons[nm] = v end
+			end
+		end
+		for _, nm in ipairs(list) do
+			if icons[nm] == nil then icons[nm] = Library.IconFor(nm) end   -- icône automatique (Library.IconRules)
+		end
 		local n = #list
+		-- réglages propres à cette Tabbox (nil = suit le réglage global)
+		local own = { TextSize = tonumber(o.TextSize), Stretch = o.Stretch, Font = o.Font, IconSize = tonumber(o.IconSize), Icons = o.ShowIcons }
 
 		local box = new("Frame", {
 			Name = "Tabbox", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundColor3 = T.Element,
@@ -27548,6 +27611,51 @@ do
 		local tb = {}
 		local born = os.clock()
 		local holderH, clipTok = 0, 0
+
+		-- ---- apparence : icônes, taille du texte, nom étiré, police ----
+		local function get(k)
+			local v = own[k]
+			if v == nil then v = (Library.TabboxStyle or {})[k] end
+			return v
+		end
+		local function restyle()
+			if #btns < n then return end
+			local size = math.clamp(tonumber(get("TextSize")) or 14, 8, 30)
+			local isz = math.clamp(tonumber(get("IconSize")) or 16, 8, 32)
+			local showIcons = get("Icons") ~= false
+			local stretch = get("Stretch") == true
+			local fontName = get("Font")
+			local fam = fontName and fontName ~= "Auto" and FONT_FAMILIES[fontName] or nil
+			local font
+			if fam then
+				local okF, f = pcall(function() return Enum.Font[fam[2]] end)
+				if okF then font = f end
+			end
+			local anyIcon = false
+			for i, nm in ipairs(list) do
+				local bt = btns[i]
+				bt.lbl.Text = stretch and Library._stretch(nm) or nm
+				bt.lbl:SetAttribute("BaseSize", size)
+				bt.lbl.TextSize = math.max(8, math.floor(size * (Library.FontScale or 1) + 0.5))
+				if font then   -- police propre à la Tabbox : le réglage de police global ne la touche plus
+					bt.lbl:SetAttribute("FontRole", nil)
+					bt.lbl.Font = font
+				else
+					bt.lbl:SetAttribute("FontRole", 2)
+					bt.lbl.Font = (Library.Fonts and Library.Fonts[2]) or F_MED
+				end
+				local want = showIcons and icons[nm]
+				if want and Library.ApplyIcon(bt.ico, want) then
+					bt.ico.Size = UDim2.fromOffset(isz, isz)
+					bt.ico.Visible = true
+					anyIcon = true
+				else
+					bt.ico.Visible = false
+				end
+			end
+			bar.Size = UDim2.new(1, 0, 0, math.max(28, size + 14, anyIcon and (isz + 10) or 0))
+		end
+		table.insert(Library._tabboxList, { box = box, fn = restyle })
 
 		local function wantH(i)
 			local ly = layouts[i]
@@ -27583,7 +27691,9 @@ do
 			local animate = (not silent) and prev ~= 0 and Library.Animations ~= false
 			local dir = (i > prev) and 1 or -1   -- 1 : on va vers la droite (la nouvelle page arrive de la droite)
 			for j = 1, n do
-				tween(btns[j].lbl, { TextColor3 = (j == i) and T.Text or T.ElementAccent }, 0.18)
+				local col = (j == i) and T.Text or T.ElementAccent
+				tween(btns[j].lbl, { TextColor3 = col }, 0.18)
+				tween(btns[j].ico, { ImageColor3 = col }, 0.18)
 			end
 			if animate then
 				Library._spring(pill, { Position = slot(i) }, "snappy")
@@ -27634,9 +27744,16 @@ do
 				BackgroundTransparency = 1, Text = "", AutoButtonColor = false, BorderSizePixel = 0, ZIndex = 2,
 			}, bar)
 			corner(b, 6)
-			local l = label(b, nm, 12, { TextXAlignment = CENTER, TextColor3 = T.ElementAccent, Size = UDim2.new(1, -6, 1, 0),
-				Position = UDim2.fromOffset(3, 0), ZIndex = 3 })
-			btns[i] = { btn = b, lbl = l }
+			-- contenu centré : [icône] [nom]
+			local row = new("Frame", { Name = "Content", BackgroundTransparency = 1, BorderSizePixel = 0,
+				Size = UDim2.new(1, -6, 1, 0), Position = UDim2.fromOffset(3, 0), ZIndex = 3, ClipsDescendants = true }, b)
+			new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 5), SortOrder = BYORDER }, row)
+			local ico = new("ImageLabel", { Name = "Icon", LayoutOrder = 1, BackgroundTransparency = 1, BorderSizePixel = 0,
+				Size = UDim2.fromOffset(16, 16), ImageColor3 = T.ElementAccent, ScaleType = Enum.ScaleType.Fit, ZIndex = 3, Visible = false }, row)
+			local l = label(row, nm, 14, { TextXAlignment = CENTER, TextColor3 = T.ElementAccent, LayoutOrder = 2,
+				AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 1, 0), TextTruncate = Enum.TextTruncate.None, ZIndex = 3 })
+			btns[i] = { btn = b, lbl = l, ico = ico }
 			local pg = new("Frame", {
 				Name = "TabboxPage_" .. nm, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
 				BorderSizePixel = 0, Visible = false,
@@ -27654,6 +27771,7 @@ do
 			if tb[nm] == nil then tb[nm] = sb end
 			b.MouseButton1Click:Connect(function() pick(i) end)
 		end
+		restyle()
 
 		tb.Select = function(...)
 			local v = unself(tb, ...)
@@ -27665,6 +27783,25 @@ do
 		end
 		tb.Get = function() return list[cur] end
 		tb.Pages = subs
+		-- apparence (nil = suivre le réglage global)
+		tb.SetTextSize = function(...) own.TextSize = tonumber((unself(tb, ...))) restyle() end
+		tb.SetIconSize = function(...) own.IconSize = tonumber((unself(tb, ...))) restyle() end
+		tb.SetStretch = function(...)
+			local v = unself(tb, ...)
+			if v == nil then own.Stretch = nil else own.Stretch = v and true or false end
+			restyle()
+		end
+		tb.ShowIcons = function(...)
+			local v = unself(tb, ...)
+			if v == nil then own.Icons = nil else own.Icons = v and true or false end
+			restyle()
+		end
+		tb.SetFont = function(...) own.Font = (unself(tb, ...)) restyle() end
+		tb.SetIcon = function(...)
+			local a, ic = unself(tb, ...)
+			local nm = type(a) == "number" and list[a] or tostring(a)
+			if nm and table.find(list, nm) then icons[nm] = ic restyle() end
+		end
 		pick(math.clamp(tonumber(o.Default) or (table.find(list, tostring(o.Default)) or 1), 1, n), true)
 		return tb
 	end
