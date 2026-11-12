@@ -7,6 +7,29 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.29 — HORLOGE DES REPAS : aux heures de repas (Library.MealTimes), voile flouté sur tout l'écran + heure géante en chiffres pixel,
+		  centrée : 11:59 défile jusqu'à 12:00. Library.MealClock · MealClockLead · MealClockHold · MealClockLabel · MealClockBlur ·
+		  Library:PreviewMealClock(12, 0, "Déjeuner") (Paramètres > Apparence > « Horloge pixel aux heures des repas »).
+
+	V9.28 — BULLE DE COMMENTAIRES : STYLE, RÉACTIONS, ALERTES, CLIC, HEURE, PHRASES PERSO, SON
+		• Style : fond / texte / contour suivent le thème (Library.DecorBubbleThemed), contour fin, petit effet d'apparition, teinte rouge / orange / verte
+		  selon le type de message (Kind = "error" | "warn" | "success" | "info").
+		• Library:DecorSay("texte", { Urgent = true, Kind = "error", Hold = 4 }) : l'urgent passe devant la file et coupe la phrase en cours.
+		• Réactions (Library.DecorBubbleReact) : « Annulé ! », config chargée / sauvegardée, « Copié ! », changement d'onglet. Library:DecorReact(clé, texte, kind, cooldown).
+		• Alertes (Library.DecorBubbleAlerts) : les notifications Error / Warning passent devant dans la bulle.
+		• Heure (Library.DecorBubbleTime) : phrases matin / midi / après-midi / soir / nuit + accueil à chaque ouverture de la fenêtre.
+		• Clic (Library.DecorBubbleClick) : clic gauche = phrase suivante · clic droit = effacer · survol = la bulle reste · Library:DecorNext() / DecorClear().
+		• Phrases perso : Library:SetDecorCustom("une par ligne") · Library.DecorCustomOnly · Library:DecorSayNow() (Paramètres : zone de texte + bouton).
+		• Son : Library.DecorBubbleSound = true → léger « tic » (événement « bubble » des sons de l'interface).
+		• Phrases : plus de 280 phrases en 18 catégories (dont « espace »), liées au moment de la journée (petit-déj' le matin, dîner le soir, sommeil la nuit...) (amour, compliments, sommeil, eau, pauses, motivation, astuces, humour, repas, jeux, musique, concentration,
+		  merci, animaux, santé, espace, hiver, été), jours spéciaux (Noël, Nouvel An, Saint-Valentin...) et jours de la semaine. Chaque catégorie a son ICÔNE Lucide
+		  (cœur, lune, flamme, goutte...) colorée, à gauche du texte (Library.DecorReactions / DecorReactIcons pour changer les réactions).
+		  Tes phrases : « [heart] Je t'aime » met une icône ; Library:DecorSay("texte", { Icon = "star" }).
+
+	V9.27 — BULLE DE COMMENTAIRES SOUS LA FENÊTRE : la bulle qui écrit de petits commentaires lettre par lettre, en fondu, est centrée juste sous
+		  la fenêtre (elle la suit), passe au-dessus s'il n'y a pas de place en bas, et marche même sans le décor. Library:DecorSay("texte"),
+		  Library.DecorBubble (bool), Library.DecorBubbleGap (px), Library.DecorBubbleDelay (s), Library.DecorComments = { "phrase", ... }.
+
 	V9.26 — DEUX STYLES POUR LE DÉCOR : « Pixel » (pixel art avec contours sombres, sol en blocs, étincelles qui brillent sur le sol, coffre au trésor)
 		  et « Dessin » (formes lisses et arrondies avec contours, façon cartoon). Library.DecorStyle = "Pixel" | "Dessin"
 		  (Paramètres > Apparence > « Étoiles & forme » > Décor & neige > Style du décor). Marche avec les thèmes Hiver et Été.
@@ -581,7 +604,28 @@ local Library = {
 	DecorTheme        = "Hiver", -- "Hiver" (neige) | "Été" (plage, soleil)
 	DecorStyle        = "Pixel", -- "Pixel" (pixel art) | "Dessin" (formes lisses, cartoon)
 	DecorScale        = 1,     -- taille des personnages (0.5 - 2)
-	DecorGap          = 10,    -- px entre le bas de la fenêtre et le sol de neige
+	DecorGap          = 10,    -- px entre le bas de la fenêtre et le sol de neige (si DecorBottom = false)
+	DecorBottom       = true,  -- true : le décor est collé tout en bas de l'écran, pleine largeur, avec de la neige qui remonte sur les côtés
+	DecorBubble       = true,  -- bulle de petits commentaires en bas, écrits lettre par lettre en fondu
+	DecorBubbleDelay  = 20,    -- secondes (environ) entre deux commentaires
+	DecorBubbleGap    = 24,    -- px entre le bas de la fenêtre et la bulle (elle est centrée juste sous la fenêtre)
+	DecorBubbleThemed = true,  -- la bulle prend les couleurs du thème (Or, Sakura, Clair...) au lieu du fond sombre fixe
+	DecorBubbleReact  = true,  -- la bulle réagit à tes actions (« Annulé ! », config chargée, copie, changement d'onglet...)
+	DecorBubbleAlerts = true,  -- les notifications d'erreur / d'avertissement passent devant la file d'attente de la bulle
+	DecorBubbleTime   = true,  -- phrases selon l'heure (« Bonjour ! », « Il est tard... ») + message d'accueil à l'ouverture
+	DecorBubbleClick  = true,  -- clic gauche sur la bulle : phrase suivante · clic droit : l'effacer · survol : elle reste affichée
+	DecorBubbleSound  = false, -- petit « tic » à chaque lettre (désactivé par défaut)
+	DecorCustom       = {},    -- tes propres phrases (une par ligne dans Paramètres) — voir Library:SetDecorCustom
+	DecorCustomOnly   = false, -- true : seulement tes phrases (sinon elles sont mélangées aux phrases du décor)
+	DecorAuto         = true,  -- thème automatique selon la date : Hiver en décembre, Été en juillet (sinon DecorTheme)
+	DecorGifts        = true,  -- le traîneau largue des cadeaux parachutés qui se posent sur le sol (clic = une phrase)
+	DecorClimb        = true,  -- des personnages grimpent le long des bords de la fenêtre (pingouin, lutin, pain d'épices) et s'assoient en haut
+	DecorGarland      = true,  -- guirlande lumineuse autour de la fenêtre (thème Hiver), elle clignote plus vite quand on clique sur le sapin
+	DecorSleigh       = true,  -- un traîneau (Père Noël + 2 rennes) traverse l'écran de temps en temps (thème Hiver)
+	DecorCatalog      = {      -- personnages disponibles : { clé, nom affiché } · Library.DecorPick = { winter = { tree = true, ... }, summer = {...} } (nil = tous)
+		winter = { { "tree", "Sapin" }, { "snowman", "Bonhomme de neige" }, { "snowpile", "Pile de boules de neige" }, { "snowpile2", "Petite pile de boules de neige" }, { "campfire", "Feu de camp" }, { "santa", "Père Noël" }, { "gift", "Cadeau rouge" }, { "gift2", "Cadeau bleu" }, { "reindeer", "Renne" }, { "chest", "Coffre au trésor" }, { "igloo", "Igloo" }, { "fox", "Renard" }, { "gingerbread", "Pain d'épices" }, { "bell", "Cloche" }, { "mug", "Chocolat chaud" }, { "polarbear", "Ours polaire" }, { "elf", "Lutin" }, { "candycane", "Sucre d'orge" }, { "stocking", "Chaussette" }, { "wreath", "Couronne" }, { "owl", "Chouette" }, { "star", "Étoile" }, { "lamp", "Réverbère" } },
+		summer = { { "palm", "Palmier" }, { "parasol", "Parasol" }, { "castle", "Château de sable" }, { "ball", "Ballon" }, { "icecream", "Glace" }, { "surf", "Planche de surf" }, { "buoy", "Bouée" }, { "cocktail", "Cocktail" }, { "seagull", "Mouette" }, { "bucket", "Seau" }, { "sunhat", "Chapeau de paille" }, { "starfish", "Étoile de mer" } },
+	},
 	SnowCount         = 40,    -- flocons qui tombent sur l'écran (0 pour désactiver)
 	SnowSpeed         = 1,     -- vitesse de la neige
 	SnowOnWindow      = true,  -- true = la neige passe aussi devant la fenêtre
@@ -6612,6 +6656,70 @@ function Library:SetStars(n)
 	Library.StarCount = n
 	if Library.Window then Library.Window:SetStars(n) end
 end
+-- écrit un commentaire dans la bulle posée juste sous la fenêtre (lettre par lettre, en fondu) : Library:DecorSay("Salut !")
+-- Library.DecorComments = { "phrase 1", "phrase 2" } remplace les commentaires automatiques.
+-- Library.DecorBubble = false coupe la bulle · Library.DecorBubbleGap = distance (px) entre la fenêtre et la bulle.
+-- Library:DecorSay("texte", { Urgent = true, Kind = "error" | "warn" | "success" | "info", Hold = secondes, Icon = "heart" | { "heart", "star" }, Color = Color3 })
+--   Urgent : passe devant la file d'attente (et coupe la phrase en cours) · Kind : couleur de la bulle · Icon : icône Lucide à gauche du texte
+function Library:DecorSay(text, o)
+	local w = Library.Window
+	if w and w.SayDecor and text ~= nil then w:SayDecor(tostring(text), o) end
+end
+-- phrase au hasard, tout de suite (même logique que les commentaires automatiques)
+function Library:DecorSayNow()
+	local w = Library.Window
+	if w and w.SayDecorNow then w:SayDecorNow() end
+end
+-- Library:DecorNext() : phrase suivante · Library:DecorClear() : efface la bulle et vide la file
+function Library:DecorNext() local w = Library.Window if w and w.NextDecor then w:NextDecor(false) end end
+function Library:DecorClear() local w = Library.Window if w and w.NextDecor then w:NextDecor(true) end end
+-- Library:SetDecorCustom("une phrase par ligne") ou { "phrase", ... } : tes phrases pour la bulle
+function Library:SetDecorCustom(v)
+	local out = {}
+	local function add(line)
+		if type(line) == "table" then   -- { t = "texte", i = "icône" }
+			if line.t and #out < 80 then out[#out + 1] = line end
+			return
+		end
+		line = string.gsub(tostring(line), "^%s+", "")
+		line = string.gsub(line, "%s+$", "")
+		if line == "" or #out >= 80 then return end
+		local ic, rest = string.match(line, "^%[([%w%-_]+)%]%s*(.+)$")   -- « [heart] Je t'aime » → icône + texte
+		if ic and rest then out[#out + 1] = { t = string.sub(rest, 1, 140), i = string.lower(ic) }
+		else out[#out + 1] = string.sub(line, 1, 140) end
+	end
+	if type(v) == "table" then
+		for _, l in ipairs(v) do add(l) end
+	elseif type(v) == "string" then
+		for l in string.gmatch(v .. "\n", "([^\n]*)\n") do add(l) end
+	end
+	Library.DecorCustom = out
+	return #out
+end
+-- réaction à une action de l'utilisateur : Library:DecorReact("clé", "texte" | { "t1", "t2" }, "success", cooldown_s)
+-- (anti-spam : une seule réaction toutes les ~2,5 s, et une même clé au plus toutes les `cooldown` secondes)
+function Library:DecorReact(key, text, kind, cd, icon)
+	if Library.DecorBubbleReact == false or Library.DecorBubble == false then return end
+	Library._reactAt = Library._reactAt or {}
+	local now = os.clock()
+	if now - (Library._reactLast or -1e9) < 2.5 then return end
+	if now - (Library._reactAt[key] or -1e9) < (tonumber(cd) or 8) then return end
+	Library._reactAt[key], Library._reactLast = now, now
+	local msg = text
+	if type(text) == "table" then msg = text[math.random(1, #text)] end
+	if msg == nil then return end
+	Library:DecorSay(tostring(msg), { Urgent = true, Kind = kind or "info", Icon = icon })
+end
+-- phrases (et icônes) des réactions automatiques : modifiables
+Library.DecorReactions = {
+	undo = { "Annulé !", "Retour en arrière, c'est fait.", "Hop, annulé !", "Pas de souci, on revient en arrière.", "C'est comme si de rien n'était." },
+	cfg  = { "Config chargée !", "Tout est en place.", "Config appliquée, on y va !", "Tes réglages sont de retour." },
+	save = { "Config sauvegardée.", "Sauvegardé !", "C'est dans la boîte.", "Bien rangé, tu pourras la retrouver." },
+	copy = { "Copié !", "Dans le presse-papiers !", "C'est copié.", "Copie réussie !" },
+}
+Library.DecorReactIcons = {
+	undo = { "undo-2", "rotate-ccw" }, cfg = { "folder-open", "download", "check" }, save = { "save", "check" }, copy = { "copy", "clipboard-check", "clipboard" },
+}
 
 Library.PresetOrder = { "Trou noir", "Océan", "Violet", "Violet rétro", "Rouge sang", "Émeraude", "Or", "Sakura", "Clair" }
 Library.Presets = {
@@ -6690,6 +6798,14 @@ function Library:GetTheme()
 		DecorStyle = Library.DecorStyle,
 		DecorScale = Library.DecorScale,
 		DecorGap = Library.DecorGap,
+		DecorBottom = Library.DecorBottom,
+		DecorSleigh = Library.DecorSleigh,
+		DecorAuto = Library.DecorAuto,
+		DecorBubble = Library.DecorBubble,
+		DecorBubbleDelay = Library.DecorBubbleDelay,
+		DecorGifts = Library.DecorGifts,
+		DecorClimb = Library.DecorClimb,
+		DecorGarland = Library.DecorGarland,
 		SnowCount = Library.SnowCount,
 		SnowSpeed = Library.SnowSpeed,
 		SnowOnWindow = Library.SnowOnWindow,
@@ -6780,6 +6896,14 @@ function Library:ApplyTheme(t)
 		{ "DecorStyle", "ui.decorstyle", nil, opt("DecorStyle") },
 		{ "DecorScale", "ui.decorscale", pct, opt("DecorScale") },
 		{ "DecorGap", "ui.decorgap", nil, opt("DecorGap") },
+		{ "DecorBottom", "ui.decorbottom", nil, opt("DecorBottom") },
+		{ "DecorSleigh", "ui.decorsleigh", nil, opt("DecorSleigh") },
+		{ "DecorAuto", "ui.decorauto", nil, opt("DecorAuto") },
+		{ "DecorBubble", "ui.decorbubble", nil, opt("DecorBubble") },
+		{ "DecorBubbleDelay", "ui.decorbubbledelay", nil, opt("DecorBubbleDelay") },
+		{ "DecorGifts", "ui.decorgifts", nil, opt("DecorGifts") },
+		{ "DecorClimb", "ui.decorclimb", nil, opt("DecorClimb") },
+		{ "DecorGarland", "ui.decorgarland", nil, opt("DecorGarland") },
 		{ "SnowCount", "ui.snow", nil, opt("SnowCount") },
 		{ "SnowSpeed", "ui.snowspeed", pct, opt("SnowSpeed") },
 		{ "SnowOnWindow", "ui.snowwin", nil, opt("SnowOnWindow") },
@@ -16634,6 +16758,12 @@ end
 Library.Version = "5.10.0"
 Library.AppName = "Invincible"
 Library.Changelog = {
+	{ Version = "5.15.0", Date = "2026-11-12", Title = "Bulle sous la fenêtre", Notes = {
+		"~ La bulle de petits commentaires (écrits lettre par lettre, en fondu) est maintenant centrée JUSTE SOUS la fenêtre, et la suit quand tu la déplaces ou la redimensionnes.",
+		"~ Elle passe au-dessus de la fenêtre si le bas de l'écran est trop proche, et sous le sol du décor quand celui-ci n'est pas collé en bas.",
+		"~ Elle ne dépend plus du décor : elle marche aussi quand les petits personnages sont désactivés (commentaires neutres : raccourcis, astuces).",
+		"~ Elle apparaît et s'estompe avec la fenêtre (fondu). Library.DecorBubbleGap règle la distance sous la fenêtre.",
+	} },
 	{ Version = "5.14.0", Date = "2026-11-08", Title = "API enrichie", Notes = {
 		"+ Toggle : Loop = function(dt, item) tourne tant que le toggle est activé et se coupe tout seul (LoopEvent, LoopInterval) — plus de RunService à gérer.",
 		"+ Toggle : Bind = { Target, Property, On, Off } bascule directement une propriété, sans callback (Off absent = valeur d'origine, Keep = true pour la ré-imposer).",
@@ -21349,12 +21479,83 @@ function Window:CreateSettingsTab(name, icon, docked)
 	F:CreateDropdown({ Name = "Thème du décor", Flag = "ui.decortheme", Items = { "Hiver", "Été" }, Search = false,
 		Default = Library.DecorTheme, Tooltip = "Hiver : neige, sapin, bonhomme de neige. Été : plage, palmier, crabe, soleil.",
 		Callback = opt("DecorTheme") })
+	F:CreateToggle({ Name = "Thème automatique selon la date", Flag = "ui.decorauto", Default = Library.DecorAuto,
+		Tooltip = "Hiver en décembre, Été en juillet. Les autres mois, c'est le thème choisi ci-dessus qui est utilisé.",
+		Callback = opt("DecorAuto") })
 	F:CreateDropdown({ Name = "Style du décor", Flag = "ui.decorstyle", Items = { "Pixel", "Dessin" }, Search = false,
 		Default = Library.DecorStyle, Tooltip = "Pixel : pixel art avec contours sombres. Dessin : formes lisses et arrondies, façon cartoon.",
 		Callback = opt("DecorStyle") })
 	F:CreateToggle({ Name = "Petits personnages sous la fenêtre", Flag = "ui.decor", Default = Library.DecorStrip,
 		Tooltip = "Sapin, bonhomme de neige, renard, feu de camp, cadeaux et un pingouin qui se promène. Clique dessus !",
 		Callback = opt("DecorStrip") })
+	F:CreateToggle({ Name = "Décor collé en bas de l'écran", Flag = "ui.decorbottom", Default = Library.DecorBottom,
+		Tooltip = "Activé : sol pleine largeur tout en bas, avec de la neige qui remonte sur les côtés. Désactivé : le décor suit le dessous de la fenêtre.",
+		Callback = opt("DecorBottom") })
+	F:CreateToggle({ Name = "Traîneau du Père Noël", Flag = "ui.decorsleigh", Default = Library.DecorSleigh,
+		Tooltip = "Un traîneau tiré par deux rennes traverse l'écran de temps en temps (thème Hiver).",
+		Callback = opt("DecorSleigh") })
+	F:CreateToggle({ Name = "Cadeaux parachutés par le traîneau", Flag = "ui.decorgifts", Default = Library.DecorGifts,
+		Tooltip = "Le traîneau largue des cadeaux avec un parachute : ils se posent sur le sol et restent dans le décor. Clique dessus !",
+		Callback = opt("DecorGifts") })
+	F:CreateToggle({ Name = "Bulle de commentaires sous la fenêtre", Flag = "ui.decorbubble", Default = Library.DecorBubble,
+		Tooltip = "Une bulle, centrée juste sous la fenêtre, écrit de petits commentaires lettre par lettre, en fondu. Library:DecorSay(\"texte\") pour écrire le tien.",
+		Callback = opt("DecorBubble") })
+	F:CreateSlider({ Name = "Délai entre deux commentaires", Flag = "ui.decorbubbledelay", Min = 5, Max = 60, Step = 5, Suffix = " s",
+		Default = Library.DecorBubbleDelay, Callback = opt("DecorBubbleDelay") })
+	F:CreateToggle({ Name = "Bulle aux couleurs du thème", Flag = "ui.decorbubblethemed", Default = Library.DecorBubbleThemed,
+		Tooltip = "Fond, texte et contour de la bulle suivent le thème choisi (Or, Sakura, Clair...). Désactivé : fond sombre fixe.",
+		Callback = opt("DecorBubbleThemed") })
+	F:CreateToggle({ Name = "Bulle : réagit à tes actions", Flag = "ui.decorbubblereact", Default = Library.DecorBubbleReact,
+		Tooltip = "Un petit commentaire quand tu annules un changement, charges ou sauvegardes une config, copies une couleur ou changes d'onglet.",
+		Callback = opt("DecorBubbleReact") })
+	F:CreateToggle({ Name = "Bulle : alertes prioritaires", Flag = "ui.decorbubblealerts", Default = Library.DecorBubbleAlerts,
+		Tooltip = "Les erreurs et avertissements passent devant les autres phrases, avec une couleur différente (rouge / orange).",
+		Callback = opt("DecorBubbleAlerts") })
+	F:CreateToggle({ Name = "Bulle : phrases selon l'heure", Flag = "ui.decorbubbletime", Default = Library.DecorBubbleTime,
+		Tooltip = "« Bonjour ! » le matin, « Il est tard » la nuit, et un message d'accueil à chaque ouverture de la fenêtre.",
+		Callback = opt("DecorBubbleTime") })
+	F:CreateToggle({ Name = "Horloge pixel aux heures des repas", Flag = "ui.mealclock", Default = Library.MealClock,
+		Tooltip = "Aux heures de repas (petit-déj, déjeuner, goûter, dîner), tout l'écran est flouté et l'heure s'affiche en grand, en chiffres pixel : 11:59 défile jusqu'à 12:00.",
+		Callback = function(v) Library.MealClock = v end })
+	F:CreateButton({ Name = "Prévisualiser l'horloge des repas", Icon = "clock",
+		Callback = function() Library:PreviewMealClock(12, 0, "Déjeuner") end })
+	F:CreateToggle({ Name = "Bulle : cliquable", Flag = "ui.decorbubbleclick", Default = Library.DecorBubbleClick,
+		Tooltip = "Clic gauche : phrase suivante · clic droit : effacer la bulle · survol : elle reste affichée.",
+		Callback = opt("DecorBubbleClick") })
+	F:CreateToggle({ Name = "Bulle : petit son à chaque lettre", Flag = "ui.decorbubblesound", Default = Library.DecorBubbleSound,
+		Tooltip = "Un léger « tic » pendant l'écriture (suit le volume des sons de l'interface).",
+		Callback = opt("DecorBubbleSound") })
+	F:CreateTextArea({ Name = "Mes phrases pour la bulle (une par ligne)", Flag = "ui.decorcustom", Height = 70,
+		Placeholder = "Une phrase par ligne. Pour une icône : [heart] Je t'aime",
+		Tooltip = "Elles sont mélangées aux phrases du décor (ou seules si l'option ci-dessous est activée). Ajoute une icône Lucide devant : [heart] texte · [moon] texte · [flame] texte.",
+		Callback = function(txt)
+			local n = Library:SetDecorCustom(txt)
+			if n > 0 and Library._settingsReady then Library:DecorSay(n == 1 and "Phrase enregistrée !" or (tostring(n) .. " phrases enregistrées !"), { Kind = "success", Urgent = true }) end
+		end })
+	F:CreateToggle({ Name = "Bulle : seulement mes phrases", Flag = "ui.decorcustomonly", Default = Library.DecorCustomOnly,
+		Callback = opt("DecorCustomOnly") })
+	F:CreateButton({ Name = "Dire une phrase maintenant", Icon = "message-circle",
+		Callback = function() Library:DecorSayNow() end })
+	F:CreateToggle({ Name = "Personnages qui grimpent sur la fenêtre", Flag = "ui.decorclimb", Default = Library.DecorClimb,
+		Tooltip = "Le pingouin, le lutin et le pain d'épices montent le long des bords de la fenêtre, saluent, s'assoient en haut puis se laissent glisser. Clique dessus !",
+		Callback = opt("DecorClimb") })
+	F:CreateToggle({ Name = "Guirlande lumineuse autour de la fenêtre", Flag = "ui.decorgarland", Default = Library.DecorGarland,
+		Tooltip = "Guirlande aux couleurs de celle du sapin (thème Hiver). Elle clignote plus vite quand tu cliques sur le sapin.",
+		Callback = opt("DecorGarland") })
+	local function pickChips(id, title)
+		local names, map = {}, {}
+		for _, e in ipairs(Library.DecorCatalog[id]) do names[#names + 1] = e[2] map[e[2]] = e[1] end
+		F:CreateChips({ Name = title, Flag = "ui.decorpick." .. id, Items = names, Default = names, Multi = true,
+			Callback = function(v)
+				local set = {}
+				for _, nm in ipairs(type(v) == "table" and v or {}) do if map[nm] then set[map[nm]] = true end end
+				Library.DecorPick = Library.DecorPick or {}
+				Library.DecorPick[id] = set
+				Library:SetOption("DecorPick", Library.DecorPick)
+			end })
+	end
+	pickChips("winter", "Personnages d'hiver affichés")
+	pickChips("summer", "Personnages d'été affichés")
 	F:CreateSlider({ Name = "Taille des personnages", Flag = "ui.decorscale", Min = 50, Max = 200, Step = 25, Suffix = "%",
 		Default = pct(Library.DecorScale), Callback = optPct("DecorScale") })
 	F:CreateSlider({ Name = "Hauteur du sol", Flag = "ui.decorgap", Min = -20, Max = 40, Step = 2, Suffix = " px",
@@ -26148,13 +26349,62 @@ function Library:CreateWindow(cfg)
 			starfish = { rows = STAR, say = "Je suis une étoile !", burst = { "O", "Y" } },
 			walker   = { rows = CRAB, say = "Clac clac !", burst = { "R", "O", "W" } },
 		}
+		-- ── nouveaux personnages (pixel art ; en style Dessin ils gardent leur version pixel) ──
+		local XS = {}
+		XS.reindeer = { "S.S...S.S", ".S.....S.", "SSDDDDDSS", ".DDDDDDD.", ".DKDDDKD.", ".DDffffD.", "..DDRDD..", "...DDD..." }
+		XS.santa = { "...RRR...", "..RRRRR..", ".RRRRRRRW", "WWWWWWWWW", ".WfKfKfW.", ".WfffffW.", ".WWWWWWW.", "..WWWWW..", "RRRRRRRRR", "RRRKKKRRR", "RRRRRRRRR", ".KK...KK." }
+		XS.gingerbread = { "..sss..", ".sWsWs.", ".sssss.", "sssWsss", "sWsssWs", "sssRsss", ".sssss.", ".ss.ss.", ".ss.ss." }
+		XS.candycane = { "..RWR.", ".RW.WR", "RW...R", "WR....", "RW....", "WR....", "RW....", "WR....", "RW...." }
+		XS.bell = { "...Y...", "..YYY..", ".YYLYY.", ".YYLYY.", ".YYYYY.", "YYYYYYY", "YYYYYYY", "...O..." }
+		XS.wreath = { "..GGGGG..", ".GGgGGGG.", "GGg...GGG", "GG.....GG", "GGR...GGG", "GG.....gG", ".GGG.GGG.", "..GGRGG.." }
+		XS.igloo = { "...WWWWWW...", ".WWwWWWWwWW.", "WWWWWWWWWWWW", "WwWWKKKKWWwW", "WWWWKKKKWWWW", "WWWWKKKKWWWW" }
+		XS.polarbear = { ".W.........", "WWWWWWWWW..", "WKWWWWWWWWW", "KKWWWWWWWWW", "WWWWWWWWWWW", ".WWWWWWWWWW", ".WW.WW.WW..", ".WW.WW.WW.." }
+		XS.stocking = { "WWWWWW..", "RRRRRR..", "RRRRRR..", "RRRRRR..", "rRRRRR..", "rRRRRRRR", "rrRRRRRR", "WWWRRRRR" }
+		XS.elf = { "...Y...", "..GGG..", ".GGGGG.", "GGGGGGG", ".fKfKf.", ".ffRff.", "..GGG..", ".GGRGG.", "GGGRGGG", ".GGGGG.", "..K.K.." }
+		XS.owl = { "W.WWWW.W", "WWWWWWWW", "WYKWWKYW", "WWWOOWWW", "WwWWWWwW", "WwwWWwwW", ".WwwwwW.", "..OO.OO." }
+		XS.lamp = { "..w..", ".www.", "wYLYw", "wYYYw", ".www.", "..w..", "..w..", "..w..", "..w..", "..w..", "..w..", "..w..", ".www." }
+		XS.star = { "...Y...", "..YYY..", "YYYYYYY", ".YYYYY.", "..YYY..", ".YY.YY.", "YY...YY" }
+		XS.buoy = { "..RRRRRR..", ".RRRRRRRR.", "WWR....RWW", "WW......WW", "WWR....RWW", ".RRRRRRRR.", "..RRRRRR.." }
+		XS.seagull = { "...WWW...", "..WKWW...", "OOWWWWW..", "..WWWWWWW", "..wwWWwww", "...WWWW..", "....O.O.." }
+		XS.cocktail = { "..OOO.R", "WWWWWWW", ".MMMMM.", "..MMM..", "...W...", "...W...", "...W...", ".WWWWW." }
+		XS.bucket = { ".W...W.", "..WWW..", "YYYYYYY", ".YYYYY.", ".RRRRR.", ".RRRRR.", "..RRR.." }
+		XS.sunhat = { "...SSSSS...", "..SSSsSSS..", "..RRRRRRR..", "SSSSSSSSSSS", ".sSSSSSSSs." }
+		XS.sleigh = { "...RRR................................", "..RRRRW...............S.S.........S.S.", "..WfKfW................SS..........SS.", "..WWWWW...............DDDD........DDDD", "..RRRRRR.............DDKDR.......DDKDR", "RRRRRRRRRRRR.R..DDDDDDDDD...DDDDDDDDD.", "RRRYYYYYYYRRRR.DDDDDDDDDD..DDDDDDDDDD.", ".RRRRRRRRRRRR..DDDDDDDDDD..DDDDDDDDDD.", "YYYYYYYYYYYYYY..D.D...D.D...D.D...D.D.", "Y............Y..D.D...D.D...D.D...D.D." }
+		local function mirrorRows(rows)
+			local o = {}
+			for i, r in ipairs(rows) do o[i] = string.reverse(r) end
+			return o
+		end
+		WDEFS.reindeer     = { rows = XS.reindeer, say = "Je tire le traîneau !", burst = { "S", "D", "R" }, sway = true }
+		WDEFS.santa        = { rows = XS.santa, say = "Ho ho ho !", burst = { "R", "W", "Y" }, sway = true }
+		WDEFS.gingerbread  = { rows = XS.gingerbread, say = "Attrape-moi si tu peux !", burst = { "s", "W", "R" }, shake = true }
+		WDEFS.candycane    = { rows = XS.candycane, say = "Miam, du sucre d'orge !", burst = { "R", "W" }, sway = true }
+		WDEFS.bell         = { rows = XS.bell, say = "Ding ding !", burst = { "Y", "L" }, shake = true }
+		WDEFS.wreath       = { rows = XS.wreath, say = "Joyeuses fêtes !", burst = { "G", "R", "Y" } }
+		WDEFS.igloo        = { rows = XS.igloo, say = "Bienvenue chez moi !", burst = { "W", "w", "U" } }
+		WDEFS.polarbear    = { rows = XS.polarbear, say = "Grrr... un câlin ?", burst = { "W", "w" }, sway = true }
+		WDEFS.stocking     = { rows = XS.stocking, say = "Rempli de cadeaux !", burst = { "R", "W", "Y" }, sway = true }
+		WDEFS.elf          = { rows = XS.elf, say = "Les cadeaux sont prêts !", burst = { "G", "R", "Y" }, bounce = true }
+		WDEFS.owl          = { rows = XS.owl, say = "Hou hou !", burst = { "W", "Y" }, sway = true }
+		WDEFS.lamp         = { rows = XS.lamp, say = "Ça éclaire bien !", burst = { "Y", "L" } }
+		WDEFS.star         = { rows = XS.star, say = "Fais un vœu !", burst = { "Y", "L", "W" }, sway = true }
+		SDEFS.buoy         = { rows = XS.buoy, say = "À l'eau !", burst = { "R", "W" }, sway = true }
+		SDEFS.seagull      = { rows = XS.seagull, say = "Mouaaah !", burst = { "W", "w", "O" }, bounce = true }
+		SDEFS.cocktail     = { rows = XS.cocktail, say = "Santé !", burst = { "M", "O", "W" }, sway = true }
+		SDEFS.bucket       = { rows = XS.bucket, say = "On fait un château ?", burst = { "Y", "R", "S" } }
+		SDEFS.sunhat       = { rows = XS.sunhat, say = "Coup de soleil évité !", burst = { "S", "s", "R" } }
+
 		-- thèmes : sprites, ordre (gauche -> droite), priorité (gardés si la fenêtre est étroite), sol, particules, marche du promeneur
 		local THEMES = {
-			winter = { defs = WDEFS, order = { "tree", "gift", "chest", "fox", "campfire", "mug", "snowman", "gift2" },
-				priority = { "tree", "snowman", "campfire", "gift", "chest", "fox", "mug", "gift2" },
+			winter = { id = "winter", defs = WDEFS, climbers = { "walker", "elf", "gingerbread" },
+				order = { "lamp", "tree", "gift", "reindeer", "chest", "snowpile2", "elf", "fox", "igloo", "campfire", "candycane", "santa", "mug", "bell", "polarbear",
+					"snowman", "snowpile", "stocking", "wreath", "gingerbread", "owl", "star", "gift2" },
+				priority = { "tree", "snowman", "snowpile", "campfire", "santa", "gift", "reindeer", "chest", "igloo", "snowpile2", "fox", "gingerbread", "bell", "mug", "polarbear",
+					"elf", "candycane", "stocking", "wreath", "owl", "star", "lamp", "gift2" },
 				ground = PAL.W, bump = PAL.W, flake = PAL.W, spark = C(200, 228, 255), up = false, mul = 1, twinkle = false, sun = false, wspeed = 22, wfreq = 11, wrot = 7 },
-			summer = { defs = SDEFS, order = { "palm", "surf", "parasol", "ball", "castle", "icecream", "starfish" },
-				priority = { "palm", "parasol", "castle", "ball", "icecream", "surf", "starfish" },
+			summer = { id = "summer", defs = SDEFS, climbers = { "walker" },
+				order = { "palm", "surf", "buoy", "parasol", "bucket", "ball", "castle", "seagull", "icecream", "cocktail", "sunhat", "starfish" },
+				priority = { "palm", "parasol", "castle", "ball", "icecream", "surf", "buoy", "cocktail", "seagull", "bucket", "sunhat", "starfish" },
 				ground = C(246, 226, 170), bump = C(238, 212, 148), flake = C(255, 236, 150), spark = C(255, 248, 200), up = true, mul = 0.5, twinkle = true, sun = true,
 				wspeed = 30, wfreq = 16, wrot = 4 },
 		}
@@ -26276,7 +26526,299 @@ function Library:CreateWindow(cfg)
 			E(3.0, 0, 1.5, 1.5, "W"), E(6.5, 0, 1.5, 1.5, "W"), E(3.5, 0.5, 0.6, 0.6, "K", 0, 0, true), E(7.0, 0.5, 0.6, 0.6, "K", 0, 0, true),
 		})
 
+		-- ── piles de boules de neige, cadeaux verts, cadeaux parachutés ──
+		WDEFS.giftg = { rows = swap(GIFT, { R = "G", r = "g" }), say = "Surprise !", burst = { "Y", "G", "W" },
+			vec = recolor(WDEFS.gift.vec, { R = "G", r = "g" }) }
+		WDEFS.snowpile = { rows = { ".....WW.....", "....WWWW....", "....WWWW....", "...WWwwWW...", "..WWWWWWWW..", "..WWWWWWWW..", ".WWwwWWwwWW.", "WWWWWWWWWWWW", "WWWWWWWWWWWW", ".ww..ww..ww." }, say = "Une bataille de boules de neige ?", burst = { "W", "w", "U" },
+			vec = V(12, 10, { E(4, 0, 4, 4, "W"), E(2, 3, 4, 4, "W"), E(6, 3, 4, 4, "W"), E(0, 6, 4, 4, "W"), E(4, 6, 4, 4, "W"), E(8, 6, 4, 4, "W") }) }
+		WDEFS.snowpile2 = { rows = { "...WW...", "..WWWW..", "..WWWW..", ".WWwwWW.", "WWWWWWWW", "WWWWWWWW", ".ww..ww." }, say = "Prêt à viser ?", burst = { "W", "w", "U" },
+			vec = V(8, 7, { E(2, 0, 4, 4, "W"), E(0, 3, 4, 4, "W"), E(4, 3, 4, 4, "W") }) }
+		XS.chute = { { "...RRWWWWRR...", ".RRRWWWWWWRRR.", "RRRWWRRRRWWRRR", "w..w......w..w", ".w..w....w..w.", "..w..w..w..w..", "...w.w..w.w...", "....w.ww.w....", "....YY..YY....", ".....YYYY.....", "..RRRRYYRRRR..", "..RRRRYYRRRR..", "...RRRYYRRR...", "...RRRYYRRR...", "...RRRYYRRR...", "...rrrYYrrr..." },
+			{ "...RRWWWWRR...", ".RRRWWWWWWRRR.", "RRRWWRRRRWWRRR", "w..w......w..w", ".w..w....w..w.", "..w..w..w..w..", "...w.w..w.w...", "....w.ww.w....", "....YY..YY....", ".....YYYY.....", "..UUUUYYUUUU..", "..UUUUYYUUUU..", "...UUUYYUUU...", "...UUUYYUUU...", "...UUUYYUUU...", "...uuuYYuuu..." },
+			{ "...RRWWWWRR...", ".RRRWWWWWWRRR.", "RRRWWRRRRWWRRR", "w..w......w..w", ".w..w....w..w.", "..w..w..w..w..", "...w.w..w.w...", "....w.ww.w....", "....YY..YY....", ".....YYYY.....", "..GGGGYYGGGG..", "..GGGGYYGGGG..", "...GGGYYGGG...", "...GGGYYGGG...", "...GGGYYGGG...", "...gggYYggg..." } }
+		local GIFTSAY = { "va graille si ta faim", "va te br stv te br", "Dort stv dormir", "Ta cru t'allais avoir quelque chose là ?", "Ta femme T'aime", "T Gay" }
+
+		XS.comW = { "Il neige dehors, mais ici il fait bon.", "Pense à boire un chocolat chaud !", "Le Père Noël fait sa tournée, lève les yeux...",
+			"Psst... clique sur les petits personnages !", "Joyeuses fêtes !", "Des cadeaux sont tombés sur le sol, va voir !",
+			"Le pingouin grimpe encore, il ne se fatigue jamais.", "Un bonhomme de neige, ça se fait à deux.", "Ça sent bon le sapin ici.",
+			"Fais une pause, bois un peu d'eau !" }
+		XS.comS = { "Un petit tour à la plage ?", "Pense à la crème solaire !", "Les vagues sont parfaites aujourd'hui.", "Le crabe me regarde bizarrement...",
+			"Une glace, ça ferait du bien.", "Psst... clique sur les petits personnages !", "Il fait chaud, pense à t'hydrater !", "Ça sent les vacances ici." }
+		-- commentaires neutres (utilisés quand les petits personnages sont désactivés)
+		XS.comN = { "Ctrl+K ouvre la palette de commandes.", "Ctrl+Z annule ton dernier changement.", "Clic droit sur un curseur : réinitialiser ou copier la valeur.",
+			"Clique sur l'étoile d'un réglage pour le mettre en favori.", "La position et la taille de la fenêtre sont mémorisées.",
+			"Pense à boire un peu d'eau !", "Fais une pause, tes yeux te remercieront.", "Tout roule, continue comme ça !" }
+		-- ───────── bulle : phrases selon l'heure, accueil, réactions ─────────
+		XS.comT = {
+			morning = { "Bonjour ! Un café avant de commencer ?", "Bon matin ! La journée commence bien.", "Salut ! Bien dormi ?",
+				"Le soleil est levé, et toi aussi : bravo !", { t = "Un petit-déj', et on est partis !", m = { "breakfast" } }, "Nouvelle journée, nouvelles possibilités.",
+				"Les matins, c'est fait pour les bonnes idées.", "Étire-toi un peu, le matin ça réveille." },
+			noon    = { "Bon appétit ! Pense à manger un morceau.", "C'est l'heure de la pause, profites-en.", "C'est l'heure du déjeuner : un petit verre d'eau ?",
+				"Le ventre gargouille ? C'est l'heure !", "Un bon repas, et l'après-midi sera plus simple.", "Pause déjeuner : tu l'as bien méritée." },
+			after   = { "Bon après-midi !", "Courage, la journée avance bien.", "Petite pause étirement ?", "Un thé ou un café pour le coup de mou ?",
+				"Plus que quelques heures, tu gères.", "L'après-midi, c'est le bon moment pour finir ce qui traîne." },
+			evening = { "Bonsoir ! Une bonne soirée devant toi.", "Ça se détend doucement, bonne soirée !", "La journée est presque finie, bravo.",
+				"Un film, une série ou un jeu ce soir ?", "Le soir, on ralentit un peu.", "Pense à manger quelque chose de bon ce soir." },
+			night   = { "Il est tard, pense à dormir un peu.", "Les yeux fatigués ? Une pause fait du bien.", "Encore debout ? Pense à ton sommeil.",
+				"La nuit porte conseil... et le lit aussi.", "Demain sera plus facile après une bonne nuit.", "Les étoiles sont de sortie, et toi aussi ?" },
+		}
+		XS.greet = {
+			morning = { "Bonjour ! Content de te revoir.", "Bonjour ! On y va doucement ?", "Salut ! Bon matin à toi." },
+			noon    = { "Salut ! Bon appétit si ce n'est pas encore fait.", "Coucou ! Prêt pour la suite ?", "Re-salut ! Bonne pause." },
+			after   = { "Re-bonjour ! Bon après-midi.", "Salut ! Ça avance bien ?", "Coucou, content de te voir." },
+			evening = { "Bonsoir ! Content de te revoir.", "Bonsoir ! On se détend un peu ?", "Salut ! Bonne soirée à toi." },
+			night   = { "Il est tard... mais je suis là !", "Bonne nuit... ou presque ! Ne veille pas trop.", "Coucou, noctambule !" },
+		}
+		XS.react = {
+			tab    = { "Direction : %s !", "Hop, %s.", "%s, bon choix.", "Cap sur %s !", "Bienvenue dans %s." },
+			tabset = { "Ici, tout se règle à ta façon.", "Les réglages, c'est par ici.", "Ton interface, tes règles." },
+		}
 		local LIGHTC   = { PAL.R, PAL.Y, PAL.U, PAL.W }
+		local CMX = {   -- tout ce qui concerne la bulle est rangé dans cette table (une seule variable locale)
+			KIND = { success = C(61, 220, 151), warn = C(255, 200, 87), error = C(255, 77, 94) },
+			KINDICON = { success = { "circle-check", "check-circle", "check" }, warn = { "triangle-alert", "alert-triangle", "alert-circle" },
+				error = { "circle-alert", "alert-circle", "x" } },
+			periodIcon = { morning = { "sunrise", "sun" }, noon = { "utensils" }, after = { "sun" }, evening = { "sunset", "moon" }, night = { "moon", "bed" } },
+			periodCol  = { morning = C(255, 190, 90), noon = C(255, 160, 90), after = C(255, 210, 90), evening = C(255, 140, 110), night = C(150, 160, 255) },
+			order = { "love", "compliment", "sleep", "water", "pause", "motivation", "tips", "fun", "food", "gaming", "music", "focus",
+				"thanks", "animals", "health", "winter", "summer" },
+		}
+		-- catégories : i = icône(s) Lucide (la 1re qui existe est utilisée) · c = couleur de l'icône · w = poids (fréquence) · l = phrases
+		CMX.cats = {
+			love = { i = { "heart" }, c = C(255, 105, 140), w = 3, l = {
+				"Ta femme/homme t'aime !", "Quelqu'un pense à toi en ce moment.", "Tu comptes beaucoup pour les gens autour de toi.",
+				"Un petit câlin virtuel pour toi.", "Tu mérites tout l'amour du monde.", "Pense à dire « je t'aime » à quelqu'un aujourd'hui.",
+				"Ton sourire illumine la pièce.", "Tu es quelqu'un de précieux.", "Envoie un petit message doux à quelqu'un.",
+				"Il y a des gens qui sont fiers de toi.", "L'amour, ça se partage : appelle un proche.", "Tu es plus aimé(e) que tu ne le crois.",
+				"Quelqu'un a de la chance de t'avoir.", "Un bisou à celle ou celui qui te manque.", "Prends soin de ceux que tu aimes.",
+				"Tu as un cœur en or.", "On t'aime comme tu es, c'est tout.", "Un peu de tendresse, ça ne fait jamais de mal." } },
+			compliment = { i = { "sparkles", "star" }, c = C(255, 205, 90), w = 3, l = {
+				"Tu es beau/belle.", "Franchement, tu gères.", "Quelle classe, cette énergie !", "Tu as du style, ça se voit.",
+				"Tu es plus fort(e) que tu ne le crois.", "Bravo pour tout ce que tu fais.", "Ton talent n'est plus à prouver.",
+				"Tu fais du bon boulot.", "Les gens t'apprécient vraiment.", "Aujourd'hui, tu es au top.", "Tu as de bonnes idées, fais-toi confiance.",
+				"Tu es drôle, au fait.", "Quelle belle personne tu fais.", "Tu mérites un petit applaudissement !", "Tu es un(e) vrai(e) champion(ne)." } },
+			sleep = { i = { "moon", "bed" }, c = C(150, 160, 255), w = 2, l = {
+				"Dors si tu en as besoin.", "Une bonne nuit de sommeil vaut tous les boosts.", "Ton lit t'attend, sérieusement.",
+				"Dormir, ce n'est pas perdre du temps.", "Un petit somme et ça repart !", "Le sommeil, c'est la meilleure des mises à jour.",
+				"Pas de honte à faire une sieste.", "Fatigué(e) ? Écoute ton corps.", "Les rêves, c'est gratuit : profites-en." } },
+			water = { i = { "droplet", "droplets" }, c = C(90, 190, 255), w = 2, l = {
+				"Pense à boire un peu d'eau !", "Un verre d'eau, ça te dit ?", "Hydrate-toi, ton cerveau te dira merci.",
+				"Ta gourde est où ? Bois un coup.", "Glou glou... c'est l'heure de boire !", "L'eau, c'est la vie. Un verre, vite !",
+				"Un petit verre d'eau et tout va mieux." } },
+			pause = { i = { "timer", "hourglass", "clock" }, c = C(120, 220, 190), w = 3, l = {
+				"Fais une pause, tes yeux te remercieront.", "20 secondes à regarder au loin : essaie !", "Étire-toi un peu, ton dos dit merci.",
+				"Respire profondément, on recommence.", "Lève-toi cinq minutes, ça fait du bien.", "Cligne des yeux, ça repose.",
+				"Redresse-toi : ton dos te regarde.", "Une petite marche ? Même juste jusqu'à la cuisine.", "Ouvre une fenêtre, un peu d'air frais.",
+				"Roule des épaules, doucement.", "Trois grandes respirations, et c'est reparti." } },
+			motivation = { i = { "flame", "zap" }, c = C(255, 140, 70), w = 3, l = {
+				"Tout roule, continue comme ça !", "Un pas après l'autre, tu avances.", "Tu n'es pas loin du but.", "Les grands projets commencent petit.",
+				"Fais de ton mieux, c'est déjà beaucoup.", "Chaque essai te rend meilleur(e).", "Ne lâche rien !", { t = "Aujourd'hui est un bon jour pour réussir.", p = { "morning", "noon", "after" } },
+				"Tu as déjà fait le plus dur.", "Même lentement, tu avances.", "Une erreur, c'est juste un essai de plus.", "Tu peux le faire, vraiment." } },
+			tips = { i = { "lightbulb", "info" }, c = C(255, 215, 100), w = 3, l = {
+				"Clique sur la bulle pour passer à la phrase suivante.", "Clic droit sur la bulle pour l'effacer.",
+				"Tu peux écrire tes propres phrases dans les Paramètres.", "Clic droit sur un bouton pour lui assigner une touche.",
+				"Les thèmes se changent dans Paramètres > Thèmes.", "Mets la souris sur la bulle : elle reste affichée.",
+				"Tu peux ajouter une icône à ta phrase : [heart] Salut !" } },
+			fun = { i = { "laugh", "smile" }, c = C(255, 190, 80), w = 3, l = {
+				"Pourquoi les plongeurs plongent-ils en arrière ? Sinon ils tombent dans le bateau.", "Je ne suis pas en retard, j'ai juste une autre notion du temps.",
+				"Mon plus grand talent : appuyer sur « plus tard ».", "Un jour sans rire est un jour perdu.", "Je pense, donc je bulle.",
+				"Ceci n'est pas une bulle. Ah si.", "Même les bulles ont besoin de vacances.", "J'ai essayé d'être sérieux, ça n'a pas duré.",
+				"Je flotte, c'est pratique.", "Un café ? Non, dix.", "Chut, la bulle réfléchit.", "Si tu lis ça, tu as le droit de sourire.",
+				"Les bulles, c'est comme les amis : ça éclate quand on y touche trop.", "Qu'est-ce qui est jaune et qui attend ? Jonathan.",
+				"Je ne dis pas que j'ai raison, mais j'ai rarement tort." } },
+			food = { i = { "utensils", "cookie" }, c = C(255, 170, 100), w = 2, l = {
+				"Un petit snack, ça te dit ?", "Tu as mangé aujourd'hui ? Vraiment ?", "Une pomme, c'est bien aussi.", "Pizza ou pâtes ? Question vitale.",
+				"Un chocolat chaud et ça repart.", "Pense à manger équilibré... et à te faire plaisir.", "Un petit gâteau pour la route ?",
+				"Le fromage, c'est un groupe alimentaire. Non ?" } },
+			gaming = { i = { "gamepad-2", "gamepad" }, c = C(170, 130, 255), w = 2, l = {
+				"Un dernier match et on arrête ? Non, on sait que non.", "GG, tu t'améliores à chaque partie.", "Pense à sauvegarder avant le boss !",
+				"Le lag, c'est la faute du Wi-Fi. Toujours.", "Respire, c'est juste un jeu.", "Tu as sûrement une quête en attente quelque part.",
+				"Mode zen : activé.", "Loot légendaire en vue, je le sens.", "Aucun bug ici. Enfin, je crois." } },
+			music = { i = { "music", "headphones" }, c = C(255, 120, 200), w = 1, l = {
+				"Un peu de musique pour la route ?", "Mets ta chanson préférée, ça change tout.", "Une bonne playlist, c'est la moitié du boulot.",
+				"Ça te dirait de chanter un peu ?", "Les écouteurs sur les oreilles, le monde en sourdine." } },
+			focus = { i = { "target", "crosshair" }, c = C(100, 200, 255), w = 2, l = {
+				"Un objectif à la fois, c'est mieux.", "Ferme les onglets inutiles, concentre-toi.", "Dix minutes sans distraction : tu testes ?",
+				"Fais d'abord le plus important.", "Range ton bureau, range ta tête.", "Une seule chose à faire, la meilleure." } },
+			thanks = { i = { "gift", "heart-handshake" }, c = C(255, 130, 150), w = 1, l = {
+				"Merci d'être là, vraiment.", "Merci d'utiliser cette interface !", "Content de t'avoir ici.", "Merci d'avoir pris un moment pour toi." } },
+			animals = { i = { "cat", "paw-print" }, c = C(255, 180, 120), w = 1, l = {
+				"Miaou.", "Un chat sur le clavier, ça te rappelle quelque chose ?", "Les chiens sont les meilleurs amis, c'est prouvé.",
+				"Un petit câlin au chat (ou au chien) ?", "Quelque part, un chien remue la queue pour toi." } },
+			health = { i = { "activity", "heart-pulse" }, c = C(110, 220, 140), w = 1, l = {
+				"Pense à ta posture !", "Tes yeux, tes épaules, ton dos : tout va bien ?", "Quelques pas, ça réveille le corps.",
+				"La santé d'abord, le reste suit.", "Un fruit, un verre d'eau, un étirement : le trio gagnant." } },
+			winter = { i = { "snowflake" }, c = C(170, 225, 255), w = 3, l = XS.comW },
+			summer = { i = { "sun" }, c = C(255, 200, 70), w = 3, l = XS.comS },
+		}
+		for _, x in ipairs({ "Brrr, ça gèle dehors !", "Un plaid, un film : le bon plan.", "Les flocons sont tous différents, comme toi.", "Un bonhomme de neige, ça se construit à plusieurs." }) do
+			table.insert(XS.comW, x)
+		end
+		for _, x in ipairs({ "Il fait chaud, un petit sorbet ?", "Les cigales chantent déjà.", "Un parasol, une serviette, et c'est parti.", "Le sable, c'est comme les bugs : ça se retrouve partout." }) do
+			table.insert(XS.comS, x)
+		end
+		for _, x in ipairs({ "Clique sur l'étoile d'un réglage pour le mettre en favori.", "Ctrl+K ouvre la palette de commandes.", "Ctrl+Z annule ton dernier changement." }) do
+			local seen = false
+			for _, y in ipairs(XS.comN) do if y == x then seen = true break end end
+			if not seen then table.insert(XS.comN, x) end
+		end
+		do   -- astuces : anciennes phrases neutres + nouvelles (sans les phrases qui ont leur propre catégorie)
+			local skip = { ["Pense à boire un peu d'eau !"] = true, ["Fais une pause, tes yeux te remercieront."] = true, ["Tout roule, continue comme ça !"] = true }
+			local merged = {}
+			for _, x in ipairs(XS.comN) do if not skip[x] then merged[#merged + 1] = x end end
+			for _, x in ipairs(CMX.cats.tips.l) do
+				local seen = false
+				for _, y in ipairs(merged) do if y == x then seen = true break end end
+				if not seen then merged[#merged + 1] = x end
+			end
+			XS.comN = merged
+			CMX.cats.tips.l = merged
+		end
+		-- ───── +50 phrases ─────
+		do
+			local more = {
+				love = { "Un « merci » sincère fait le même effet qu'un câlin.", "Quelqu'un sourit en pensant à toi.", "Aujourd'hui, dis à quelqu'un que tu tiens à lui.", "Ton cœur fait du bon travail, remercie-le." },
+				compliment = { "Tu rends les choses plus simples autour de toi.", "Ta façon de faire, c'est du grand art.", "Tu es meilleur(e) qu'hier, et c'est visible.", { t = "Quelle belle journée pour être toi.", p = { "morning", "noon", "after" } } },
+				sleep = { "Éteins les écrans un peu avant de dormir.", "Un coussin, une couette, et le monde peut attendre.", "Un bâillement ? Le corps te parle." },
+				water = { "Ton corps est fait d'eau, alors bois-en.", "Un verre maintenant, un verre dans une heure." },
+				pause = { "Regarde par la fenêtre, juste une minute.", "Ferme les yeux dix secondes. Voilà.", "Pose ta main sur ta nuque et détends-toi." },
+				motivation = { "Le plus dur, c'est de commencer. Et tu l'as fait.", "Rome ne s'est pas faite en un jour, ni ton projet.", "Un petit progrès, c'est toujours un progrès.", "Crois en toi, au moins autant que moi." },
+				tips = { "Tes favoris se retrouvent dans Paramètres > Favoris.", "Les raccourcis clavier sont dans Paramètres > Raccourcis & configs.", "Le décor Hiver ou Été se règle dans Paramètres > Apparence." },
+				fun = { "Je suis une bulle : je n'ai pas de poches, mais j'ai du style.", "Mon horoscope dit : « Va boire un verre d'eau ».", "Parfois je me parle. Souvent, je me réponds.", "Si tu cliques assez vite, je ne dirai rien.", "La procrastination, c'est de l'art. Je m'y entraîne.", "Ne me demande pas mon âge, je viens d'apparaître." },
+				food = { "Une soupe chaude, rien de mieux quand il fait froid.", "Les frites : toujours une bonne idée.", "Un fruit de saison, et le tour est joué." },
+				gaming = { "Il y a toujours un coffre qu'on a oublié d'ouvrir.", "Un mauvais match ne définit pas un joueur.", "N'oublie pas de sauvegarder ta progression." },
+				music = { "Un petit air de guitare imaginaire ?", "Une chanson peut changer toute une journée." },
+				focus = { "Note l'essentiel sur un papier, ça aide à y voir clair.", "Une tâche terminée vaut mieux que dix commencées." },
+				thanks = { "Merci pour ta patience, ça compte.", "Merci de prendre soin de toi aussi." },
+				animals = { "Un oiseau chante dehors, tends l'oreille.", "Les chats ont tout compris : sieste d'abord." },
+				health = { "Marche cinq minutes, ton corps te dira merci." },
+			}
+			for k, list in pairs(more) do
+				for _, x in ipairs(list) do table.insert(CMX.cats[k].l, x) end
+			end
+			-- repas : chaque phrase est liée au bon moment (petit-déj' le matin, goûter l'après-midi, dîner le soir...)
+			local B, L, S, D, N = { "breakfast" }, { "lunch" }, { "snack" }, { "dinner" }, { "late" }
+			CMX.cats.food.l = {
+				{ t = "C'est l'heure du petit-déj' : tartines, fruits, café ?", m = B }, { t = "Un bon petit-déj', et la journée démarre mieux.", m = B },
+				{ t = "Tu as pris ton petit-déj' ? Même un fruit, ça compte.", m = B }, { t = "Jus d'orange, tartines, confiture : le trio gagnant.", m = B },
+				{ t = "Un bol de céréales ou un œuf ? Ton ventre décidera.", m = B }, { t = "Ne pars pas le ventre vide, mange un petit quelque chose.", m = B },
+				{ t = "L'heure du déjeuner approche : pense à manger un vrai repas.", m = L }, { t = "Un bon repas, et l'après-midi sera plus simple.", m = L },
+				{ t = "Mange à ta faim, et assieds-toi pour le faire.", m = L }, { t = "Une salade, un plat chaud, un fruit : le menu parfait.", m = L },
+				{ t = "Pizza ou pâtes ? Question vitale.", m = { "lunch", "dinner" } },
+				{ t = "L'heure du goûter ! Un fruit, un gâteau, un chocolat ?", m = S }, { t = "Un petit encas, et tu repars de plus belle.", m = S },
+				{ t = "Un petit gâteau pour la route ?", m = S }, { t = "Une pomme, c'est bien aussi.", m = S },
+				{ t = "Qu'est-ce qu'on mange ce soir ? Pense à dîner.", m = D }, { t = "Un bon dîner pour finir la journée en beauté.", m = D },
+				{ t = "Une soupe chaude, ça fait du bien le soir.", m = D }, { t = "Les frites : toujours une bonne idée.", m = { "lunch", "dinner" } },
+				{ t = "Un grignotage de minuit ? Un fruit ou un yaourt, plutôt.", m = N }, { t = "Un verre de lait chaud, et au lit.", m = N },
+				{ t = "Il est tard : un petit snack léger, pas plus.", m = N },
+				{ t = "Un chocolat chaud et ça repart.", p = { "morning", "after", "evening" } },
+				"Tu as mangé aujourd'hui ? Vraiment ?", "Pense à manger équilibré... et à te faire plaisir.", "Le fromage, c'est un groupe alimentaire. Non ?",
+				"Un fruit de saison, et le tour est joué.",
+			}
+			local NIGHT, NAP = { "evening", "night" }, { "noon", "after" }
+			CMX.cats.sleep.l = {
+				"Dors si tu en as besoin.", "Dormir, ce n'est pas perdre du temps.", "Le sommeil, c'est la meilleure des mises à jour.",
+				"Fatigué(e) ? Écoute ton corps.", "Un bâillement ? Le corps te parle.",
+				{ t = "Une bonne nuit de sommeil vaut tous les boosts.", p = NIGHT }, { t = "Ton lit t'attend, sérieusement.", p = NIGHT },
+				{ t = "Les rêves, c'est gratuit : profites-en.", p = NIGHT }, { t = "Éteins les écrans un peu avant de dormir.", p = NIGHT },
+				{ t = "Un coussin, une couette, et le monde peut attendre.", p = NIGHT },
+				{ t = "Un petit somme et ça repart !", p = NAP }, { t = "Pas de honte à faire une sieste.", p = NAP },
+			}
+			-- fréquence selon le moment de la journée (1 = normal)
+			CMX.cats.food.pw  = { morning = 1.6, noon = 2.2, after = 1.2, evening = 1.8, night = 0.4 }
+			CMX.cats.sleep.pw = { morning = 0.3, noon = 0.3, after = 0.5, evening = 1.5, night = 3 }
+			CMX.cats.space = { i = { "rocket", "star" }, c = C(140, 120, 255), w = 2, l = {
+				{ t = "Regarde les étoiles ce soir, elles sont gratuites.", p = { "evening", "night" } }, "Un jour, on ira tous sur Mars. En attendant, une pause ?",
+				"L'espace est vaste, ton talent aussi.", "Dans l'univers, tu es unique.", "Décollage dans 3, 2, 1... au travail !",
+				"Même un trou noir a besoin de calme parfois." } }
+			table.insert(CMX.order, "space")
+			CMX.cats.space.pw = { morning = 0.15, noon = 0.15, after = 0.3, evening = 2, night = 3 }
+		end
+		function CMX.period()
+			local h = tonumber(os.date("%H")) or 12
+			if h >= 5 and h < 11 then return "morning" elseif h >= 11 and h < 14 then return "noon"
+			elseif h >= 14 and h < 18 then return "after" elseif h >= 18 and h < 22 then return "evening" end
+			return "night"
+		end
+		-- moment de repas : breakfast 6-9 h · mid 10 h · lunch 11-14 h · snack 15-17 h · dinner 18-21 h · late 22-5 h
+		function CMX.meal()
+			local h = tonumber(os.date("%H")) or 12
+			if h >= 6 and h <= 9 then return "breakfast" elseif h == 10 then return "mid"
+			elseif h >= 11 and h <= 14 then return "lunch" elseif h >= 15 and h <= 17 then return "snack"
+			elseif h >= 18 and h <= 21 then return "dinner" end
+			return "late"
+		end
+		-- garde les phrases qui vont avec l'heure : { t = , p = { périodes } , m = { repas } } (sans p ni m : toute la journée)
+		function CMX.fit(list)
+			local per, meal = CMX.period(), CMX.meal()
+			local out = {}
+			for _, e in ipairs(list) do
+				local ok = true
+				if type(e) == "table" then
+					if e.p then
+						ok = false
+						for _, x in ipairs(e.p) do if x == per then ok = true break end end
+					end
+					if ok and e.m then
+						ok = false
+						for _, x in ipairs(e.m) do if x == meal then ok = true break end end
+					end
+				end
+				if ok then out[#out + 1] = e end
+			end
+			return out
+		end
+		function CMX.pickFrom(list)
+			return list[rng:NextInteger(1, #list)]
+		end
+		function CMX.greeting()
+			local p = CMX.period()
+			return CMX.pickFrom(XS.greet[p]), { "hand", "smile" }, CMX.periodCol[p]
+		end
+		-- jours spéciaux (date) et jours de la semaine → texte, icône, couleur, estUneDate
+		function CMX.event()
+			local d = os.date("*t")
+			local m, j = d.month, d.day
+			if m == 12 and j == 25 then return "Joyeux Noël !", { "gift" }, C(255, 90, 90), true
+			elseif m == 12 and j == 24 then return "Veille de Noël : on y est presque !", { "gift" }, C(255, 90, 90), true
+			elseif m == 12 and j == 31 then return "Dernier jour de l'année : bravo pour tout !", { "party-popper" }, C(255, 205, 90), true
+			elseif m == 1 and j == 1 then return "Bonne année !", { "party-popper" }, C(255, 205, 90), true
+			elseif m == 2 and j == 14 then return "Joyeuse Saint-Valentin !", { "heart" }, C(255, 105, 140), true
+			elseif m == 10 and j == 31 then return "Joyeux Halloween !", { "ghost" }, C(255, 150, 60), true
+			elseif m == 7 and j == 14 then return "Bonne fête nationale !", { "flag" }, C(100, 150, 255), true end
+			local wd = {
+				[1] = "Dimanche : jour de repos, profites-en.", [2] = "Courage, c'est lundi !", [3] = "Mardi : la semaine est lancée.",
+				[4] = "Mercredi : on est à la moitié.", [5] = "Jeudi : plus qu'un jour !", [6] = "C'est vendredi, le week-end approche !",
+				[7] = "Samedi : tu as le droit de ne rien faire.",
+			}
+			return wd[d.wday], { "calendar", "calendar-days" }, C(130, 190, 255), false
+		end
+		-- tire une catégorie au hasard (pondérée), en évitant de répéter la précédente
+		function CMX.pickCat()
+			local pool, tot = {}, 0
+			for _, k in ipairs(CMX.order) do
+				local c = CMX.cats[k]
+				local w = c.w
+				if k == "winter" then w = (Library.DecorStrip ~= false and theme.id ~= "summer") and w or 0
+				elseif k == "summer" then w = (Library.DecorStrip ~= false and theme.id == "summer") and w or 0
+				elseif k == "tips" and Library.DecorStrip == false then w = 6 end
+				if c.pw then w = w * (c.pw[CMX.period()] or 1) end   -- poids selon le moment de la journée
+				if k == CMX.lastCat then w = w * 0.15 end
+				if #CMX.fit(c.l) == 0 then w = 0 end
+				if w > 0 then pool[#pool + 1] = { k, w } tot = tot + w end
+			end
+			local r = rng:NextNumber() * tot
+			for _, e in ipairs(pool) do
+				r = r - e[2]
+				if r <= 0 then return e[1] end
+			end
+			return pool[#pool][1]
+		end
+		-- entrée de liste → texte, icône, couleur (texte simple, ou { t = , i = , c = })
+		function CMX.norm(e)
+			if type(e) == "table" then return tostring(e.t or e[1] or ""), e.i or e.Icon, e.c or e.Color end
+			return tostring(e)
+		end
 
 		-- état
 		local curPs, curW, Hs, lt = 0, 0, 40, 4
@@ -26287,6 +26829,14 @@ function Library:CreateWindow(cfg)
 		local lastPX, lastPY = nil, nil
 		local emberT = 0
 		local style = "pixel"
+		local climbers = {}   -- personnages qui grimpent le long de la fenêtre
+		local cbubble, cbubbleT, cbubbleOwner = nil, 0, nil
+		local gar = { frame = nil, lights = {}, dirty = true, fade = 0, boost = 0, ph = 0, a = 1 }   -- guirlande
+		local chutes, landed = {}, {}   -- cadeaux parachutés en l'air / posés sur le sol
+		local cm = { state = "idle", wait = 2.5, t = 0, h = 0, o = 0, n = 0, chars = {}, queue = {}, last = nil, v = 0, above = false,
+			kind = "info", hold = 0, next = false, hover = false, greeted = false, lastGreet = 0, wasOn = false, tab = nil, tabT = 0,
+			recent = {}, tickN = 0, stroke = nil, scale = nil }   -- bulle de commentaires (v : visibilité 0..1 · above : posée au-dessus de la fenêtre faute de place en bas)
+		local sleigh = { dropT = 2, roots = {}, sp = {}, active = false, wait = 3, x = 0, y = 0, base = 0, amp = 0, ph = 0, dir = 1, spd = 0, w = 0, h = 0, spT = 0 }
 
 		local decor = new("Frame", { Name = "Decor", AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(10, 40),
 			BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 3, Visible = false }, gui)
@@ -26315,6 +26865,19 @@ function Library:CreateWindow(cfg)
 			bumps[i] = { f = b, cr = bc, fx = 0.05 + 0.9 * (i - 0.5) / 16 + rng:NextNumber(-0.015, 0.015), w = rng:NextNumber(10, 26), h = rng:NextNumber(5, 9) }
 		end
 
+		-- neige qui remonte sur les bords gauche et droit de l'écran (marches de plus en plus étroites)
+		local BANK_N = 10
+		local banks = {}
+		local inset, lastFull = 0, nil
+		for side = 1, 2 do
+			for j = 1, BANK_N do
+				local f = new("Frame", { AnchorPoint = Vector2.new(side == 1 and 0 or 1, 1), BackgroundColor3 = PAL.W, BorderSizePixel = 0,
+					ZIndex = 1, Visible = false }, decor)
+				local cr = new("UICorner", { CornerRadius = UDim.new(0, 0) }, f)
+				banks[#banks + 1] = { f = f, cr = cr, side = side, j = j }
+			end
+		end
+
 		-- étincelles qui brillent sur le sol
 		local sparks = {}
 		for i = 1, 10 do
@@ -26331,6 +26894,73 @@ function Library:CreateWindow(cfg)
 			TextColor3 = PAL.W, TextTransparency = 1, Font = F_BOLD, TextSize = 11, Text = "", ZIndex = 6, Visible = false }, decor)
 		new("UICorner", { CornerRadius = UDim.new(0, 8) }, bubble)
 		new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, bubble)
+
+		-- bulle des personnages qui grimpent (en coordonnées écran) + conteneur de la guirlande
+		cbubble = new("TextLabel", { Name = "ClimbBubble", AnchorPoint = Vector2.new(0.5, 1), AutomaticSize = Enum.AutomaticSize.X,
+			Size = UDim2.fromOffset(0, 20), BackgroundColor3 = C(18, 20, 28), BackgroundTransparency = 1, BorderSizePixel = 0,
+			TextColor3 = PAL.W, TextTransparency = 1, Font = F_BOLD, TextSize = 11, Text = "", ZIndex = 6, Visible = false }, gui)
+		new("UICorner", { CornerRadius = UDim.new(0, 8) }, cbubble)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, cbubble)
+		gar.frame = new("Frame", { Name = "Garland", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+			ZIndex = 3, Visible = false }, gui)
+
+		-- bulle de commentaires en bas : le texte s'écrit lettre par lettre, chaque lettre apparaît en fondu (RichText)
+		local cb = new("TextButton", { Name = "DecorComment", AnchorPoint = Vector2.new(0.5, 1), AutomaticSize = Enum.AutomaticSize.XY,
+			Size = UDim2.fromOffset(0, 0), BackgroundColor3 = C(18, 20, 28), BackgroundTransparency = 1, BorderSizePixel = 0, AutoButtonColor = false,
+			TextColor3 = PAL.W, Font = F_BOLD, TextSize = 13, Text = "", RichText = true, TextWrapped = true, ZIndex = 7, Visible = false }, gui)
+		new("UICorner", { CornerRadius = UDim.new(0, 12) }, cb)
+		cm.pad = new("UIPadding", { PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14), PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8) }, cb)
+		new("UISizeConstraint", { MaxSize = Vector2.new(420, 200) }, cb)
+		cm.stroke = new("UIStroke", { Color = C(255, 255, 255), Thickness = 1, Transparency = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, cb)
+		cm.scale = new("UIScale", { Scale = 1 }, cb)
+		cm.icon = new("ImageLabel", { Name = "Icon", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, -24, 0.5, 0), Size = UDim2.fromOffset(18, 18),
+			BackgroundTransparency = 1, BorderSizePixel = 0, ScaleType = Enum.ScaleType.Fit, ZIndex = 8, Visible = false, ImageTransparency = 1 }, cb)
+		cm.iscale = new("UIScale", { Scale = 1 }, cm.icon)
+		local cbTail = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 1, 3), Size = UDim2.fromOffset(8, 8),
+			Rotation = 45, BackgroundColor3 = C(18, 20, 28), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 6 }, cb)
+
+		local function climberPoke(c)
+			c.hop = 0.5
+			if c.mode == "climb" then c.mode, c.waveT = "wave", 1.6 end
+			cbubbleOwner, cbubbleT = c, 1.9
+			cbubble.Text = c.def.say or "..."
+			cbubble.Visible = true
+			for _, t in ipairs(critters) do if t.key == "tree" then t.flash = 1.2 end end   -- la guirlande s'emballe un instant
+		end
+
+		-- guirlande : lumières posées sur un cadre autour de la fenêtre, en festons (haut / bas) et en vagues (côtés)
+		local function garlandLayout(ap, as)
+			local ox, oy, W, H = ap.X - 6, ap.Y - 6, as.X + 12, as.Y + 12
+			local total = 2 * (W + H)
+			local n = clamp(floor(total / 20), 8, 200)
+			while #gar.lights < n do
+				local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(6, 6), BorderSizePixel = 0, ZIndex = 3,
+					BackgroundColor3 = LIGHTC[1], BackgroundTransparency = gar.a }, gar.frame)
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
+				gar.lights[#gar.lights + 1] = { f = f, ci = 0 }
+			end
+			while #gar.lights > n do table.remove(gar.lights).f:Destroy() end
+			local hx = math.max(1, floor(W / 130 + 0.5))
+			local hy = math.max(1, floor(H / 150 + 0.5))
+			for i = 1, n do
+				local sd = (i - 0.5) / n * total
+				local x, y
+				if sd < W then                      -- haut : de gauche à droite
+					local f = ((sd / W) * hx) % 1
+					x, y = ox + sd, oy - 7 * (1 - sin(math.pi * f))
+				elseif sd < W + H then              -- côté droit : vers le bas
+					local u = (sd - W) / H
+					x, y = ox + W + 4 * sin(math.pi * ((u * hy) % 1)), oy + u * H
+				elseif sd < 2 * W + H then          -- bas : de droite à gauche
+					local u = (sd - W - H) / W
+					x, y = ox + W - u * W, oy + H + 6 * sin(math.pi * ((u * hx) % 1))
+				else                                -- côté gauche : vers le haut
+					local u = (sd - 2 * W - H) / H
+					x, y = ox - 4 * sin(math.pi * ((u * hy) % 1)), oy + H - u * H
+				end
+				gar.lights[i].f.Position = UDim2.fromOffset(floor(x + 0.5), floor(y + 0.5))
+			end
+		end
 
 		local function burst(x, y, keys, n, soft)
 			for _ = 1, n do
@@ -26474,6 +27104,15 @@ function Library:CreateWindow(cfg)
 				end
 			end
 			critters = {}
+			for _, c in ipairs(climbers) do c.root:Destroy() end
+			climbers = {}
+			for _, c in ipairs(chutes) do c.root:Destroy() end
+			for _, g in ipairs(landed) do g.root:Destroy() end
+			chutes, landed = {}, {}
+			cbubble.Visible, cbubbleT = false, 0
+			for _, r in ipairs(sleigh.roots) do r:Destroy() end
+			for _, p in ipairs(sleigh.sp) do p.f:Destroy() end
+			sleigh.roots, sleigh.sp, sleigh.active = {}, {}, false
 			if walker then walker.root:Destroy() walker = nil end
 			bubbleOwner, bubbleT = nil, 0
 			bubble.Visible = false
@@ -26538,6 +27177,374 @@ function Library:CreateWindow(cfg)
 				mode = "idle", wait = 1.5, dir = 1, hop = 0, flash = 0, feet = 0 }
 			root.ZIndex = 3
 			addHit(root, walker)
+			-- le traîneau : une version vers la droite, une vers la gauche (toujours en pixel art), posées sur tout l'écran
+			for d = 1, 2 do
+				local rws = (d == 1) and XS.sleigh or mirrorRows(XS.sleigh)
+				local sr, ssw, ssh = buildPixel({ rows = rws }, ps)
+				sr.Parent = gui
+				sr.Visible = false
+				sr.ZIndex = 4
+				sleigh.roots[d] = sr
+				sleigh.w, sleigh.h = ssw * ps, ssh * ps
+			end
+			for i = 1, 14 do
+				sleigh.sp[i] = { life = 0, x = 0, y = 0, f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(3, 3),
+					BorderSizePixel = 0, BackgroundTransparency = 1, Visible = false, ZIndex = 4 }, gui) }
+			end
+			sleigh.wait = 2.5
+			-- personnages qui grimpent le long de la fenêtre
+			for _, key in ipairs(theme.climbers or {}) do
+				local cdef = theme.defs[key]
+				if cdef then
+					local cr, csw, csh = buildSprite(cdef, ps)
+					cr.Parent = gui
+					cr.Visible = false
+					cr.ZIndex = 4
+					local c = { key = key, def = cdef, root = cr, sw = csw, sh = csh, side = "L", mode = "wait", wait = rng:NextNumber(2, 6) + #climbers * 4,
+						t = 0, x = 0, y = 0, rot = 0, hop = 0, waveT = 0, topT = 0, stops = {}, si = 1, ph = rng:NextNumber(0, 6.28) }
+					local hit = new("TextButton", { Name = "Hit", Position = UDim2.fromOffset(-3, -3), Size = UDim2.new(1, 6, 1, 6),
+						BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 5 }, cr)
+					hit.MouseButton1Click:Connect(function() climberPoke(c) end)
+					climbers[#climbers + 1] = c
+				end
+			end
+		end
+
+		-- cadeaux parachutés par le traîneau : tombent doucement, se posent sur le sol et restent dans le décor (clic = une phrase)
+		local function dropGift(x, y)
+			local kind = rng:NextInteger(1, 3)
+			local cr, _, csh = buildPixel({ rows = XS.chute[kind] }, curPs)
+			cr.Parent = gui
+			cr.ZIndex = (Library.SnowOnWindow == false) and 0 or 4
+			local left = (lastPX or 0) - curW / 2
+			local tx = left + rng:NextNumber(inset + 24, math.max(inset + 24, curW - inset - 24))
+			chutes[#chutes + 1] = { root = cr, x = x, x0 = x, y = y, y0 = y, tx = tx, kind = kind, ph = rng:NextNumber(0, 6.28), sh = csh }
+		end
+
+		local function landGift(c)
+			local variants = { WDEFS.gift, WDEFS.gift2, WDEFS.giftg }
+			local gdef = variants[c.kind] or WDEFS.gift
+			local gr, _, gsh = buildSprite(gdef, curPs)
+			gr.ZIndex = 2
+			local left = (lastPX or 0) - curW / 2
+			local g = { root = gr, def = { say = "", burst = gdef.burst }, sh = gsh, x = c.tx - left, feet = Hs - lt + 1, hop = 0, flash = 0 }
+			local hit = new("TextButton", { Name = "Hit", Position = UDim2.fromOffset(-3, -3), Size = UDim2.new(1, 6, 1, 6),
+				BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 5 }, gr)
+			hit.MouseButton1Click:Connect(function()
+				g.def.say = GIFTSAY[rng:NextInteger(1, #GIFTSAY)]
+				poke(g)
+			end)
+			landed[#landed + 1] = g
+			if #landed > 6 then table.remove(landed, 1).root:Destroy() end
+			burst(g.x, g.feet - gsh * curPs * 0.5, { "W", "Y" }, 6)
+		end
+
+		local function updateGifts(dt, now, open)
+			local v = viewport()
+			local gy = (lastPY or v.Y) - (lt - 1)
+			for i = #chutes, 1, -1 do
+				local c = chutes[i]
+				c.root.Visible = open
+				c.y = c.y + 85 * (curPs / 2) * dt
+				local p = clamp((c.y - c.y0) / math.max(1, gy - c.y0), 0, 1)
+				c.x = c.x0 + (c.tx - c.x0) * p + sin(now * 1.6 + c.ph) * 10 * (1 - p)
+				c.root.Position = UDim2.fromOffset(floor(c.x + 0.5), floor(c.y + 0.5))
+				c.root.Rotation = sin(now * 1.6 + c.ph + 1) * 6 * (1 - p)
+				if c.y >= gy then
+					c.root:Destroy()
+					table.remove(chutes, i)
+					if open and curPs > 0 then landGift(c) end
+				end
+			end
+			for _, g in ipairs(landed) do
+				if g.hop > 0 then g.hop = g.hop - dt end
+				local lift = g.hop > 0 and sin(clamp(1 - g.hop / 0.5, 0, 1) * math.pi) * 9 * (curPs / 2) or 0
+				g.feet = Hs - lt + 1
+				g.x = clamp(g.x, inset + 10, math.max(inset + 10, curW - inset - 10))
+				g.root.Position = UDim2.fromOffset(floor(g.x + 0.5), floor(g.feet - lift + 0.5))
+			end
+		end
+
+		-- bulle de commentaires : écriture lettre par lettre en fondu, maintien, puis fondu de sortie
+		local ESC = { ["&"] = "&amp;", ["<"] = "&lt;", [">"] = "&gt;", ['"'] = "&quot;", ["'"] = "&apos;" }
+		local CPS = 26   -- lettres par seconde
+
+		-- choix automatique : tes phrases (Library.DecorCustom) · jours spéciaux · phrases selon l'heure · catégories avec icône ; évite les 8 dernières
+		local function pickComment()
+			local function avoid(list)
+				local fitted = CMX.fit(list)   -- seulement les phrases qui vont avec l'heure (repas, sommeil, soir...)
+				if #fitted > 0 then list = fitted end
+				local m
+				for _ = 1, 8 do
+					m = list[rng:NextInteger(1, #list)]
+					local txt = CMX.norm(m)
+					local seen = false
+					for _, r in ipairs(cm.recent) do if r == txt then seen = true break end end
+					if not seen or #list <= #cm.recent then break end
+				end
+				return m
+			end
+			local function out(m, icon, col)
+				local txt, i2, c2 = CMX.norm(m)
+				cm.recent[#cm.recent + 1] = txt
+				if #cm.recent > 8 then table.remove(cm.recent, 1) end
+				return txt, "info", i2 or icon, c2 or col
+			end
+			local user = Library.DecorComments
+			if type(user) == "table" and #user > 0 then return out(avoid(user)) end
+			local cust = Library.DecorCustom
+			if type(cust) == "table" and #cust > 0 and (Library.DecorCustomOnly == true or rng:NextNumber() < 0.4) then
+				return out(avoid(cust))
+			end
+			if Library.DecorBubbleTime ~= false then
+				local et, ei, ec, isDate = CMX.event()
+				if et and rng:NextNumber() < (isDate and 0.3 or 0.06) then return out(et, ei, ec) end
+				if rng:NextNumber() < 0.22 then
+					local p = CMX.period()
+					return out(avoid(XS.comT[p]), CMX.periodIcon[p], CMX.periodCol[p])
+				end
+			end
+			local k = CMX.pickCat()
+			local c = CMX.cats[k]
+			CMX.lastCat = k
+			return out(avoid(c.l), c.i, c.c)
+		end
+
+		-- prochain message : file d'attente (alertes / réactions) → message d'accueil → commentaire automatique
+		function CMX.nextMessage()
+			local q = table.remove(cm.queue, 1)
+			if q then return q.t, q.k, q.hold, q.i, q.c end
+			if not cm.greeted and Library.DecorBubbleTime ~= false then
+				cm.greeted, cm.lastGreet = true, os.clock()
+				local t, i, c = CMX.greeting()
+				return t, "info", nil, i, c
+			end
+			return pickComment()
+		end
+
+		-- icône de la phrase : 1re icône Lucide qui existe (ou icône du type : erreur / avertissement / succès)
+		function CMX.setIcon(icon, col, kind)
+			local names = icon
+			if names == nil and kind ~= "info" then names = CMX.KINDICON[kind] end
+			if type(names) == "string" or type(names) == "number" then names = { names } end
+			local ok = false
+			if type(names) == "table" then
+				for _, n in ipairs(names) do
+					local good = false
+					pcall(function() good = Library.ApplyIcon(cm.icon, n) end)
+					if good then ok = true break end
+				end
+			end
+			cm.hasIcon, cm.iconCol = ok, ok and col or nil
+			cm.icon.Visible = ok
+			cm.pad.PaddingLeft = UDim.new(0, ok and 40 or 14)
+		end
+
+		local function startComment(msg, kind, hold, icon, col)
+			local chars = {}
+			for ch in string.gmatch(msg, utf8.charpattern) do chars[#chars + 1] = ESC[ch] or ch end
+			cm.chars, cm.n, cm.state, cm.t = chars, #chars, "type", 0
+			cm.kind = (kind and CMX.KIND[kind]) and kind or "info"
+			cm.hold = tonumber(hold) or (2.2 + #chars * 0.045 + ((cm.kind == "error" or cm.kind == "warn") and 2.5 or 0))
+			cm.next, cm.tickN = false, 0
+			CMX.setIcon(icon, col, cm.kind)
+			cb.Text = ""
+			cb.Visible = true
+		end
+
+		local function typedText(t)
+			local out = {}
+			for i = 1, cm.n do
+				local a = clamp((t - (i - 1) / CPS) / 0.4, 0, 1)
+				if a >= 1 then
+					out[i] = cm.chars[i]
+				else
+					out[i] = '<font transparency="' .. string.format("%.2f", 1 - a) .. '">' .. cm.chars[i] .. "</font>"
+				end
+			end
+			return table.concat(out)
+		end
+
+		-- say(texte, { Urgent, Kind, Hold }) : Urgent = passe devant la file et coupe la phrase en cours (fondu rapide)
+		local function say(text, o)
+			local item = { t = tostring(text), k = type(o) == "table" and o.Kind or nil, hold = type(o) == "table" and o.Hold or nil,
+				i = type(o) == "table" and (o.Icon or o.i) or nil, c = type(o) == "table" and o.Color or nil }
+			if type(o) == "table" and o.Urgent then
+				table.insert(cm.queue, 1, item)
+				if #cm.queue > 6 then table.remove(cm.queue, #cm.queue) end   -- on garde les urgents, on perd le plus ancien en attente
+				if cm.state == "hold" or cm.state == "type" then cm.state, cm.o, cm.next = "out", 0, true end
+			else
+				cm.queue[#cm.queue + 1] = item
+				if #cm.queue > 6 then table.remove(cm.queue, 1) end
+			end
+			if cm.state == "idle" then cm.wait = 0 end
+		end
+
+		-- clic sur la bulle : en cours d'écriture → affiche tout · sinon phrase suivante (clic gauche) / effacer (clic droit)
+		function CMX.bubbleNext(clear)
+			if clear then table.clear(cm.queue) end
+			if cm.state == "type" and not clear then
+				cm.t = cm.n / CPS + 0.4
+			elseif cm.state == "type" or cm.state == "hold" then
+				cm.state, cm.o, cm.next = "out", 0, not clear
+			end
+			if cm.state == "idle" and not clear then cm.wait = 0 end
+		end
+		cb.MouseButton1Click:Connect(function()
+			if Library.DecorBubbleClick == false then return end
+			Library:PlayUISound("click")
+			CMX.bubbleNext(false)
+		end)
+		cb.MouseButton2Click:Connect(function()
+			if Library.DecorBubbleClick == false then return end
+			CMX.bubbleNext(true)
+		end)
+		cb.MouseEnter:Connect(function() cm.hover = true end)
+		cb.MouseLeave:Connect(function() cm.hover = false end)
+
+		-- placement : centrée sur la fenêtre, JUSTE SOUS son bord bas (Library.DecorBubbleGap px). S'il n'y a pas assez de place en bas de
+		-- l'écran, elle passe AU-DESSUS de la fenêtre (avec une petite hystérésis : pas de va-et-vient). Quand le décor n'est pas collé en bas,
+		-- les petits personnages occupent la zone sous la fenêtre : la bulle se pose alors sous leur sol de neige.
+		local function layoutBubble()
+			if not cb.Visible then return end
+			local ap, as = main.AbsolutePosition, main.AbsoluteSize
+			local v = viewport()
+			local bw, bh = cb.AbsoluteSize.X, math.max(cb.AbsoluteSize.Y, 28)
+			local gap = tonumber(Library.DecorBubbleGap) or 24
+			local top = ap.Y + as.Y + gap
+			if Library.DecorBottom == false and Library.DecorStrip ~= false and dScale > 0.5 and lastPY then
+				top = math.max(top, lastPY + lt + 14)
+			end
+			local roomBelow = (v.Y - 6) - (top + bh)
+			local roomAbove = (ap.Y - gap) - bh - 6
+			if cm.above then
+				if roomBelow > 40 then cm.above = false end
+			elseif roomBelow < 0 and roomAbove > roomBelow then
+				cm.above = true
+			end
+			local x = clamp(ap.X + as.X / 2, bw / 2 + 8, math.max(v.X - bw / 2 - 8, bw / 2 + 8))
+			if cm.above then
+				cb.AnchorPoint = Vector2.new(0.5, 1)
+				cb.Position = UDim2.fromOffset(floor(x + 0.5), floor(math.max(ap.Y - gap, bh + 6) + 0.5))
+				cbTail.Position = UDim2.new(0.5, 0, 1, 3)    -- bulle au-dessus de la fenêtre : la pointe est en bas, vers elle
+			else
+				cb.AnchorPoint = Vector2.new(0.5, 0)
+				cb.Position = UDim2.fromOffset(floor(x + 0.5), floor(math.max(math.min(top, v.Y - bh - 6), 6) + 0.5))
+				cbTail.Position = UDim2.new(0.5, 0, 0, -3)   -- petite pointe en haut, vers la fenêtre
+			end
+		end
+
+		local function updateBubble(dt, open)
+			local on = open and Library.DecorBubble ~= false
+			-- visibilité douce : la bulle apparaît / s'estompe avec la fenêtre
+			local tv = on and 1 or 0
+			if Library._skyInstant then cm.v = tv else cm.v = cm.v + (tv - cm.v) * (1 - exp(-dt * 10)) end
+			if tv == 0 and cm.v < 0.02 then cm.v = 0 end
+			-- fenêtre rouverte : petit message d'accueil (si la dernière salutation date de plus de 45 s)
+			if on and not cm.wasOn then
+				cm.wasOn = true
+				if cm.greeted and Library.DecorBubbleTime ~= false and os.clock() - cm.lastGreet > 45 then
+					cm.lastGreet = os.clock()
+					local gt, gi, gc = CMX.greeting()
+					table.insert(cm.queue, 1, { t = gt, k = "info", i = gi, c = gc })
+					if cm.state == "idle" then cm.wait = 0.7 end
+				end
+			elseif not on then
+				cm.wasOn = false
+			end
+			if not on and (cm.v == 0 or cm.state == "idle") then
+				if cm.state ~= "idle" or cb.Visible then
+					cm.state = "idle"
+					cb.Visible = false
+					cm.hover = false
+					cm.wait = math.max(cm.wait, 4)
+				end
+				if cm.v == 0 then table.clear(cm.queue) end   -- pas de vieilles réactions à la réouverture
+				return
+			end
+			-- changement d'onglet : petite réaction (pas pendant le démarrage, pas à chaque clic)
+			local curTab = win.Current
+			if curTab ~= cm.tab then
+				local first = cm.tab == nil
+				cm.tab = curTab
+				if not first and curTab and Library._settingsReady and cm.v > 0.6 and Library.DecorBubbleReact ~= false
+					and os.clock() - cm.tabT > 14 and rng:NextNumber() < 0.45 then
+					cm.tabT = os.clock()
+					local nm = tostring(curTab.Name or "")
+					if curTab._isSettings then
+						Library:DecorReact("tab", XS.react.tabset, "info", 14, { "settings", "sliders-horizontal" })
+					elseif nm ~= "" then
+						Library:DecorReact("tab", string.format(CMX.pickFrom(XS.react.tab), nm), "info", 14, { "compass", "arrow-right" })
+					end
+				end
+			end
+			local ba, fade = 1, 0
+			if cm.state == "idle" then
+				cm.wait = cm.wait - dt
+				if cm.wait <= 0 then
+					local msg, kind, hold, ic, icol = CMX.nextMessage()
+					if msg then startComment(msg, kind, hold, ic, icol) else cm.wait = 5 end
+				end
+				if cm.state == "idle" then return end
+			end
+			if cm.state == "type" then
+				cm.t = cm.t + dt
+				ba = clamp(cm.t / 0.25, 0, 1)
+				local total = cm.n / CPS + 0.4
+				-- petit « tic » (une lettre sur deux, pas sur les espaces) avec le système de sons de la lib
+				if Library.DecorBubbleSound == true then
+					local k = floor(math.min(cm.t, cm.n / CPS) * CPS / 2)
+					if k > cm.tickN then
+						cm.tickN = k
+						local ch = cm.chars[math.min(k * 2, cm.n)]
+						if ch and ch ~= " " then Library:PlayUISound("bubble") end
+					end
+				end
+				if cm.t >= total then
+					cb.Text = table.concat(cm.chars)
+					cm.state, cm.h = "hold", 0
+				else
+					cb.Text = typedText(cm.t)
+				end
+			elseif cm.state == "hold" then
+				if not (cm.hover and Library.DecorBubbleClick ~= false) then cm.h = cm.h + dt end   -- survol : la bulle reste affichée
+				if cm.h >= cm.hold then cm.state, cm.o = "out", 0 end
+			elseif cm.state == "out" then
+				cm.o = cm.o + dt * (cm.next and 1.8 or 1)
+				fade = clamp(cm.o / 0.6, 0, 1)
+				ba = 1 - fade
+				if cm.o >= 0.6 then
+					cm.state = "idle"
+					cb.Visible = false
+					cm.hover = false
+					if cm.next then cm.wait = 0.08
+					else cm.wait = (tonumber(Library.DecorBubbleDelay) or 20) * rng:NextNumber(0.7, 1.3) end
+					return
+				end
+			end
+			-- couleurs : thème de la fenêtre (Second / Text / Accent), teintées selon le type de message
+			local themed = Library.DecorBubbleThemed ~= false
+			local base = themed and T.Second or C(18, 20, 28)
+			local txt = themed and T.Text or PAL.W
+			local acc = themed and T.Accent or PAL.W
+			local kc = CMX.KIND[cm.kind]
+			if kc then base, acc = base:Lerp(kc, 0.18), kc end
+			local vis = cm.v
+			local hov = (cm.hover and cm.state ~= "type") and 1 or 0
+			cb.BackgroundColor3, cbTail.BackgroundColor3, cb.TextColor3 = base, base, txt
+			cm.stroke.Color = acc
+			cb.BackgroundTransparency = 1 - (0.90 + 0.06 * hov) * ba * vis
+			cbTail.BackgroundTransparency = cb.BackgroundTransparency
+			cm.stroke.Transparency = 1 - (kc and 0.75 or 0.45 + 0.3 * hov) * ba * vis
+			cb.TextTransparency = math.max(fade, 1 - vis)
+			cm.pt = (cm.pt or 0) + dt
+			if cm.hasIcon then   -- icône : couleur de la catégorie (ou du type), petit battement
+				cm.icon.ImageColor3 = kc or cm.iconCol or acc
+				cm.icon.ImageTransparency = cb.TextTransparency
+				cm.iscale.Scale = 1 + 0.09 * sin(cm.pt * 5)
+			end
+			cm.scale.Scale = 0.94 + 0.06 * (cm.state == "type" and clamp(cm.t / 0.25, 0, 1) or ba)
+			layoutBubble()
 		end
 
 		-- positions qui dépendent de la largeur / de la taille
@@ -26549,6 +27556,22 @@ function Library:CreateWindow(cfg)
 			ground.Size = UDim2.fromOffset(curW, lt)
 			ground.Position = UDim2.fromOffset(0, Hs)
 			local s = ps / 2
+			-- congères latérales (uniquement quand le décor est collé en bas, pleine largeur)
+			local full = Library.DecorBottom ~= false
+			local bankW = full and clamp(floor(curW * 0.09), 36, 190) or 0
+			local step = math.max(4, ps * 3)
+			inset = full and floor(bankW * 0.8) or 0
+			for _, bk in ipairs(banks) do
+				bk.f.Visible = full
+				if full then
+					local frac = (bk.j - 1) / BANK_N
+					local bw = math.max(ps * 2, floor(bankW * (1 - frac ^ 1.7)))
+					if style == "pixel" then bw = math.max(ps * 2, floor(bw / ps + 0.5) * ps) end
+					bk.f.Size = UDim2.fromOffset(bw, lt + bk.j * step)
+					bk.f.Position = UDim2.fromOffset(bk.side == 1 and 0 or curW, Hs)
+					bk.cr.CornerRadius = UDim.new(0, step)
+				end
+			end
 			for _, b in ipairs(bumps) do
 				local bw, bh = floor(b.w * s), floor(b.h * s)
 				if style == "pixel" then   -- congères en blocs
@@ -26562,16 +27585,21 @@ function Library:CreateWindow(cfg)
 				sp.f.Size = UDim2.fromOffset(z, z)
 				sp.f.Position = UDim2.fromOffset(floor(sp.fx * curW), Hs - lt - floor(sp.dy * s))
 			end
+			local pick = Library.DecorPick and Library.DecorPick[theme.id]
+			local list = {}
+			for _, key in ipairs(theme.priority) do
+				if type(pick) ~= "table" or pick[key] then list[#list + 1] = key end
+			end
 			local n = 0
-			if curW >= 120 then n = clamp(floor(curW / (30 * s + 8)), 0, #theme.priority) end
+			if curW >= 120 then n = clamp(floor((curW - 2 * inset) / (30 * s + 8)), 0, #list) end
 			local vis = {}
-			for i = 1, n do vis[theme.priority[i]] = true end
+			for i = 1, n do vis[list[i]] = true end
 			local k = 0
 			for _, c in ipairs(critters) do
 				c.feet = Hs - lt + 1
 				if vis[c.key] then
 					k = k + 1
-					c.tx = curW * (k - 0.5) / n + c.jit
+					c.tx = inset + (curW - 2 * inset) * (k - 0.5) / n + c.jit
 					if not c.shown then c.x = c.tx end
 					c.shown = true
 				else
@@ -26581,22 +27609,29 @@ function Library:CreateWindow(cfg)
 			end
 			if walker then
 				walker.feet = Hs - 1
-				walker.x = clamp(walker.x, 14, math.max(14, curW - 14))
+				walker.x = clamp(walker.x, inset + 14, math.max(inset + 14, curW - inset - 14))
 			end
 		end
 
 		local function place()
 			local ap, as = main.AbsolutePosition, main.AbsoluteSize
 			local v = viewport()
-			local w = math.max(0, floor(as.X - 44))
-			local gy = math.min(ap.Y + as.Y + (tonumber(Library.DecorGap) or 10), v.Y - 4)
-			local px, py = floor(ap.X + as.X / 2 + 0.5), floor(gy + 0.5)
+			local full = Library.DecorBottom ~= false
+			local w, gy, cx
+			if full then   -- collé tout en bas de l'écran, sur toute la largeur
+				w, gy, cx = math.max(0, floor(v.X)), v.Y, v.X / 2
+			else
+				w = math.max(0, floor(as.X - 44))
+				gy = math.min(ap.Y + as.Y + (tonumber(Library.DecorGap) or 10), v.Y - 4)
+				cx = ap.X + as.X / 2
+			end
+			local px, py = floor(cx + 0.5), floor(gy + 0.5)
 			if px ~= lastPX or py ~= lastPY then
 				lastPX, lastPY = px, py
 				decor.Position = UDim2.fromOffset(px, py)
 			end
-			if w ~= curW then
-				curW = w
+			if w ~= curW or full ~= lastFull then
+				curW, lastFull = w, full
 				if curPs > 0 then relayout() end
 			end
 		end
@@ -26618,19 +27653,28 @@ function Library:CreateWindow(cfg)
 		local function refreshDecor()
 			local ps = clamp(floor(2 * (tonumber(Library.DecorScale) or 1) + 0.5), 1, 4)
 			local th = Library.DecorTheme
+			if Library.DecorAuto ~= false then   -- thème automatique : Hiver en décembre, Été en juillet
+				local okm, mo = pcall(function() return os.date("*t").month end)
+				if okm then
+					if mo == 12 then th = "Hiver" elseif mo == 7 then th = "Été" end
+				end
+			end
 			local nt = (th == "Été" or th == "Ete" or th == "summer") and THEMES.summer or THEMES.winter
 			local ns = (Library.DecorStyle == "Dessin" or Library.DecorStyle == "drawn") and "dessin" or "pixel"
 			if ps ~= curPs or nt ~= theme or ns ~= style or #critters == 0 then
 				theme, curPs, style = nt, ps, ns
 				local rad = (style == "pixel") and 0 or 1
 				gCorner.CornerRadius = UDim.new(rad, 0)
-				for _, b in ipairs(bumps) do b.cr.CornerRadius = UDim.new(rad * 0.5, 0) end
+				for _, b in ipairs(bumps) do b.cr.CornerRadius = UDim.new(0.5, 0) end   -- congères toujours rondes
 				for _, sp in ipairs(sparks) do sp.cr.CornerRadius = UDim.new(rad, 0) sp.f.BackgroundColor3 = theme.spark end
 				ground.BackgroundColor3 = theme.ground
+				for _, bk in ipairs(banks) do bk.f.BackgroundColor3 = theme.ground end
 				for _, b in ipairs(bumps) do b.f.BackgroundColor3 = theme.bump end
 				for _, f in ipairs(flakes) do f.f.BackgroundColor3 = theme.flake end
 				buildAll()
 				relayout()
+			elseif curPs > 0 then
+				relayout()   -- choix des personnages / mode du sol modifiés
 			end
 			syncFlakes()
 			snow.ZIndex = (Library.SnowOnWindow == false) and 0 or 4
@@ -26638,9 +27682,18 @@ function Library:CreateWindow(cfg)
 			Ticker.wake()
 		end
 		win.RefreshDecor = refreshDecor
+		win.SayDecor = function(_, t, o) say(t, o) end
+		win.SayDecorNow = function()
+			local m, k, i, c = pickComment()
+			if m then say(m, { Urgent = true, Kind = k, Icon = i, Color = c }) end
+		end
+		win.NextDecor = function(_, clear) CMX.bubbleNext(clear == true) end
 
 		main:GetPropertyChangedSignal("AbsolutePosition"):Connect(place)
 		main:GetPropertyChangedSignal("AbsoluteSize"):Connect(place)
+		-- la bulle suit la fenêtre à chaque image (la boucle du décor ne tourne qu'à 40 Hz : la bulle aurait des saccades en déplaçant la fenêtre)
+		main:GetPropertyChangedSignal("AbsolutePosition"):Connect(layoutBubble)
+		main:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutBubble)
 
 		track(Ticker.connect(function(dt, now)
 			dt = math.min(dt, 0.1)
@@ -26752,12 +27805,12 @@ function Library:CreateWindow(cfg)
 							if wk.wait <= 0 then
 								wk.mode, wk.wait = "walk", rng:NextNumber(2, 5)
 								wk.dir = (rng:NextNumber(0, 1) < 0.5) and -1 or 1
-								if wk.x < 40 then wk.dir = 1 elseif wk.x > curW - 40 then wk.dir = -1 end
+								if wk.x < inset + 40 then wk.dir = 1 elseif wk.x > curW - inset - 40 then wk.dir = -1 end
 							end
 						else
 							walking = true
 							wk.x = wk.x + wk.dir * theme.wspeed * s * dt
-							if wk.x < 14 then wk.x, wk.dir = 14, 1 elseif wk.x > curW - 14 then wk.x, wk.dir = curW - 14, -1 end
+							if wk.x < inset + 14 then wk.x, wk.dir = inset + 14, 1 elseif wk.x > curW - inset - 14 then wk.x, wk.dir = curW - inset - 14, -1 end
 							if wk.wait <= 0 then wk.mode, wk.wait = "idle", rng:NextNumber(1.5, 4) end
 						end
 					end
@@ -26808,6 +27861,205 @@ function Library:CreateWindow(cfg)
 				decor.Visible = false
 			end
 
+			updateGifts(dt, now, open)
+			updateBubble(dt, open)
+
+			-- ── guirlande lumineuse + personnages qui grimpent autour de la fenêtre ──
+			do
+				local ap, as = main.AbsolutePosition, main.AbsoluteSize
+				local ps = curPs
+				-- guirlande (thème Hiver)
+				local wantG = open and Library.DecorGarland ~= false and theme.id == "winter" and as.X > 120 and as.Y > 80
+				local gA = gar.fade + ((wantG and 1 or 0) - gar.fade) * (1 - exp(-dt * 8))
+				if not wantG and gA < 0.02 then gA = 0 end
+				gar.fade = gA
+				if gA > 0 then
+					gar.frame.Visible = true
+					if gar.dirty or ap.X ~= gar.lx or ap.Y ~= gar.ly or as.X ~= gar.lw or as.Y ~= gar.lh then
+						gar.lx, gar.ly, gar.lw, gar.lh, gar.dirty = ap.X, ap.Y, as.X, as.Y, false
+						garlandLayout(ap, as)
+					end
+					local treeFast = false
+					for _, c in ipairs(critters) do
+						if c.key == "tree" and c.flash > 0 then treeFast = true break end
+					end
+					gar.boost = gar.boost + ((treeFast and 1 or 0) - gar.boost) * (1 - exp(-dt * 6))
+					gar.ph = gar.ph + dt * (1.6 + 7.4 * gar.boost)
+					local ga = 1 - gA * 0.95
+					for i, l in ipairs(gar.lights) do
+						local idx = floor(gar.ph + i * 0.7) % 4 + 1
+						if l.ci ~= idx then l.ci = idx l.f.BackgroundColor3 = LIGHTC[idx] end
+						if gar.a ~= ga then l.f.BackgroundTransparency = ga end
+					end
+					gar.a = ga
+				elseif gar.frame.Visible then
+					gar.frame.Visible = false
+				end
+
+				-- grimpeurs : montent le long d'un bord, saluent, s'assoient en haut, puis se laissent glisser
+				local pickT = Library.DecorPick and Library.DecorPick[theme.id]
+				local clOn = open and Library.DecorClimb ~= false and as.X > 160 and as.Y > 120
+				local H = as.Y
+				local spd = 30 * (ps / 2)
+				for _, c in ipairs(climbers) do
+					local allowed = c.key == "walker" or type(pickT) ~= "table" or pickT[c.key]
+					if not (clOn and allowed) then
+						if c.mode ~= "wait" or c.root.Visible then
+							c.mode, c.wait = "wait", 2
+							c.root.Visible = false
+						end
+					elseif c.mode == "wait" then
+						c.wait = c.wait - dt
+						if c.wait <= 0 then
+							c.side = (rng:NextInteger(0, 1) == 0) and "L" or "R"
+							c.mode, c.t, c.si, c.fresh = "climb", 0, 1, true
+							c.stops = { rng:NextNumber(0.2, 0.45), rng:NextNumber(0.55, 0.85) }
+							if rng:NextInteger(1, 3) == 1 then c.stops = { rng:NextNumber(0.3, 0.7) } end
+							c.root.Visible = true
+						end
+					else
+						local left = c.side == "L"
+						if c.mode == "climb" then
+							c.t = c.t + spd * dt
+							local st = c.stops[c.si]
+							if st and c.t >= st * H then
+								c.si = c.si + 1
+								c.mode, c.waveT = "wave", rng:NextNumber(1.4, 2.4)
+							end
+							if c.t >= H - 2 then c.t, c.mode, c.topT = H, "top", rng:NextNumber(3, 5.5) end
+						elseif c.mode == "wave" then
+							c.waveT = c.waveT - dt
+							if c.waveT <= 0 then c.mode = "climb" end
+						elseif c.mode == "top" then
+							c.topT = c.topT - dt
+							if c.topT <= 0 then c.mode, c.t = "slide", H end
+						elseif c.mode == "slide" then
+							c.t = c.t - spd * 5 * dt
+							if c.t <= 0 then
+								c.mode, c.wait = "wait", rng:NextNumber(6, 16)
+								c.root.Visible = false
+							end
+						end
+						if c.mode ~= "wait" then
+							if c.hop > 0 then c.hop = c.hop - dt end
+							local tx, ty, tr
+							if c.mode == "top" then
+								tx, ty, tr = left and (ap.X + 28) or (ap.X + as.X - 28), ap.Y, sin(now * 2 + c.ph) * 3
+							else
+								tx = left and (ap.X - 2) or (ap.X + as.X + 2)
+								ty = ap.Y + H - c.t
+								tr = left and -90 or 90
+								if c.mode == "climb" then
+									tr = tr + sin(now * 8 + c.ph) * 5
+								elseif c.mode == "wave" then
+									tr = tr + sin(now * 10 + c.ph) * 12
+								end
+							end
+							if c.hop > 0 then tr = tr + sin(now * 30) * 8 * (c.hop / 0.5) end
+							if c.fresh then
+								c.x, c.y, c.rot, c.fresh = tx, ty, tr, false
+							else
+								local k = math.min(1, dt * 14)
+								c.x = c.x + (tx - c.x) * k
+								c.y = c.y + (ty - c.y) * k
+								c.rot = c.rot + (tr - c.rot) * k
+							end
+							c.root.Position = UDim2.fromOffset(floor(c.x + 0.5), floor(c.y + 0.5))
+							c.root.Rotation = c.rot
+						end
+					end
+				end
+				-- bulle d'un grimpeur
+				if cbubbleT > 0 and cbubbleOwner and cbubbleOwner.root.Visible then
+					cbubbleT = cbubbleT - dt
+					local a = clamp(math.min(cbubbleT / 0.35, (1.9 - cbubbleT) / 0.12), 0, 1)
+					local v = viewport()
+					local bw = cbubble.AbsoluteSize.X
+					local bx = clamp(cbubbleOwner.x, bw / 2 + 4, math.max(v.X - bw / 2 - 4, bw / 2 + 4))
+					local lift = (cbubbleOwner.mode == "top") and (cbubbleOwner.sh * ps + 6) or 26
+					cbubble.Position = UDim2.fromOffset(floor(bx), floor(cbubbleOwner.y - lift))
+					cbubble.BackgroundTransparency = 1 - 0.9 * a
+					cbubble.TextTransparency = 1 - a
+					if cbubbleT <= 0 then cbubble.Visible = false end
+				elseif cbubble.Visible then
+					cbubble.Visible = false
+					cbubbleT = 0
+				end
+			end
+
+			-- ── traîneau du Père Noël : traverse l'écran de temps en temps (thème Hiver) ──
+			do
+				local sl = sleigh
+				local want = open and Library.DecorSleigh ~= false and theme.id == "winter" and sl.roots[1] ~= nil
+				if want then
+					local v = viewport()
+					if not sl.active then
+						sl.wait = sl.wait - dt
+						if sl.wait <= 0 then
+							sl.active = true
+							sl.dir = (rng:NextInteger(0, 1) == 0) and 1 or -1
+							sl.base = rng:NextNumber(0.08, 0.6) * v.Y
+							sl.amp = rng:NextNumber(8, 32)
+							sl.ph = rng:NextNumber(0, 6.28)
+							sl.spd = rng:NextNumber(120, 190)
+							sl.x = (sl.dir == 1) and -sl.w * 0.6 or v.X + sl.w * 0.6
+							local zi = (Library.SnowOnWindow == false) and 0 or 4
+							for i = 1, 2 do sl.roots[i].ZIndex = zi end
+							for _, p in ipairs(sl.sp) do p.f.ZIndex = zi end
+						end
+					end
+					if sl.active then
+						sl.x = sl.x + sl.dir * sl.spd * dt
+						local ph = now * 1.6 + sl.ph
+						sl.y = sl.base + sin(ph) * sl.amp
+						sl.roots[1].Visible = sl.dir == 1
+						sl.roots[2].Visible = sl.dir ~= 1
+						local sr = sl.roots[(sl.dir == 1) and 1 or 2]
+						sr.Position = UDim2.fromOffset(floor(sl.x + 0.5), floor(sl.y + 0.5))
+						sr.Rotation = math.cos(ph) * 4 * sl.dir
+						sl.dropT = sl.dropT - dt   -- largage d'un cadeau parachuté
+						if sl.dropT <= 0 then
+							sl.dropT = rng:NextNumber(3, 7)
+							if Library.DecorGifts ~= false and Library.DecorStrip ~= false and dScale > 0.95 and #chutes < 3
+								and sl.x > 60 and sl.x < v.X - 60 then
+								dropGift(sl.x, sl.y)
+							end
+						end
+						sl.spT = sl.spT - dt
+						if sl.spT <= 0 then
+							sl.spT = 0.05
+							for _, p in ipairs(sl.sp) do
+								if p.life <= 0 then
+									p.life = 0.9
+									p.x = sl.x - sl.dir * sl.w * 0.45 + rng:NextNumber(-4, 4)
+									p.y = sl.y - sl.h * rng:NextNumber(0.1, 0.7)
+									p.f.BackgroundColor3 = LIGHTC[rng:NextInteger(1, 4)]
+									break
+								end
+							end
+						end
+						if (sl.dir == 1 and sl.x > v.X + sl.w) or (sl.dir == -1 and sl.x < -sl.w) then
+							sl.active = false
+							sl.roots[1].Visible, sl.roots[2].Visible = false, false
+							sl.wait = rng:NextNumber(9, 22)
+						end
+					end
+				elseif sl.active or (sl.roots[1] and (sl.roots[1].Visible or sl.roots[2].Visible)) then
+					sl.active = false
+					for i = 1, #sl.roots do sl.roots[i].Visible = false end
+					sl.wait = 2
+				end
+				for _, p in ipairs(sl.sp) do
+					if p.life > 0 then
+						p.life = p.life - dt
+						p.y = p.y + 22 * dt
+						p.f.Position = UDim2.fromOffset(floor(p.x + 0.5), floor(p.y + 0.5))
+						p.f.BackgroundTransparency = 1 - clamp(p.life / 0.9, 0, 1) * 0.9
+						p.f.Visible = p.life > 0
+					end
+				end
+			end
+
 			-- ── neige ──
 			if sFade > 0 then
 				snow.Visible = true
@@ -26837,7 +28089,7 @@ function Library:CreateWindow(cfg)
 				snow.Visible = false
 			end
 		end, { rate = 40, deco = true, gate = function()
-			return (skyTarget > 0 or dScale > 0 or sFade > 0) and (Library.DecorStrip ~= false or #flakes > 0 or dScale > 0 or sFade > 0)
+			return (skyTarget > 0 or dScale > 0 or sFade > 0 or cm.v > 0) and (Library.DecorStrip ~= false or Library.DecorBubble ~= false or Library.DecorSleigh ~= false or Library.DecorClimb ~= false or Library.DecorGarland ~= false or #flakes > 0 or dScale > 0 or sFade > 0 or cm.v > 0)
 		end }))
 
 		refreshDecor()
@@ -30109,6 +31361,369 @@ do
 				return item
 			end
 		end
+	end
+end
+
+-- V9.28 : accroches de la bulle de commentaires (réactions, alertes prioritaires, son « tic »)
+do
+	-- son « bubble » ajouté à toutes les ambiances (court, aigu, très doux)
+	pcall(function()
+		for _, pack in pairs(Library.UISoundPacks) do
+			if type(pack) == "table" and pack.bubble == nil then
+				pack.bubble = { "ping", 2.0, 0.045, jit = 0.14, len = 0.10, cd = 0.04 }
+			end
+		end
+	end)
+
+	local function trimText(t, n)
+		t = tostring(t or "")
+		t = string.gsub(t, "%s+", " ")
+		if #t > n then t = string.sub(t, 1, n - 1) .. "…" end
+		return t
+	end
+
+	-- Ctrl+Z / bouton Annuler
+	local origUndo = Library.Undo
+	if type(origUndo) == "function" then
+		function Library:Undo(...)
+			local r = table.pack(origUndo(self, ...))
+			if r[1] ~= false then pcall(function() Library:DecorReact("undo", Library.DecorReactions.undo, "info", 2, Library.DecorReactIcons.undo) end) end
+			return table.unpack(r, 1, r.n)
+		end
+	end
+
+	-- notifications : erreurs / avertissements → bulle prioritaire · « copié » → petite réaction
+	local origNotify = Library.Notify
+	function Library:Notify(o, ...)
+		local h = origNotify(self, o, ...)
+		pcall(function()
+			if type(o) ~= "table" or o._cfgSummary then return end
+			if (Library._cfgCapture or 0) > 0 then return end   -- chargement de config en cours
+			local ty = o.Type
+			local txt = tostring(o.Content or o.Title or "")
+			if Library.DecorBubbleAlerts ~= false and (ty == "Error" or ty == "Warning") then
+				local title = (o.Title and tostring(o.Title) ~= "" and tostring(o.Title) ~= "Notification") and (tostring(o.Title) .. " : ") or ""
+				Library:DecorSay(trimText(title .. txt, 90), { Urgent = true, Kind = ty == "Error" and "error" or "warn" })
+			elseif ty == "Success" and string.find(string.lower(txt), "copi", 1, true) then
+				Library:DecorReact("copy", Library.DecorReactions.copy, "success", 6, Library.DecorReactIcons.copy)
+			end
+		end)
+		return h
+	end
+
+	local origLoad = Library.LoadConfig
+	if type(origLoad) == "function" then
+		function Library:LoadConfig(...)
+			local r = table.pack(origLoad(self, ...))
+			if r[1] then pcall(function() Library:DecorReact("cfg", Library.DecorReactions.cfg, "success", 4, Library.DecorReactIcons.cfg) end) end
+			return table.unpack(r, 1, r.n)
+		end
+	end
+	local origSave = Library.SaveConfig
+	if type(origSave) == "function" then
+		function Library:SaveConfig(...)
+			local r = table.pack(origSave(self, ...))
+			if r[1] then pcall(function() Library:DecorReact("save", Library.DecorReactions.save, "success", 10, Library.DecorReactIcons.save) end) end
+			return table.unpack(r, 1, r.n)
+		end
+	end
+end
+
+-- ============================================================================
+-- HORLOGE DES REPAS  (V9.29)
+-- Aux heures de repas (Library.MealTimes), un voile flouté recouvre tout l'écran + l'UI, et l'heure s'affiche en GRAND,
+-- centrée, en chiffres pixel : elle affiche l'heure d'avant (11:59) puis les chiffres défilent vers le haut jusqu'à l'heure du
+-- repas (12:00). Un clic n'importe où la ferme.
+--   Library.MealClock      = true            activer / couper
+--   Library.MealTimes      = { { h = 8, m = 0, name = "Petit-déj" }, ... }   (h = heure 0-23, m = minute)
+--   Library.MealClockLead  = 8               secondes affichées AVANT l'heure (le « 11:59 »)
+--   Library.MealClockHold  = 6               secondes gardées APRÈS le défilement
+--   Library.MealClockLabel = true            petit nom du repas sous l'horloge
+--   Library.MealClockBlur  = 56              flou du jeu derrière (0 - 56)
+--   Library:PreviewMealClock(12, 0, "Déjeuner")   pour tester tout de suite
+-- Note : Roblox ne sait pas flouter un ScreenGui. Le flou (BlurEffect) s'applique au JEU ; l'UI, elle, est recouverte par un
+-- voile sombre quasi opaque, donc elle apparaît « noyée » derrière l'heure.
+-- (bloc isolé dans un do ... end : la librairie est proche de la limite de 200 variables locales)
+-- ============================================================================
+do
+	local TS = game:GetService("TweenService")
+	local MC = { busy = false, alive = true, done = {}, S = nil }
+
+	Library.MealClock      = true
+	Library.MealClockLead  = 8
+	Library.MealClockHold  = 6
+	Library.MealClockLabel = true
+	Library.MealClockBlur  = 56
+	Library.MealTimes = {
+		{ h = 8,  m = 0, name = "Petit-déj" },
+		{ h = 12, m = 0, name = "Déjeuner" },
+		{ h = 16, m = 0, name = "Goûter" },
+		{ h = 20, m = 0, name = "Dîner" },
+	}
+
+	-- police pixel 5 x 7
+	local GLYPH = {
+		[0] = { "01110", "10001", "10011", "10101", "11001", "10001", "01110" },
+		[1] = { "00100", "01100", "00100", "00100", "00100", "00100", "01110" },
+		[2] = { "01110", "10001", "00001", "00010", "00100", "01000", "11111" },
+		[3] = { "11110", "00001", "00001", "01110", "00001", "00001", "11110" },
+		[4] = { "00010", "00110", "01010", "10010", "11111", "00010", "00010" },
+		[5] = { "11111", "10000", "11110", "00001", "00001", "10001", "01110" },
+		[6] = { "00110", "01000", "10000", "11110", "10001", "10001", "01110" },
+		[7] = { "11111", "00001", "00010", "00100", "01000", "01000", "01000" },
+		[8] = { "01110", "10001", "10001", "01110", "10001", "10001", "01110" },
+		[9] = { "01110", "10001", "10001", "01111", "00001", "00010", "01100" },
+	}
+	local WHITE = Color3.new(1, 1, 1)
+
+	local function tw(o, props, t, style, dir)
+		local x = TS:Create(o, TweenInfo.new(t, style or Enum.EasingStyle.Quint, dir or Enum.EasingDirection.Out), props)
+		x:Play()
+		return x
+	end
+
+	-- pose les petits carrés d'un chiffre (rows = nil : tous les carrés, pour les pixels éteints)
+	local function cells(parent, rows, P, transp)
+		for r = 1, 7 do
+			for c = 1, 5 do
+				if rows == nil or string.sub(rows[r], c, c) == "1" then
+					local f = Instance.new("Frame")
+					f.BorderSizePixel = 0
+					f.BackgroundColor3 = WHITE
+					f.BackgroundTransparency = transp
+					f.Size = UDim2.fromOffset(P - 2, P - 2)
+					f.Position = UDim2.fromOffset((c - 1) * P + 1, (r - 1) * P + 1)
+					f.Parent = parent
+				end
+			end
+		end
+	end
+
+	local function newSlot(parent, col, P)
+		local fr = Instance.new("Frame")
+		fr.BackgroundTransparency = 1
+		fr.ClipsDescendants = true
+		fr.Size = UDim2.fromOffset(5 * P, 7 * P)
+		fr.Position = UDim2.fromOffset(col * P, 0)
+		fr.Parent = parent
+		cells(fr, nil, P, 0.93)   -- pixels éteints (grille fantôme)
+		return { fr = fr, P = P, cur = nil, grp = nil }
+	end
+
+	-- affiche un chiffre ; anim = true : l'ancien monte et sort, le nouveau arrive du bas
+	local function setDigit(slot, n, anim, delay)
+		if slot.cur == n then return end
+		local P = slot.P
+		local old = slot.grp
+		local grp = Instance.new("Frame")
+		grp.BackgroundTransparency = 1
+		grp.Size = UDim2.fromOffset(5 * P, 7 * P)
+		grp.Parent = slot.fr
+		cells(grp, GLYPH[n], P, 0)
+		slot.grp, slot.cur = grp, n
+		if anim then
+			grp.Position = UDim2.fromOffset(0, 8 * P)
+			task.delay(delay or 0, function()
+				if not grp.Parent then return end
+				tw(grp, { Position = UDim2.fromOffset(0, 0) }, 0.5)
+				if old and old.Parent then
+					local t = tw(old, { Position = UDim2.fromOffset(0, -8 * P) }, 0.5)
+					t.Completed:Connect(function() pcall(function() old:Destroy() end) end)
+				end
+			end)
+		elseif old then
+			old:Destroy()
+		end
+	end
+
+	local function teardown(S)
+		if not S then return end
+		if S.blur then pcall(function() S.blur:Destroy() end) end
+		if S.gui then pcall(function() S.gui:Destroy() end) end
+		if MC.S == S then MC.S = nil end
+	end
+
+	-- h, m = heure du repas · name = nom · o = { at = epoch du repas, late = true si déjà passé, preview = true, delay = s }
+	local function run(h, m, name, o)
+		if MC.busy then return end
+		MC.busy = true
+		local S = { dismissed = false }
+		MC.S = S
+		local ok, err = pcall(function()
+			local cam = workspace.CurrentCamera
+			local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+			local P = math.max(4, math.floor(math.min(vp.X * 0.72 / 27, vp.Y * 0.30 / 7)))
+
+			local g = Instance.new("ScreenGui")
+			g.Name = "UILibMealClock"
+			g.ResetOnSpawn = false
+			g.DisplayOrder = 2147480000
+			g.IgnoreGuiInset = true
+			g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+			mount(g)
+			S.gui = g
+
+			-- voile qui recouvre tout (et noie l'UI) ; un clic le ferme
+			local veil = Instance.new("TextButton")
+			veil.AutoButtonColor = false
+			veil.Text = ""
+			veil.BorderSizePixel = 0
+			veil.BackgroundColor3 = Color3.fromRGB(6, 6, 10)
+			veil.BackgroundTransparency = 1
+			veil.Size = UDim2.fromScale(1, 1)
+			veil.Parent = g
+			veil.MouseButton1Click:Connect(function() S.dismissed = true end)
+
+			local bsz = math.clamp(tonumber(Library.MealClockBlur) or 56, 0, 56)
+			if bsz > 0 then
+				local okb, b = pcall(function()
+					local e = Instance.new("BlurEffect")
+					e.Name = "UILibMealBlur"
+					e.Size = 0
+					e.Parent = Lighting
+					return e
+				end)
+				if okb and b then S.blur = b tw(b, { Size = bsz }, 0.7) end
+			end
+			tw(veil, { BackgroundTransparency = 0.18 }, 0.6)
+
+			-- horloge centrée : 27 colonnes x 7 lignes
+			local clock = Instance.new("Frame")
+			clock.BackgroundTransparency = 1
+			clock.AnchorPoint = Vector2.new(0.5, 0.5)
+			clock.Position = UDim2.fromScale(0.5, 0.5)
+			clock.Size = UDim2.fromOffset(27 * P, 7 * P)
+			clock.Parent = g
+			local sc = Instance.new("UIScale")
+			sc.Scale = 0.85
+			sc.Parent = clock
+			tw(sc, { Scale = 1 }, 0.55, Enum.EasingStyle.Back)
+
+			local cols = { 0, 6, 16, 22 }
+			S.slots = {}
+			for i = 1, 4 do S.slots[i] = newSlot(clock, cols[i], P) end
+
+			local colon = Instance.new("Frame")   -- les deux points
+			colon.BackgroundTransparency = 1
+			colon.Size = UDim2.fromScale(1, 1)
+			colon.Parent = clock
+			for _, row in ipairs({ 2, 4 }) do
+				local d = Instance.new("Frame")
+				d.BorderSizePixel = 0
+				d.BackgroundColor3 = WHITE
+				d.Size = UDim2.fromOffset(P - 2, P - 2)
+				d.Position = UDim2.fromOffset(13 * P + 1, row * P + 1)
+				d.Parent = colon
+			end
+
+			local lab = Instance.new("TextLabel")
+			lab.BackgroundTransparency = 1
+			lab.Font = Enum.Font.Code
+			lab.Text = tostring(name or "")
+			lab.TextColor3 = WHITE
+			lab.TextTransparency = 0.55
+			lab.TextSize = math.clamp(math.floor(P * 0.8), 14, 44)
+			lab.AnchorPoint = Vector2.new(0.5, 0.5)
+			lab.Position = UDim2.new(0.5, 0, 0.5, math.floor(5.6 * P))
+			lab.Size = UDim2.fromOffset(27 * P, 60)
+			lab.Visible = Library.MealClockLabel ~= false
+			lab.Parent = g
+
+			local function digitsOf(hh, mm)
+				return { math.floor(hh / 10), hh % 10, math.floor(mm / 10), mm % 10 }
+			end
+
+			-- départ : la minute d'avant (11:59), sauf si l'heure du repas est déjà passée
+			local sh, sm = h, m
+			if not o.late then
+				local pm = (h * 60 + m - 1) % 1440
+				sh, sm = math.floor(pm / 60), pm % 60
+			end
+			local sd = digitsOf(sh, sm)
+			for i = 1, 4 do setDigit(S.slots[i], sd[i], false) end
+
+			local function blink() colon.Visible = (os.clock() % 1) < 0.65 end
+
+			-- attente de l'heure du repas
+			if o.preview then
+				local t0 = os.clock()
+				while os.clock() - t0 < (o.delay or 1.8) and not S.dismissed and MC.alive do blink() task.wait(0.1) end
+			elseif not o.late then
+				while os.time() < (o.at or 0) and not S.dismissed and MC.alive do blink() task.wait(0.1) end
+			end
+			colon.Visible = true
+
+			-- le défilement : 11:59 -> 12:00 (les chiffres qui changent montent, de droite à gauche)
+			if o.late then
+				lab.TextTransparency = 0.05
+			elseif not S.dismissed and MC.alive then
+				local nd = digitsOf(h, m)
+				local k = 0
+				for i = 4, 1, -1 do
+					if S.slots[i].cur ~= nd[i] then
+						setDigit(S.slots[i], nd[i], true, k * 0.16)
+						k = k + 1
+					end
+				end
+				tw(lab, { TextTransparency = 0.05 }, 0.5)
+				tw(sc, { Scale = 1.06 }, 0.2)
+				task.delay(0.22, function() if sc.Parent then tw(sc, { Scale = 1 }, 0.35) end end)
+			end
+
+			-- on garde l'heure à l'écran
+			local t1 = os.clock()
+			local hold = (tonumber(Library.MealClockHold) or 6) + 0.9
+			while os.clock() - t1 < hold and not S.dismissed and MC.alive do task.wait(0.1) end
+
+			-- sortie
+			tw(sc, { Scale = 0 }, 0.4, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+			tw(lab, { TextTransparency = 1 }, 0.3)
+			tw(veil, { BackgroundTransparency = 1 }, 0.55)
+			if S.blur then tw(S.blur, { Size = 0 }, 0.55) end
+			task.wait(0.6)
+		end)
+		teardown(S)
+		MC.busy = false
+		if not ok then warn("[UiLib] Horloge des repas : " .. tostring(err)) end
+	end
+
+	-- surveille l'heure : se déclenche Lead secondes avant chaque repas, une seule fois par jour et par repas
+	local function nowSec()
+		local d = os.date("*t")
+		return d.hour * 3600 + d.min * 60 + d.sec
+	end
+	task.spawn(function()
+		while MC.alive do
+			if Library.MealClock ~= false and not MC.busy and type(Library.MealTimes) == "table" then
+				local ns = nowSec()
+				local lead = tonumber(Library.MealClockLead) or 8
+				local hold = tonumber(Library.MealClockHold) or 6
+				for _, t in ipairs(Library.MealTimes) do
+					local T = (tonumber(t.h) or 0) * 3600 + (tonumber(t.m) or 0) * 60
+					local diff = ((ns - T + 43200) % 86400) - 43200
+					if diff >= -lead and diff < hold then
+						local key = tostring(t.h) .. ":" .. tostring(t.m) .. ":" .. os.date("%j")
+						if not MC.done[key] then
+							MC.done[key] = true
+							task.spawn(run, tonumber(t.h) or 0, tonumber(t.m) or 0, t.name or "", { at = os.time() - diff, late = diff >= 0 })
+							break
+						end
+					end
+				end
+			end
+			task.wait(0.5)
+		end
+	end)
+
+	function Library:PreviewMealClock(h, m, name)
+		task.spawn(run, tonumber(h) or 12, tonumber(m) or 0, name or "Déjeuner", { preview = true, delay = 1.8 })
+	end
+
+	local origDestroyMeal = Library.Destroy
+	function Library:Destroy()
+		MC.alive = false
+		teardown(MC.S)
+		return origDestroyMeal(self)
 	end
 end
 
