@@ -21561,6 +21561,8 @@ function Window:CreateSettingsTab(name, icon, docked)
 	pickChips("summer", "Personnages d'été affichés")
 	F:CreateSlider({ Name = "Taille des personnages", Flag = "ui.decorscale", Min = 50, Max = 200, Step = 25, Suffix = "%",
 		Default = pct(Library.DecorScale), Callback = optPct("DecorScale") })
+	F:CreateSlider({ Name = "Hauteur du sol", Flag = "ui.decorgap", Min = -100, Max = 150, Step = 2, Suffix = " px",
+		Default = Library.DecorGap, Tooltip = "Position verticale du sol (10 = tout en bas de l'écran). Plus grand = plus bas, plus petit = plus haut.", Callback = opt("DecorGap") })
 	F:CreateSlider({ Name = "Particules (neige / poussières de soleil)", Flag = "ui.snow", Min = 0, Max = 120, Step = 5,
 		Default = Library.SnowCount, Tooltip = "Neige (hiver) ou poussières dorées et soleil (été) sur l'écran. 0 = aucune.", Callback = opt("SnowCount") })
 	F:CreateSlider({ Name = "Petits carrés (tailles variées)", Flag = "ui.snowsq", Min = 0, Max = 120, Step = 5,
@@ -27580,11 +27582,12 @@ function Library:CreateWindow(cfg)
 			local full = Library.DecorBottom ~= false
 			local w, gy, cx
 			if full then   -- collé tout en bas de l'écran, sur toute la largeur
-				-- sol posé juste SOUS la fenêtre (les personnages ne passent plus devant la barre « Réglages »),
-				-- sans jamais sortir de l'écran ; on se base sur la fenêtre et la caméra, pas sur la taille du ScreenGui
+				-- collé tout en bas de l'écran. Le ScreenGui peut être plus court que l'écran (barre du haut / zone sûre) :
+				-- on rajoute cet écart mesuré, puis le réglage « Hauteur du sol » (10 = pile au bas, + descend, - monte)
 				local vc = viewport()
-				local winBottom = ap.Y + as.Y
-				w, gy, cx = math.max(0, floor(v.X)), math.min(winBottom + Hs + 4, math.max(vc.Y, winBottom + 12)), v.X / 2
+				local k = vc.Y - v.Y
+				if k < 4 or k > 150 then k = 0 end
+				w, gy, cx = math.max(0, floor(v.X)), v.Y + k + ((tonumber(Library.DecorGap) or 10) - 10), v.X / 2
 			else
 				w = math.max(0, floor(as.X - 44))
 				gy = math.min(ap.Y + as.Y + (tonumber(Library.DecorGap) or 10), v.Y - 4)
