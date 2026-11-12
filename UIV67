@@ -26063,7 +26063,7 @@ function Library:CreateWindow(cfg)
 	--   Clique sur un personnage : il saute, dit un mot et lance des étincelles.
 	-- Tout est fait de petits carrés (pixel art) : aucune image à charger.
 	-- ------------------------------------------------------------------
-	do
+	;(function()   -- fonction à part : évite le dépassement de 200 variables locales dans CreateWindow
 		local rng = Random.new()
 		local floor, clamp, sin, abs, exp = math.floor, math.clamp, math.sin, math.abs, math.exp
 		local function C(r, g, b) return Color3.fromRGB(r, g, b) end
@@ -26841,7 +26841,7 @@ function Library:CreateWindow(cfg)
 		end }))
 
 		refreshDecor()
-	end
+	end)()
 
 	-- Animation d'apparition
 	if useCanvas then main.GroupTransparency = 1 end
