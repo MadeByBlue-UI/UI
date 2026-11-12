@@ -20063,23 +20063,42 @@ function Window:CreateTab(name, _, icon, parentTab)
 	-- ✨ survol de l'icône d'un onglet : elle grossit en s'inclinant (petit « pop »), se redresse, puis revient à sa taille quand la souris part.
 	-- Library.TabIconHover = false coupe l'effet · Library.TabIconHoverScale / TabIconHoverTilt règlent l'intensité.
 	Library.TabIconHover, Library.TabIconHoverScale, Library.TabIconHoverTilt = Library.TabIconHover ~= false, Library.TabIconHoverScale or 1.3, Library.TabIconHoverTilt or 14
-	local icoScale, icoGen = nil, 0
+	local icoScale, icoGen, icoBusy = nil, 0, false
 	if tabIco then icoScale = new("UIScale", { Scale = 1 }, tabIco) end
+	local function icoRest()   -- remet l'icône EXACTEMENT comme avant (taille 1, angle 0) : plus de petit décalage restant
+		icoScale.Scale = 1
+		tabIco.Rotation = 0
+	end
 	local function icoHover(on)
 		if not icoScale or not tabIco.Parent then return end
-		icoGen += 1
-		local my = icoGen
-		if on and Library.TabIconHover and Library.Animations ~= false then
-			tween(icoScale, { Scale = Library.TabIconHoverScale }, 0.18, BACK)
-			tween(tabIco, { Rotation = Library.TabIconHoverTilt }, 0.18, BACK)
-			task.delay(0.2, function()   -- se redresse, tout en restant un peu agrandie tant que la souris est dessus
+		if on then
+			if not (Library.TabIconHover and Library.Animations ~= false) or icoBusy then return end
+			icoBusy = true
+			icoGen += 1
+			local my = icoGen
+			tween(icoScale, { Scale = Library.TabIconHoverScale }, 0.16, BACK)
+			tween(tabIco, { Rotation = Library.TabIconHoverTilt }, 0.16, BACK)
+			task.delay(0.18, function()   -- l'effet est une impulsion : il revient tout seul, même si la souris reste dessus
 				if icoGen ~= my or not tabIco.Parent then return end
-				tween(tabIco, { Rotation = 0 }, 0.28, BACK)
-				tween(icoScale, { Scale = 1 + (Library.TabIconHoverScale - 1) * 0.5 }, 0.28)
+				tween(icoScale, { Scale = 1 }, 0.26)
+				tween(tabIco, { Rotation = 0 }, 0.26)
+				task.delay(0.3, function()
+					if icoGen ~= my or not tabIco.Parent then return end
+					icoRest()
+					icoBusy = false
+				end)
 			end)
 		else
-			tween(icoScale, { Scale = 1 }, 0.22)
-			tween(tabIco, { Rotation = 0 }, 0.22)
+			if not icoBusy then return end   -- rien en cours : l'icône est déjà à sa place
+			icoGen += 1
+			local my = icoGen
+			tween(icoScale, { Scale = 1 }, 0.2)
+			tween(tabIco, { Rotation = 0 }, 0.2)
+			task.delay(0.24, function()
+				if icoGen ~= my or not tabIco.Parent then return end
+				icoRest()
+				icoBusy = false
+			end)
 		end
 	end
 	btn.MouseEnter:Connect(function()
@@ -27509,39 +27528,101 @@ do
 			PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6),
 		}, box)
 		new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = BYORDER }, box)
+		-- barre des onglets : positions posées à la main (même grille pour les boutons ET la pastille qui glisse)
 		local bar = new("Frame", { Name = "TabboxBar", Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, LayoutOrder = 1 }, box)
-		new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = BYORDER }, bar)
 		self:_reg(box, "")
+		local GAP = 4
+		local tabSize = UDim2.new(1 / n, -math.ceil(GAP * (n - 1) / n), 1, 0)
+		local function slot(i) return UDim2.new((i - 1) / n, math.floor(GAP * (i - 1) / n + 0.5), 0, 0) end
+		-- pastille unique (comme les sous-onglets) : elle glisse d'un onglet à l'autre au lieu de se fondre
+		local pill = new("Frame", { Name = "Indicator", Size = tabSize, Position = slot(1), BackgroundColor3 = T.Accent,
+			BackgroundTransparency = 0.85, BorderSizePixel = 0, ZIndex = 1 }, bar)
+		corner(pill, 6)
+		new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.75, ApplyStrokeMode = BORDER }, pill)
+		-- zone des pages : sa hauteur suit la page affichée avec un ressort (les blocs en dessous descendent / remontent en douceur)
+		local holder = new("Frame", { Name = "TabboxPages", Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1,
+			BorderSizePixel = 0, LayoutOrder = 2, ClipsDescendants = false }, box)
 
-		local btns, pages, subs = {}, {}, {}
+		local btns, pages, subs, layouts = {}, {}, {}, {}
 		local cur = 0
 		local tb = {}
+		local born = os.clock()
+		local holderH, clipTok = 0, 0
+
+		local function wantH(i)
+			local ly = layouts[i]
+			if not ly then return 0 end
+			return math.ceil(ly.AbsoluteContentSize.Y / math.max(pxScale(), 0.05))
+		end
+		local function setHeight(h, animate)
+			if h == holderH then return end
+			holderH = h
+			if animate and Library.Animations ~= false and os.clock() - born > 0.5 and holder.AbsoluteSize.X > 0 then
+				holder.ClipsDescendants = true
+				Library._spring(holder, { Size = UDim2.new(1, 0, 0, h) }, "smooth")
+				clipTok += 1
+				local my = clipTok
+				task.delay(0.7, function()   -- fin du mouvement : on rend le clip (les contours des lignes ne sont plus rognés)
+					if clipTok == my then holder.ClipsDescendants = false end
+				end)
+			else
+				Library._springStop(holder, "Size")
+				holder.Size = UDim2.new(1, 0, 0, h)
+			end
+		end
+		local function sync(animate)
+			if cur > 0 then setHeight(wantH(cur), animate) end
+		end
 
 		local function pick(i, silent)
 			if i == cur or not pages[i] then return end
+			local prev = cur
 			cur = i
+			local animate = (not silent) and prev ~= 0 and Library.Animations ~= false
 			for j = 1, n do
 				local on = j == i
 				pages[j].Visible = on
-				tween(btns[j].btn, { BackgroundTransparency = on and 0.85 or 1 }, 0.18)
 				tween(btns[j].lbl, { TextColor3 = on and T.Text or T.ElementAccent }, 0.18)
+			end
+			if animate then
+				Library._spring(pill, { Position = slot(i) }, "snappy")
+				-- la page entre en glissant depuis le côté de l'onglet choisi
+				holder.ClipsDescendants = true
+				clipTok += 1
+				local my = clipTok
+				pages[i].Position = UDim2.new(0, (i > prev and 1 or -1) * 18, 0, 0)
+				Library._spring(pages[i], { Position = UDim2.new(0, 0, 0, 0) }, "smooth")
+				task.delay(0.7, function()
+					if clipTok == my then holder.ClipsDescendants = false end
+				end)
+				task.defer(function() sync(true) end)   -- la mise en page de la nouvelle page est prête à l'image suivante
+			else
+				Library._springStop(pill, "Position")
+				pill.Position = slot(i)
+				sync(false)
 			end
 			if not silent then fire(o.Callback, list[i]) end
 		end
 
 		for i, nm in ipairs(list) do
 			local b = new("TextButton", {
-				Name = "Tab_" .. nm, Size = UDim2.new(1 / n, -math.floor(4 * (n - 1) / n), 1, 0), BackgroundColor3 = T.Accent,
-				BackgroundTransparency = 1, Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i,
+				Name = "Tab_" .. nm, Size = tabSize, Position = slot(i), BackgroundColor3 = T.Accent,
+				BackgroundTransparency = 1, Text = "", AutoButtonColor = false, BorderSizePixel = 0, ZIndex = 2,
 			}, bar)
 			corner(b, 6)
-			local l = label(b, nm, 12, { TextXAlignment = CENTER, TextColor3 = T.ElementAccent, Size = UDim2.new(1, -6, 1, 0), Position = UDim2.fromOffset(3, 0) })
+			local l = label(b, nm, 12, { TextXAlignment = CENTER, TextColor3 = T.ElementAccent, Size = UDim2.new(1, -6, 1, 0),
+				Position = UDim2.fromOffset(3, 0), ZIndex = 3 })
 			btns[i] = { btn = b, lbl = l }
 			local pg = new("Frame", {
 				Name = "TabboxPage_" .. nm, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
-				BorderSizePixel = 0, LayoutOrder = 2, Visible = false,
-			}, box)
-			new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = BYORDER }, pg)
+				BorderSizePixel = 0, Visible = false,
+			}, holder)
+			local ly = new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = BYORDER }, pg)
+			layouts[i] = ly
+			-- le contenu de la page change (ShowIf, liste qui s'ouvre, texte qui passe à la ligne...) : la zone suit en douceur
+			ly:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+				if i == cur then sync(true) end
+			end)
 			pages[i] = pg
 			local sb = subBlock(self, pg, box)
 			subs[i] = sb
