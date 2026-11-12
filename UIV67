@@ -39,7 +39,7 @@
 		  (Paramètres > Apparence > « Étoiles & forme » > Décor & neige > Thème du décor).
 
 	V9.24 — DÉCOR DE FÊTE : PETITS PERSONNAGES SOUS LA FENÊTRE + NEIGE SUR L'ÉCRAN
-		• Sous la fenêtre : un sol de neige avec un sapin (guirlande qui clignote), un bonhomme de neige, un renard qui dort (zzz), un feu de camp,
+		• Sous la fenêtre : un sol de neige avec un sapin, un bonhomme de neige, un renard qui dort (zzz), un feu de camp,
 		  une tasse qui fume, des cadeaux, et un pingouin qui se balade. Clique sur un personnage : il saute, parle et lance des étincelles.
 		• Neige qui tombe sur tout l'écran (derrière ou devant la fenêtre).
 		• Library.DecorStrip · DecorScale · DecorGap · SnowCount · SnowSpeed · SnowOnWindow (Paramètres > Apparence > « Étoiles & forme » > Décor & neige).
@@ -619,14 +619,16 @@ local Library = {
 	DecorCustomOnly   = false, -- true : seulement tes phrases (sinon elles sont mélangées aux phrases du décor)
 	DecorAuto         = true,  -- thème automatique selon la date : Hiver en décembre, Été en juillet (sinon DecorTheme)
 	DecorGifts        = true,  -- le traîneau largue des cadeaux parachutés qui se posent sur le sol (clic = une phrase)
+	ClimbAnim         = true,  -- animation de montée (pas de grimpe, dandinement...) pour certains personnages
+	ClimbAnimFor      = { walker = "waddle", elf = "hop" },   -- qui en profite : "waddle" (dandine) · "hop" (petits bonds) · absent/false = grimpe lisse
 	DecorClimb        = true,  -- des personnages grimpent le long des bords de la fenêtre (pingouin, lutin, pain d'épices) et s'assoient en haut
-	DecorGarland      = true,  -- guirlande lumineuse autour de la fenêtre (thème Hiver), elle clignote plus vite quand on clique sur le sapin
 	DecorSleigh       = true,  -- un traîneau (Père Noël + 2 rennes) traverse l'écran de temps en temps (thème Hiver)
 	DecorCatalog      = {      -- personnages disponibles : { clé, nom affiché } · Library.DecorPick = { winter = { tree = true, ... }, summer = {...} } (nil = tous)
 		winter = { { "tree", "Sapin" }, { "snowman", "Bonhomme de neige" }, { "snowpile", "Pile de boules de neige" }, { "snowpile2", "Petite pile de boules de neige" }, { "campfire", "Feu de camp" }, { "santa", "Père Noël" }, { "gift", "Cadeau rouge" }, { "gift2", "Cadeau bleu" }, { "reindeer", "Renne" }, { "chest", "Coffre au trésor" }, { "igloo", "Igloo" }, { "fox", "Renard" }, { "gingerbread", "Pain d'épices" }, { "bell", "Cloche" }, { "mug", "Chocolat chaud" }, { "polarbear", "Ours polaire" }, { "elf", "Lutin" }, { "candycane", "Sucre d'orge" }, { "stocking", "Chaussette" }, { "wreath", "Couronne" }, { "owl", "Chouette" }, { "star", "Étoile" }, { "lamp", "Réverbère" } },
 		summer = { { "palm", "Palmier" }, { "parasol", "Parasol" }, { "castle", "Château de sable" }, { "ball", "Ballon" }, { "icecream", "Glace" }, { "surf", "Planche de surf" }, { "buoy", "Bouée" }, { "cocktail", "Cocktail" }, { "seagull", "Mouette" }, { "bucket", "Seau" }, { "sunhat", "Chapeau de paille" }, { "starfish", "Étoile de mer" } },
 	},
 	SnowCount         = 40,    -- flocons qui tombent sur l'écran (0 pour désactiver)
+	SnowSquares       = 40,    -- petits carrés de tailles variées (2 à 8 px) qui tombent avec la neige (0 pour désactiver)
 	SnowSpeed         = 1,     -- vitesse de la neige
 	SnowOnWindow      = true,  -- true = la neige passe aussi devant la fenêtre
 	ConfigFolder      = "Ui-Lib",
@@ -6805,8 +6807,9 @@ function Library:GetTheme()
 		DecorBubbleDelay = Library.DecorBubbleDelay,
 		DecorGifts = Library.DecorGifts,
 		DecorClimb = Library.DecorClimb,
-		DecorGarland = Library.DecorGarland,
+		ClimbAnim = Library.ClimbAnim,
 		SnowCount = Library.SnowCount,
+		SnowSquares = Library.SnowSquares,
 		SnowSpeed = Library.SnowSpeed,
 		SnowOnWindow = Library.SnowOnWindow,
 		Breathing = Library.Breathing,
@@ -6903,8 +6906,9 @@ function Library:ApplyTheme(t)
 		{ "DecorBubbleDelay", "ui.decorbubbledelay", nil, opt("DecorBubbleDelay") },
 		{ "DecorGifts", "ui.decorgifts", nil, opt("DecorGifts") },
 		{ "DecorClimb", "ui.decorclimb", nil, opt("DecorClimb") },
-		{ "DecorGarland", "ui.decorgarland", nil, opt("DecorGarland") },
+		{ "ClimbAnim", "ui.climbanim", nil, opt("ClimbAnim") },
 		{ "SnowCount", "ui.snow", nil, opt("SnowCount") },
+		{ "SnowSquares", "ui.snowsq", nil, opt("SnowSquares") },
 		{ "SnowSpeed", "ui.snowspeed", pct, opt("SnowSpeed") },
 		{ "SnowOnWindow", "ui.snowwin", nil, opt("SnowOnWindow") },
 		{ "Background", "ui.bg", function(v) return N.Background[v] or v end, function(v) Library:SetBackground(v) end },
@@ -21539,9 +21543,8 @@ function Window:CreateSettingsTab(name, icon, docked)
 	F:CreateToggle({ Name = "Personnages qui grimpent sur la fenêtre", Flag = "ui.decorclimb", Default = Library.DecorClimb,
 		Tooltip = "Le pingouin, le lutin et le pain d'épices montent le long des bords de la fenêtre, saluent, s'assoient en haut puis se laissent glisser. Clique dessus !",
 		Callback = opt("DecorClimb") })
-	F:CreateToggle({ Name = "Guirlande lumineuse autour de la fenêtre", Flag = "ui.decorgarland", Default = Library.DecorGarland,
-		Tooltip = "Guirlande aux couleurs de celle du sapin (thème Hiver). Elle clignote plus vite quand tu cliques sur le sapin.",
-		Callback = opt("DecorGarland") })
+	F:CreateToggle({ Name = "Animation de montée (pingouin, lutin)", Flag = "ui.climbanim", Default = Library.ClimbAnim,
+		Tooltip = "Les grimpeurs se dandinent / sautillent en montant au lieu de glisser tout droit.", Callback = opt("ClimbAnim") })
 	local function pickChips(id, title)
 		local names, map = {}, {}
 		for _, e in ipairs(Library.DecorCatalog[id]) do names[#names + 1] = e[2] map[e[2]] = e[1] end
@@ -21562,6 +21565,8 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Default = Library.DecorGap, Tooltip = "Distance entre le bas de la fenêtre et le sol de neige.", Callback = opt("DecorGap") })
 	F:CreateSlider({ Name = "Particules (neige / poussières de soleil)", Flag = "ui.snow", Min = 0, Max = 120, Step = 5,
 		Default = Library.SnowCount, Tooltip = "Neige (hiver) ou poussières dorées et soleil (été) sur l'écran. 0 = aucune.", Callback = opt("SnowCount") })
+	F:CreateSlider({ Name = "Petits carrés (tailles variées)", Flag = "ui.snowsq", Min = 0, Max = 120, Step = 5,
+		Default = Library.SnowSquares, Tooltip = "Petits carrés de plusieurs tailles qui tombent avec la neige. 0 = aucun.", Callback = opt("SnowSquares") })
 	F:CreateSlider({ Name = "Vitesse des particules", Flag = "ui.snowspeed", Min = 20, Max = 300, Step = 10, Suffix = "%",
 		Default = pct(Library.SnowSpeed), Callback = optPct("SnowSpeed") })
 	F:CreateToggle({ Name = "Particules devant la fenêtre", Flag = "ui.snowwin", Default = Library.SnowOnWindow,
@@ -26310,8 +26315,7 @@ function Library:CreateWindow(cfg)
 			"..BBBBBB..", ".BBBBBBBB.", "BBYBBBBYBB", "DDDDDDDDDD", "BBYBBBBYBB", "BBYBYYBYBB", "BBYBBBBYBB", "DDDDDDDDDD",
 		}
 		local WDEFS = {
-			tree     = { rows = TREE, say = "Joyeux Noël !", burst = { "Y", "R", "U", "W" },
-				lights = { { 3, 4 }, { 6, 4 }, { 3, 7 }, { 6, 7 }, { 2, 11 }, { 8, 11 }, { 1, 12 }, { 5, 12 }, { 9, 12 } } },
+			tree     = { rows = TREE, say = "Joyeux Noël !", burst = { "Y", "R", "U", "W" } },
 			snowman  = { rows = SNOWMAN, say = "Brrr, il fait froid !", burst = { "W", "w" }, sway = true },
 			gift     = { rows = GIFT, say = "Surprise !", burst = { "Y", "R", "U", "G" }, shake = true },
 			gift2    = { rows = swap(GIFT, { R = "U", r = "u" }), say = "Pour toi !", burst = { "Y", "U", "W", "R" }, shake = true },
@@ -26443,8 +26447,6 @@ function Library:CreateWindow(cfg)
 			Rr(3.4, 1.9, 2.4, 0.8, "W", 0.4, 0, 0, true), Rr(2.2, 5.1, 2.6, 0.8, "W", 0.4, 0, 0, true), Rr(1.4, 8.7, 2.8, 0.8, "W", 0.4, 0, 0, true),
 			Rr(4.7, 0.2, 1.7, 1.7, "Y", 0.3, 45),
 		})
-		WDEFS.tree.vlights = { { 4.3, 3.2 }, { 6.2, 2.6 }, { 5.4, 4.2 }, { 3.8, 6.4 }, { 7.2, 6.2 }, { 5.4, 7.3 },
-			{ 2.6, 10.4 }, { 4.6, 9.4 }, { 6.6, 10.8 }, { 8.6, 10.0 }, { 5.6, 11.2 } }
 		WDEFS.snowman.vec = V(10, 14, {
 			Rr(0.2, 7.3, 2.6, 0.45, "B", 0.2, -25, 0, true), Rr(7.2, 7.3, 2.6, 0.45, "B", 0.2, 25, 0, true),
 			E(0.8, 8.8, 8.4, 5.2, "W"), E(1.9, 5.3, 6.2, 4.6, "W"), E(2.5, 1.9, 5, 4.2, "W"),
@@ -26831,18 +26833,28 @@ function Library:CreateWindow(cfg)
 		local style = "pixel"
 		local climbers = {}   -- personnages qui grimpent le long de la fenêtre
 		local cbubble, cbubbleT, cbubbleOwner = nil, 0, nil
-		local gar = { frame = nil, lights = {}, dirty = true, fade = 0, boost = 0, ph = 0, a = 1 }   -- guirlande
 		local chutes, landed = {}, {}   -- cadeaux parachutés en l'air / posés sur le sol
 		local cm = { state = "idle", wait = 2.5, t = 0, h = 0, o = 0, n = 0, chars = {}, queue = {}, last = nil, v = 0, above = false,
 			kind = "info", hold = 0, next = false, hover = false, greeted = false, lastGreet = 0, wasOn = false, tab = nil, tabT = 0,
 			recent = {}, tickN = 0, stroke = nil, scale = nil }   -- bulle de commentaires (v : visibilité 0..1 · above : posée au-dessus de la fenêtre faute de place en bas)
 		local sleigh = { dropT = 2, roots = {}, sp = {}, active = false, wait = 3, x = 0, y = 0, base = 0, amp = 0, ph = 0, dir = 1, spd = 0, w = 0, h = 0, spT = 0 }
 
+		-- FIX décalage : le décor se cale sur la VRAIE taille du ScreenGui (et non sur la caméra),
+		-- sinon le sol reste remonté de la hauteur de la barre du haut quand IgnoreGuiInset n'est pas appliqué.
+		Library._decorVP = function()
+			local v = viewport()
+			local ok, s = pcall(function() return gui.AbsoluteSize end)
+			if ok and s and s.X > 300 and s.Y > 240 then return Vector2.new(s.X, s.Y) end
+			return v
+		end
 		local decor = new("Frame", { Name = "Decor", AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(10, 40),
 			BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 3, Visible = false }, gui)
 		local dUi = new("UIScale", { Scale = 0.05 }, decor)
 		local snow = new("Frame", { Name = "Snow", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
 			BorderSizePixel = 0, ZIndex = 4, Visible = false }, gui)
+		-- cadre du traîneau : même rectangle que la fenêtre, tout ce qui dépasse est coupé (le traîneau ne sort jamais de l'UI)
+		sleigh.clip = new("Frame", { Name = "SleighClip", BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true,
+			ZIndex = 4, Visible = false }, gui)
 
 		-- soleil (thème Été) : coin haut droit de l'écran, dans la couche des particules
 		local sun = new("Frame", { Name = "Sun", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(44, 44),
@@ -26895,14 +26907,12 @@ function Library:CreateWindow(cfg)
 		new("UICorner", { CornerRadius = UDim.new(0, 8) }, bubble)
 		new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, bubble)
 
-		-- bulle des personnages qui grimpent (en coordonnées écran) + conteneur de la guirlande
+		-- bulle des personnages qui grimpent (en coordonnées écran)
 		cbubble = new("TextLabel", { Name = "ClimbBubble", AnchorPoint = Vector2.new(0.5, 1), AutomaticSize = Enum.AutomaticSize.X,
 			Size = UDim2.fromOffset(0, 20), BackgroundColor3 = C(18, 20, 28), BackgroundTransparency = 1, BorderSizePixel = 0,
 			TextColor3 = PAL.W, TextTransparency = 1, Font = F_BOLD, TextSize = 11, Text = "", ZIndex = 6, Visible = false }, gui)
 		new("UICorner", { CornerRadius = UDim.new(0, 8) }, cbubble)
 		new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, cbubble)
-		gar.frame = new("Frame", { Name = "Garland", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
-			ZIndex = 3, Visible = false }, gui)
 
 		-- bulle de commentaires en bas : le texte s'écrit lettre par lettre, chaque lettre apparaît en fondu (RichText)
 		local cb = new("TextButton", { Name = "DecorComment", AnchorPoint = Vector2.new(0.5, 1), AutomaticSize = Enum.AutomaticSize.XY,
@@ -26925,41 +26935,6 @@ function Library:CreateWindow(cfg)
 			cbubbleOwner, cbubbleT = c, 1.9
 			cbubble.Text = c.def.say or "..."
 			cbubble.Visible = true
-			for _, t in ipairs(critters) do if t.key == "tree" then t.flash = 1.2 end end   -- la guirlande s'emballe un instant
-		end
-
-		-- guirlande : lumières posées sur un cadre autour de la fenêtre, en festons (haut / bas) et en vagues (côtés)
-		local function garlandLayout(ap, as)
-			local ox, oy, W, H = ap.X - 6, ap.Y - 6, as.X + 12, as.Y + 12
-			local total = 2 * (W + H)
-			local n = clamp(floor(total / 20), 8, 200)
-			while #gar.lights < n do
-				local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(6, 6), BorderSizePixel = 0, ZIndex = 3,
-					BackgroundColor3 = LIGHTC[1], BackgroundTransparency = gar.a }, gar.frame)
-				new("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
-				gar.lights[#gar.lights + 1] = { f = f, ci = 0 }
-			end
-			while #gar.lights > n do table.remove(gar.lights).f:Destroy() end
-			local hx = math.max(1, floor(W / 130 + 0.5))
-			local hy = math.max(1, floor(H / 150 + 0.5))
-			for i = 1, n do
-				local sd = (i - 0.5) / n * total
-				local x, y
-				if sd < W then                      -- haut : de gauche à droite
-					local f = ((sd / W) * hx) % 1
-					x, y = ox + sd, oy - 7 * (1 - sin(math.pi * f))
-				elseif sd < W + H then              -- côté droit : vers le bas
-					local u = (sd - W) / H
-					x, y = ox + W + 4 * sin(math.pi * ((u * hy) % 1)), oy + u * H
-				elseif sd < 2 * W + H then          -- bas : de droite à gauche
-					local u = (sd - W - H) / W
-					x, y = ox + W - u * W, oy + H + 6 * sin(math.pi * ((u * hx) % 1))
-				else                                -- côté gauche : vers le haut
-					local u = (sd - 2 * W - H) / H
-					x, y = ox - 4 * sin(math.pi * ((u * hy) % 1)), oy + H - u * H
-				end
-				gar.lights[i].f.Position = UDim2.fromOffset(floor(x + 0.5), floor(y + 0.5))
-			end
 		end
 
 		local function burst(x, y, keys, n, soft)
@@ -27126,18 +27101,6 @@ function Library:CreateWindow(cfg)
 				local root, sw, sh = buildSprite(def, ps)
 				local c = { key = key, def = def, root = root, sw = sw, sh = sh, x = 0, tx = 0, hop = 0, flash = 0, shown = false,
 					ph = rng:NextNumber(0, 6.28), jit = rng:NextInteger(-4, 4) * ps / 2, feet = 0, li = {} }
-				if def.lights then
-					c.lights = {}
-					local vecMode = style == "dessin" and def.vec and def.vlights
-					local list = vecMode and def.vlights or def.lights
-					for i, p in ipairs(list) do
-						local lx, ly = p[1], p[2]
-						if not vecMode then lx, ly = lx + 1, ly + 1 end   -- le contour décale le pixel art d'une case
-						c.lights[i] = new("Frame", { Position = UDim2.fromOffset(floor(lx * ps), floor(ly * ps)), Size = UDim2.fromOffset(ps, ps),
-							BackgroundColor3 = PAL.Y, BorderSizePixel = 0 }, root)
-						if vecMode then new("UICorner", { CornerRadius = UDim.new(0.5, 0) }, c.lights[i]) end
-					end
-				end
 				if def.fire then
 					c.glow = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(sw * ps / 2, (sh - 4) * ps),
 						Size = UDim2.fromOffset(sw * ps * 2, sw * ps * 2), BackgroundColor3 = PAL.O, BackgroundTransparency = 0.9,
@@ -27181,7 +27144,7 @@ function Library:CreateWindow(cfg)
 			for d = 1, 2 do
 				local rws = (d == 1) and XS.sleigh or mirrorRows(XS.sleigh)
 				local sr, ssw, ssh = buildPixel({ rows = rws }, ps)
-				sr.Parent = gui
+				sr.Parent = sleigh.clip
 				sr.Visible = false
 				sr.ZIndex = 4
 				sleigh.roots[d] = sr
@@ -27189,7 +27152,7 @@ function Library:CreateWindow(cfg)
 			end
 			for i = 1, 14 do
 				sleigh.sp[i] = { life = 0, x = 0, y = 0, f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(3, 3),
-					BorderSizePixel = 0, BackgroundTransparency = 1, Visible = false, ZIndex = 4 }, gui) }
+					BorderSizePixel = 0, BackgroundTransparency = 1, Visible = false, ZIndex = 4 }, sleigh.clip) }
 			end
 			sleigh.wait = 2.5
 			-- personnages qui grimpent le long de la fenêtre
@@ -27240,7 +27203,7 @@ function Library:CreateWindow(cfg)
 		end
 
 		local function updateGifts(dt, now, open)
-			local v = viewport()
+			local v = Library._decorVP()
 			local gy = (lastPY or v.Y) - (lt - 1)
 			for i = #chutes, 1, -1 do
 				local c = chutes[i]
@@ -27408,7 +27371,7 @@ function Library:CreateWindow(cfg)
 		local function layoutBubble()
 			if not cb.Visible then return end
 			local ap, as = main.AbsolutePosition, main.AbsoluteSize
-			local v = viewport()
+			local v = Library._decorVP()
 			local bw, bh = cb.AbsoluteSize.X, math.max(cb.AbsoluteSize.Y, 28)
 			local gap = tonumber(Library.DecorBubbleGap) or 24
 			local top = ap.Y + as.Y + gap
@@ -27615,7 +27578,7 @@ function Library:CreateWindow(cfg)
 
 		local function place()
 			local ap, as = main.AbsolutePosition, main.AbsoluteSize
-			local v = viewport()
+			local v = Library._decorVP()
 			local full = Library.DecorBottom ~= false
 			local w, gy, cx
 			if full then   -- collé tout en bas de l'écran, sur toute la largeur
@@ -27636,18 +27599,33 @@ function Library:CreateWindow(cfg)
 			end
 		end
 
+		local SQ_SIZES = { 2, 3, 4, 4, 5, 6, 8 }   -- tailles possibles des petits carrés (px)
 		local function syncFlakes()
-			local want = clamp(floor(tonumber(Library.SnowCount) or 0), 0, 120)
-			local v = viewport()
-			while #flakes < want do
-				local sz = rng:NextInteger(2, 4)
+			local wantR = clamp(floor(tonumber(Library.SnowCount) or 0), 0, 120)
+			local wantS = clamp(floor(tonumber(Library.SnowSquares) or 0), 0, 120)
+			local v = Library._decorVP()
+			local nR, nS = 0, 0
+			for _, f in ipairs(flakes) do
+				if f.sq then nS = nS + 1 else nR = nR + 1 end
+			end
+			local function mk(sq)
+				local sz = sq and SQ_SIZES[rng:NextInteger(1, #SQ_SIZES)] or rng:NextInteger(2, 4)
 				local f = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(sz, sz), BackgroundColor3 = theme.flake,
 					BackgroundTransparency = 1, BorderSizePixel = 0 }, snow)
-				new("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
-				flakes[#flakes + 1] = { f = f, x = rng:NextNumber(0, v.X), y = rng:NextNumber(-20, v.Y), vy = rng:NextNumber(22, 60) * (sz / 3),
+				if not sq then new("UICorner", { CornerRadius = UDim.new(1, 0) }, f) end   -- carrés : pas d'arrondi
+				flakes[#flakes + 1] = { f = f, sq = sq, x = rng:NextNumber(0, v.X), y = rng:NextNumber(-20, v.Y), vy = rng:NextNumber(22, 60) * (sz / 3),
 					sw = rng:NextNumber(4, 16), ph = rng:NextNumber(0, 6.28), fr = rng:NextNumber(0.5, 1.5), a = rng:NextNumber(0.45, 0.95) }
 			end
-			while #flakes > want do table.remove(flakes).f:Destroy() end
+			while nR < wantR do mk(false) nR = nR + 1 end
+			while nS < wantS do mk(true) nS = nS + 1 end
+			for i = #flakes, 1, -1 do   -- retire l'excédent de chaque sorte
+				local f = flakes[i]
+				if f.sq and nS > wantS then
+					nS = nS - 1 table.remove(flakes, i).f:Destroy()
+				elseif not f.sq and nR > wantR then
+					nR = nR - 1 table.remove(flakes, i).f:Destroy()
+				end
+			end
 		end
 
 		local function refreshDecor()
@@ -27740,15 +27718,6 @@ function Library:CreateWindow(cfg)
 						if def.tilt then rot = def.tilt end
 						c.root.Position = UDim2.fromOffset(floor(c.x + 0.5), floor(c.feet - lift + 0.5))
 						c.root.Rotation = rot
-						-- guirlande du sapin
-						if c.lights and anim then
-							if c.flash > 0 then c.flash = c.flash - dt end
-							local rate = c.flash > 0 and 9 or 1.6
-							for i, f in ipairs(c.lights) do
-								local idx = floor(now * rate + i * 0.7) % 4 + 1
-								if c.li[i] ~= idx then c.li[i] = idx f.BackgroundColor3 = LIGHTC[idx] end
-							end
-						end
 						-- feu de camp
 						if c.flames and anim then
 							local base = { 5, 3.6, 2.2 }
@@ -27864,38 +27833,10 @@ function Library:CreateWindow(cfg)
 			updateGifts(dt, now, open)
 			updateBubble(dt, open)
 
-			-- ── guirlande lumineuse + personnages qui grimpent autour de la fenêtre ──
+			-- ── personnages qui grimpent autour de la fenêtre ──
 			do
 				local ap, as = main.AbsolutePosition, main.AbsoluteSize
 				local ps = curPs
-				-- guirlande (thème Hiver)
-				local wantG = open and Library.DecorGarland ~= false and theme.id == "winter" and as.X > 120 and as.Y > 80
-				local gA = gar.fade + ((wantG and 1 or 0) - gar.fade) * (1 - exp(-dt * 8))
-				if not wantG and gA < 0.02 then gA = 0 end
-				gar.fade = gA
-				if gA > 0 then
-					gar.frame.Visible = true
-					if gar.dirty or ap.X ~= gar.lx or ap.Y ~= gar.ly or as.X ~= gar.lw or as.Y ~= gar.lh then
-						gar.lx, gar.ly, gar.lw, gar.lh, gar.dirty = ap.X, ap.Y, as.X, as.Y, false
-						garlandLayout(ap, as)
-					end
-					local treeFast = false
-					for _, c in ipairs(critters) do
-						if c.key == "tree" and c.flash > 0 then treeFast = true break end
-					end
-					gar.boost = gar.boost + ((treeFast and 1 or 0) - gar.boost) * (1 - exp(-dt * 6))
-					gar.ph = gar.ph + dt * (1.6 + 7.4 * gar.boost)
-					local ga = 1 - gA * 0.95
-					for i, l in ipairs(gar.lights) do
-						local idx = floor(gar.ph + i * 0.7) % 4 + 1
-						if l.ci ~= idx then l.ci = idx l.f.BackgroundColor3 = LIGHTC[idx] end
-						if gar.a ~= ga then l.f.BackgroundTransparency = ga end
-					end
-					gar.a = ga
-				elseif gar.frame.Visible then
-					gar.frame.Visible = false
-				end
-
 				-- grimpeurs : montent le long d'un bord, saluent, s'assoient en haut, puis se laissent glisser
 				local pickT = Library.DecorPick and Library.DecorPick[theme.id]
 				local clOn = open and Library.DecorClimb ~= false and as.X > 160 and as.Y > 120
@@ -27946,9 +27887,9 @@ function Library:CreateWindow(cfg)
 							if c.mode == "top" then
 								tx, ty, tr = left and (ap.X + 28) or (ap.X + as.X - 28), ap.Y, sin(now * 2 + c.ph) * 3
 							else
-								tx = left and (ap.X - 2) or (ap.X + as.X + 2)
+								tx = left and (ap.X + 3) or (ap.X + as.X - 3)   -- DANS la fenêtre : les pieds touchent le bord, le corps va vers l'intérieur
 								ty = ap.Y + H - c.t
-								tr = left and -90 or 90
+								tr = left and 90 or -90
 								if c.mode == "climb" then
 									tr = tr + sin(now * 8 + c.ph) * 5
 								elseif c.mode == "wave" then
@@ -27964,8 +27905,24 @@ function Library:CreateWindow(cfg)
 								c.y = c.y + (ty - c.y) * k
 								c.rot = c.rot + (tr - c.rot) * k
 							end
-							c.root.Position = UDim2.fromOffset(floor(c.x + 0.5), floor(c.y + 0.5))
-							c.root.Rotation = c.rot
+							-- animation de montée (seulement pour les personnages listés dans Library.ClimbAnimFor)
+							local ox, oy, orot = 0, 0, 0
+							if c.mode == "climb" and Library.ClimbAnim ~= false then
+								local kind = type(Library.ClimbAnimFor) == "table" and Library.ClimbAnimFor[c.key]
+								local ph = now * 9 + c.ph
+								if kind == "waddle" then       -- dandinement : penche d'un côté puis de l'autre, pas à pas
+									orot = sin(ph) * 14
+									oy = -math.abs(sin(ph)) * 3
+									ox = (left and 1 or -1) * (1 - math.abs(sin(ph))) * 1.5
+								elseif kind == "hop" then      -- petits bonds vers le haut, il se plaque contre le bord à chaque appui
+									local b = math.abs(sin(ph * 0.7))
+									oy = -b * 6
+									ox = (left and 1 or -1) * b * 2
+									orot = sin(ph * 0.7) * 6
+								end
+							end
+							c.root.Position = UDim2.fromOffset(floor(c.x + ox + 0.5), floor(c.y + oy + 0.5))
+							c.root.Rotation = c.rot + orot
 						end
 					end
 				end
@@ -27973,7 +27930,7 @@ function Library:CreateWindow(cfg)
 				if cbubbleT > 0 and cbubbleOwner and cbubbleOwner.root.Visible then
 					cbubbleT = cbubbleT - dt
 					local a = clamp(math.min(cbubbleT / 0.35, (1.9 - cbubbleT) / 0.12), 0, 1)
-					local v = viewport()
+					local v = Library._decorVP()
 					local bw = cbubble.AbsoluteSize.X
 					local bx = clamp(cbubbleOwner.x, bw / 2 + 4, math.max(v.X - bw / 2 - 4, bw / 2 + 4))
 					local lift = (cbubbleOwner.mode == "top") and (cbubbleOwner.sh * ps + 6) or 26
@@ -27992,18 +27949,24 @@ function Library:CreateWindow(cfg)
 				local sl = sleigh
 				local want = open and Library.DecorSleigh ~= false and theme.id == "winter" and sl.roots[1] ~= nil
 				if want then
-					local v = viewport()
+					local v = Library._decorVP()
+					local ap, as = main.AbsolutePosition, main.AbsoluteSize   -- le traîneau vole DANS le rectangle de la fenêtre
+					sl.clip.Position = UDim2.fromOffset(floor(ap.X + 0.5), floor(ap.Y + 0.5))
+					sl.clip.Size = UDim2.fromOffset(floor(as.X + 0.5), floor(as.Y + 0.5))
+					sl.clip.Visible = true
 					if not sl.active then
 						sl.wait = sl.wait - dt
 						if sl.wait <= 0 then
 							sl.active = true
 							sl.dir = (rng:NextInteger(0, 1) == 0) and 1 or -1
-							sl.base = rng:NextNumber(0.08, 0.6) * v.Y
+							sl.base = rng:NextNumber(0.2, 0.75) * as.Y
 							sl.amp = rng:NextNumber(8, 32)
 							sl.ph = rng:NextNumber(0, 6.28)
 							sl.spd = rng:NextNumber(120, 190)
-							sl.x = (sl.dir == 1) and -sl.w * 0.6 or v.X + sl.w * 0.6
+							sl.x = (sl.dir == 1) and -sl.w * 0.6 or as.X + sl.w * 0.6
 							local zi = (Library.SnowOnWindow == false) and 0 or 4
+							sl.clip.ZIndex = zi
+							sl.clip.Visible = true
 							for i = 1, 2 do sl.roots[i].ZIndex = zi end
 							for _, p in ipairs(sl.sp) do p.f.ZIndex = zi end
 						end
@@ -28011,7 +27974,8 @@ function Library:CreateWindow(cfg)
 					if sl.active then
 						sl.x = sl.x + sl.dir * sl.spd * dt
 						local ph = now * 1.6 + sl.ph
-						sl.y = sl.base + sin(ph) * sl.amp
+						local lo = sl.h + 4   -- les pieds du traîneau restent entre le haut (corps visible) et le bas de la fenêtre
+						sl.y = clamp(sl.base + sin(ph) * sl.amp, lo, math.max(lo, as.Y - 4))
 						sl.roots[1].Visible = sl.dir == 1
 						sl.roots[2].Visible = sl.dir ~= 1
 						local sr = sl.roots[(sl.dir == 1) and 1 or 2]
@@ -28021,8 +27985,8 @@ function Library:CreateWindow(cfg)
 						if sl.dropT <= 0 then
 							sl.dropT = rng:NextNumber(3, 7)
 							if Library.DecorGifts ~= false and Library.DecorStrip ~= false and dScale > 0.95 and #chutes < 3
-								and sl.x > 60 and sl.x < v.X - 60 then
-								dropGift(sl.x, sl.y)
+								and sl.x > 60 and sl.x < as.X - 60 then
+								dropGift(ap.X + sl.x, ap.Y + sl.y)
 							end
 						end
 						sl.spT = sl.spT - dt
@@ -28038,7 +28002,7 @@ function Library:CreateWindow(cfg)
 								end
 							end
 						end
-						if (sl.dir == 1 and sl.x > v.X + sl.w) or (sl.dir == -1 and sl.x < -sl.w) then
+						if (sl.dir == 1 and sl.x > as.X + sl.w) or (sl.dir == -1 and sl.x < -sl.w) then
 							sl.active = false
 							sl.roots[1].Visible, sl.roots[2].Visible = false, false
 							sl.wait = rng:NextNumber(9, 22)
@@ -28046,11 +28010,16 @@ function Library:CreateWindow(cfg)
 					end
 				elseif sl.active or (sl.roots[1] and (sl.roots[1].Visible or sl.roots[2].Visible)) then
 					sl.active = false
+					sl.clip.Visible = false
 					for i = 1, #sl.roots do sl.roots[i].Visible = false end
 					sl.wait = 2
 				end
+				if not want then sl.clip.Visible = false end   -- UI fermée : tout disparaît direct
 				for _, p in ipairs(sl.sp) do
-					if p.life > 0 then
+					if not want then
+						p.life = 0   -- UI fermée : les particules du traîneau s'enlèvent immédiatement
+						p.f.Visible = false
+					elseif p.life > 0 then
 						p.life = p.life - dt
 						p.y = p.y + 22 * dt
 						p.f.Position = UDim2.fromOffset(floor(p.x + 0.5), floor(p.y + 0.5))
@@ -28063,7 +28032,7 @@ function Library:CreateWindow(cfg)
 			-- ── neige ──
 			if sFade > 0 then
 				snow.Visible = true
-				local v = viewport()
+				local v = Library._decorVP()
 				local vw, vh = v.X, v.Y
 				local spd = tonumber(Library.SnowSpeed) or 1
 				local dir = theme.up and -1 or 1
@@ -28089,7 +28058,7 @@ function Library:CreateWindow(cfg)
 				snow.Visible = false
 			end
 		end, { rate = 40, deco = true, gate = function()
-			return (skyTarget > 0 or dScale > 0 or sFade > 0 or cm.v > 0) and (Library.DecorStrip ~= false or Library.DecorBubble ~= false or Library.DecorSleigh ~= false or Library.DecorClimb ~= false or Library.DecorGarland ~= false or #flakes > 0 or dScale > 0 or sFade > 0 or cm.v > 0)
+			return (skyTarget > 0 or dScale > 0 or sFade > 0 or cm.v > 0) and (Library.DecorStrip ~= false or Library.DecorBubble ~= false or Library.DecorSleigh ~= false or Library.DecorClimb ~= false or #flakes > 0 or dScale > 0 or sFade > 0 or cm.v > 0)
 		end }))
 
 		refreshDecor()
