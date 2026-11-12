@@ -605,7 +605,6 @@ local Library = {
 	DecorStyle        = "Pixel", -- "Pixel" (pixel art) | "Dessin" (formes lisses, cartoon)
 	DecorScale        = 1,     -- taille des personnages (0.5 - 2)
 	DecorGap          = 10,    -- px entre le bas de la fenêtre et le sol de neige (si DecorBottom = false)
-	DecorOffsetY      = 0,     -- réglage fin : px de décalage vertical du décor collé en bas (positif = descend, négatif = monte)
 	DecorBottom       = true,  -- true : le décor est collé tout en bas de l'écran, pleine largeur, avec de la neige qui remonte sur les côtés
 	DecorBubble       = true,  -- bulle de petits commentaires en bas, écrits lettre par lettre en fondu
 	DecorBubbleDelay  = 20,    -- secondes (environ) entre deux commentaires
@@ -2514,14 +2513,6 @@ local function viewport()
 		v = Library._lastVP
 	else
 		Library._lastVP = v
-	end
-	-- origine réelle du ScreenGui de l'UI (0 si IgnoreGuiInset est bien appliqué) : tout est ensuite calé sur le vrai bas de l'écran
-	local pr = Library._originProbe
-	if pr and pr.Parent then
-		local okp, ap = pcall(function() return pr.AbsolutePosition end)
-		if okp and ap and ap.Y > 0.5 and ap.Y < 100 and ap.X >= 0 and ap.X < 100 then
-			v = Vector2.new(v.X - ap.X, v.Y - ap.Y)
-		end
 	end
 	return v
 end
@@ -21570,8 +21561,6 @@ function Window:CreateSettingsTab(name, icon, docked)
 	pickChips("summer", "Personnages d'été affichés")
 	F:CreateSlider({ Name = "Taille des personnages", Flag = "ui.decorscale", Min = 50, Max = 200, Step = 25, Suffix = "%",
 		Default = pct(Library.DecorScale), Callback = optPct("DecorScale") })
-	F:CreateSlider({ Name = "Hauteur du sol", Flag = "ui.decorgap", Min = -20, Max = 40, Step = 2, Suffix = " px",
-		Default = Library.DecorGap, Tooltip = "Distance entre le bas de la fenêtre et le sol de neige.", Callback = opt("DecorGap") })
 	F:CreateSlider({ Name = "Particules (neige / poussières de soleil)", Flag = "ui.snow", Min = 0, Max = 120, Step = 5,
 		Default = Library.SnowCount, Tooltip = "Neige (hiver) ou poussières dorées et soleil (été) sur l'écran. 0 = aucune.", Callback = opt("SnowCount") })
 	F:CreateSlider({ Name = "Petits carrés (tailles variées)", Flag = "ui.snowsq", Min = 0, Max = 120, Step = 5,
@@ -26848,14 +26837,13 @@ function Library:CreateWindow(cfg)
 			recent = {}, tickN = 0, stroke = nil, scale = nil }   -- bulle de commentaires (v : visibilité 0..1 · above : posée au-dessus de la fenêtre faute de place en bas)
 		local sleigh = { dropT = 2, roots = {}, sp = {}, active = false, wait = 3, x = 0, y = 0, base = 0, amp = 0, ph = 0, dir = 1, spd = 0, w = 0, h = 0, spT = 0 }
 
-		-- FIX décalage (V9.27) : le bas de l'écran = taille de la caméra MOINS l'origine réelle du ScreenGui (mesurée avec une sonde).
-		-- On n'utilise PLUS gui.AbsoluteSize : selon la version de Roblox / l'exécuteur il peut être plus petit que la zone réellement
-		-- dessinée (barre du haut retirée, ~50 px), ce qui laissait le sol du décor remonté au-dessus du bas de l'écran.
-		local originProbe = new("Frame", { Name = "OriginProbe", Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1,
-			BorderSizePixel = 0, Active = false }, gui)
-		Library._originProbe = originProbe
+		-- FIX décalage : le décor se cale sur la VRAIE taille du ScreenGui (et non sur la caméra),
+		-- sinon le sol reste remonté de la hauteur de la barre du haut quand IgnoreGuiInset n'est pas appliqué.
 		Library._decorVP = function()
-			return viewport()   -- viewport() retire déjà l'origine du ScreenGui (voir sonde)
+			local v = viewport()
+			local ok, s = pcall(function() return gui.AbsoluteSize end)
+			if ok and s and s.X > 300 and s.Y > 240 then return Vector2.new(s.X, s.Y) end
+			return v
 		end
 		local decor = new("Frame", { Name = "Decor", AnchorPoint = Vector2.new(0.5, 1), Size = UDim2.fromOffset(10, 40),
 			BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 3, Visible = false }, gui)
@@ -27592,16 +27580,21 @@ function Library:CreateWindow(cfg)
 			local full = Library.DecorBottom ~= false
 			local w, gy, cx
 			if full then   -- collé tout en bas de l'écran, sur toute la largeur
-				w, gy, cx = math.max(0, floor(v.X)), v.Y + (tonumber(Library.DecorOffsetY) or 0), v.X / 2
+				w, gy, cx = math.max(0, floor(v.X)), v.Y, v.X / 2
 			else
 				w = math.max(0, floor(as.X - 44))
 				gy = math.min(ap.Y + as.Y + (tonumber(Library.DecorGap) or 10), v.Y - 4)
 				cx = ap.X + as.X / 2
 			end
 			local px, py = floor(cx + 0.5), floor(gy + 0.5)
-			if px ~= lastPX or py ~= lastPY then
+			if px ~= lastPX or py ~= lastPY or full ~= lastFull then
 				lastPX, lastPY = px, py
-				decor.Position = UDim2.fromOffset(px, py)
+				if full then
+					-- collé au vrai bord bas du ScreenGui, quelle que soit la taille mesurée en pixels
+					decor.Position = UDim2.new(0, px, 1, 0)
+				else
+					decor.Position = UDim2.fromOffset(px, py)
+				end
 			end
 			if w ~= curW or full ~= lastFull then
 				curW, lastFull = w, full
