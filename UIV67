@@ -7,6 +7,11 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.23 — LA MÉTHODE CHOISIE S'AFFICHE SUR LE TOGGLE
+		• CreateDropdown({ ..., BadgeOn = toggle | "flag" | { ... }, BadgeNames = { valeur = "nom affiché" } }) : une pastille avec la valeur choisie apparaît à côté
+		  du nom du toggle (n'importe quel nom de méthode) · dd.LinkBadge(toggle) · dd.SetBadgeName(valeur, texte) · toggle.SetBadge(texte) / GetBadge()
+		  · CreateToggle({ Badge = "texte" | BadgeFrom = menu }) · Paramètres > Apparence > « Afficher la méthode sur les toggles » (Library.MethodBadges).
+
 	V9.22 — TABBOX : ICÔNES · TEXTE PLUS GRAND · NOM ÉTIRÉ · POLICE
 		• blk:CreateTabbox({ Tabs = { "A", "B" }, Icons = { "sword", "eye" } }) (ou Tabs = { { Name = "A", Icon = "sword" } }) · tb.SetIcon(nom, icône).
 		• Texte des onglets à 14 px (avant 12) · réglages globaux dans Paramètres > Apparence (taille, police, nom étiré, icônes, taille des icônes)
@@ -21261,6 +21266,9 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Default = pct(Library.FontScale), Callback = function(v) Library:SetFontScale(v / 100) end })
 	A:CreateDropdown({ Name = "Police", Flag = "ui.fontfamily", Items = Library.FontFamilies, Search = false,
 		Default = Library.FontFamily, Callback = function(v) Library:SetFont(v) end })
+	A:CreateToggle({ Name = "Afficher la méthode sur les toggles", Flag = "ui.methodbadges", Default = Library.MethodBadges ~= false,
+		Tooltip = "Affiche à côté du nom d'un toggle la méthode actuellement choisie (ex. : Slide [Patinoire]).",
+		Callback = function(v) Library:SetMethodBadges(v) end })
 	local tbs = Library.TabboxStyle
 	local tbFonts = { "Auto" }
 	for _, f in ipairs(Library.FontFamilies) do tbFonts[#tbFonts + 1] = f end
@@ -29039,6 +29047,193 @@ function Library:Destroy()
 	Library._friendWatchOn = nil
 	Library.WatchAllFriends = nil
 	Library.RefreshFriends = nil
+end
+
+-- ============================================================================
+-- V9.23 : LA MÉTHODE CHOISIE S'AFFICHE SUR LE TOGGLE (badge à droite du nom)
+--   Un menu déroulant (« méthode ») peut afficher sa valeur actuelle sur un ou plusieurs toggles, quel que soit le nom des méthodes :
+--     blk:CreateDropdown({ Name = "Slide Method", Items = { "Glissade", "Patinoire" }, BadgeOn = leToggle | "flag.du.toggle" | { t1, t2 },
+--                          BadgeNames = { Patinoire = "Glace" } })       -- BadgeNames (facultatif) : nom court affiché à la place de la valeur
+--     dd.LinkBadge(toggle | "flag") · dd.SetBadgeName(valeur, "nom affiché") · dd.GetBadgeText()
+--   Ou depuis le toggle :   blk:CreateToggle({ Name = "Dash", Badge = "Boost" })  ·  BadgeFrom = menu | "flag.du.menu"  ·  toggle.SetBadge("texte" | nil) · toggle.GetBadge()
+--   Menu à choix multiple : les valeurs sont séparées par des virgules. Library.MethodBadges = false (ou Paramètres > Apparence) : badges cachés.
+-- ============================================================================
+Library.MethodBadges = true
+do
+	local badges = {}   -- { pill, txt, row, lbl, text }
+	local function px() return math.max(pxScale(), 0.05) end
+
+	-- pose la pastille juste après le nom (sans passer sous la touche ni l'interrupteur de droite)
+	local function place(b)
+		local lbl, pill, row = b.lbl, b.pill, b.row
+		if not (lbl.Parent and pill.Parent and row.Parent) then return end
+		local s = px()
+		local x = lbl.Position.X.Offset + lbl.TextBounds.X / s + 8
+		local rowW = row.AbsoluteSize.X / s
+		local pw = pill.AbsoluteSize.X / s
+		if rowW > 0 then
+			local edge = rowW + lbl.Size.X.Offset - 4   -- bord droit de la zone du nom
+			if x + pw > edge then x = math.max(lbl.Position.X.Offset + 20, edge - pw) end
+		end
+		pill.Position = UDim2.new(0, math.floor(x + 0.5), 0.5, 0)
+	end
+	local function show(b)
+		b.pill.Visible = b.text ~= nil and Library.MethodBadges ~= false
+		if b.pill.Visible then task.defer(place, b) end
+	end
+	function Library:SetMethodBadges(on)
+		Library.MethodBadges = on ~= false
+		local keep = {}
+		for _, b in ipairs(badges) do
+			if b.row.Parent then
+				keep[#keep + 1] = b
+				show(b)
+			end
+		end
+		badges = keep
+	end
+
+	local function makeBadge(rows, name)
+		local row, lbl
+		for _, r in ipairs(rows) do
+			for _, c in ipairs(r:GetChildren()) do
+				if c:IsA("TextLabel") and c.Text == name and c.AnchorPoint.X == 0 then row, lbl = r, c break end
+			end
+			if lbl then break end
+		end
+		if not lbl then return nil end
+		local z = lbl.ZIndex + 2
+		local pill = new("Frame", { Name = "MethodBadge", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+			Size = UDim2.new(0, 0, 0, 16), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = T.Accent,
+			BackgroundTransparency = 0.82, BorderSizePixel = 0, ZIndex = z, Visible = false }, row)
+		corner(pill, 8)
+		new("UIStroke", { Color = T.Accent, Thickness = 1, Transparency = 0.7, ApplyStrokeMode = BORDER }, pill)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, pill)
+		local txt = new("TextLabel", { BackgroundTransparency = 1, Text = "", TextSize = 10, Font = F_MED, TextColor3 = T.Text,
+			AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 1, 0), TextTruncate = Enum.TextTruncate.None, ZIndex = z + 1 }, pill)
+		local b = { pill = pill, txt = txt, row = row, lbl = lbl, text = nil }
+		local function re() if pill.Visible then task.defer(place, b) end end
+		lbl:GetPropertyChangedSignal("TextBounds"):Connect(re)
+		lbl:GetPropertyChangedSignal("Position"):Connect(re)
+		lbl:GetPropertyChangedSignal("Size"):Connect(re)
+		row:GetPropertyChangedSignal("AbsoluteSize"):Connect(re)
+		pill:GetPropertyChangedSignal("AbsoluteSize"):Connect(re)
+		badges[#badges + 1] = b
+		return b
+	end
+
+	local function resolve(x)
+		if type(x) == "string" then return Library.Items[x] end
+		return x
+	end
+
+	-- ---- côté toggle : SetBadge / GetBadge ----
+	local origToggle = Block.CreateToggle
+	function Block:CreateToggle(o)
+		local before = #self.Entries
+		local item = origToggle(self, o)
+		if type(item) ~= "table" then return item end
+		local name = type(o) == "table" and tostring(o.Name or "Toggle") or "Toggle"
+		local b
+		item.SetBadge = function(...)
+			local t = (unself(item, ...))
+			if t == nil or t == false or t == "" then t = nil else t = tostring(t) end
+			if not b and t then
+				local rows = {}
+				for i = before + 1, #self.Entries do
+					local fr = self.Entries[i].Frame
+					if fr then rows[#rows + 1] = fr end
+				end
+				b = makeBadge(rows, name)
+			end
+			if not b or b.text == t then return end
+			b.text = t
+			if t then b.txt.Text = t end
+			show(b)
+			if t and b.pill.Visible then   -- petit éclat quand la méthode change
+				b.pill.BackgroundTransparency = 0.5
+				tween(b.pill, { BackgroundTransparency = 0.82 }, 0.4)
+			end
+		end
+		item.GetBadge = function() return b and b.text or nil end
+		if type(o) == "table" then
+			if o.Badge ~= nil then item.SetBadge(o.Badge) end
+			if o.BadgeFrom ~= nil then
+				task.defer(function()   -- le menu peut être créé juste après
+					local dd = resolve(o.BadgeFrom)
+					if type(dd) == "table" and type(dd.LinkBadge) == "function" then dd.LinkBadge(item) end
+				end)
+			end
+		end
+		return item
+	end
+
+	-- ---- côté menu déroulant : LinkBadge / SetBadgeName ----
+	local origDD = Block.CreateDropdown
+	function Block:CreateDropdown(o)
+		local targets, names = {}, {}
+		local item
+		if type(o) == "table" and type(o.BadgeNames) == "table" then
+			for k, v in pairs(o.BadgeNames) do names[k] = v end
+		end
+		local function fmt(v)
+			if type(v) == "table" then
+				local out = {}
+				for _, x in ipairs(v) do out[#out + 1] = tostring(names[x] or x) end
+				return #out > 0 and table.concat(out, ", ") or nil
+			end
+			if v == nil or v == "" then return nil end
+			return tostring(names[v] or v)
+		end
+		local function refresh()
+			if not item or #targets == 0 then return end
+			local ok, v = pcall(item.Get)
+			if not ok then return end
+			local t = fmt(v)
+			for _, raw in ipairs(targets) do
+				local tg = resolve(raw)
+				if type(tg) == "table" and type(tg.SetBadge) == "function" then pcall(tg.SetBadge, t) end
+			end
+		end
+		local o2 = o
+		if type(o) == "table" and o.BadgeOn ~= nil then
+			o2 = table.clone(o)
+			local cb = o.Callback
+			o2.Callback = function(...)
+				if type(cb) == "function" then cb(...) end
+				refresh()
+			end
+		end
+		item = origDD(self, o2)
+		if type(item) ~= "table" or type(item.Get) ~= "function" then return item end
+		local hooked = false
+		local function addTarget(t)
+			if t == nil then return end
+			targets[#targets + 1] = t
+			if not hooked then
+				hooked = true
+				if type(item.OnChanged) == "function" then pcall(item.OnChanged, item, refresh) end
+			end
+			refresh()
+			task.defer(refresh)   -- une cible donnée par son Flag peut être créée un peu plus tard
+		end
+		item.LinkBadge = function(...) addTarget((unself(item, ...))) end
+		item.SetBadgeName = function(...)
+			local v, alias = unself(item, ...)
+			names[v] = alias
+			refresh()
+		end
+		item.GetBadgeText = function() return fmt(item.Get()) end
+		if type(o) == "table" and o.BadgeOn ~= nil then
+			local on = o.BadgeOn
+			if type(on) == "table" and on.SetBadge == nil and on.Get == nil then
+				for _, t in ipairs(on) do addTarget(t) end
+			else
+				addTarget(on)
+			end
+		end
+		return item
+	end
 end
 
 -- V9.21 : Icon = "..." sur les éléments (et icônes automatiques Library.IconRules)
