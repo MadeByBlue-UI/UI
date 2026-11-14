@@ -30915,6 +30915,7 @@ do
 			local ISZ = Library.IconSize or 22          -- règle de la lib : toutes les icônes font 22 x 22
 			local HEAD_H = 72
 			local TABS_H = 40
+			local M = 18   -- marge commune : titre, onglets et pages sont alignés
 			local SIDE_W = tonumber(o.SideWidth) or 270
 			local WHITE = Color3.new(1, 1, 1)
 			local reg = {}
@@ -30971,7 +30972,10 @@ do
 				end
 				function b.SetEnabled(...)
 					local v = unself(b, ...)
-					b._on = v ~= false
+					local nv = v ~= false
+					if b._on == nv and b._enSet then return end
+					b._enSet = true
+					b._on = nv
 					tween(btn, { BackgroundTransparency = b._on and base or math.min(base + 0.35, 0.9) }, 0.15)
 					lb.TextTransparency = b._on and 0 or 0.55
 					ic.ImageTransparency = b._on and 0 or 0.55
@@ -30987,13 +30991,14 @@ do
 			end
 
 			local root = new("CanvasGroup", {
-				Name = "UiOverlay", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 0.02, BorderSizePixel = 0,
-				ClipsDescendants = true, Visible = false, GroupTransparency = 1, Active = true, ZIndex = 700,
+				Name = "UiOverlay", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 0, BorderSizePixel = 0,
+				ClipsDescendants = true, Visible = false, GroupTransparency = 1, Active = true, ZIndex = 900,
 			}, host)
-			tc(root, "BackgroundColor3", "Panel")
+			tc(root, "BackgroundColor3", "Main")
 			local rc = new("UICorner", { CornerRadius = UDim.new(0, 12) }, root)
-			stroke(root, 0.88)
 			local sc = new("UIScale", { Scale = 1 }, root)
+			new("TextButton", { Name = "Sink", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
+				Active = true, BorderSizePixel = 0 }, root)   -- absorbe les clics : rien ne passe aux blocs derrière
 			OV.Gui = root
 			ovRoots[#ovRoots + 1] = root
 			track(root.DescendantAdded:Connect(function(d)
@@ -31047,7 +31052,7 @@ do
 
 			local function ups() return pxScale() * sc.Scale end   -- échelle réelle (fenêtre x petite animation d'ouverture)
 			local function layoutHead()
-				local x = tile.Visible and (20 + 46 + 14) or 22
+				local x = tile.Visible and (M + 46 + 14) or M
 				local aw = math.floor(actions.AbsoluteSize.X / ups() + 0.5)
 				local okm, tw = pcall(function() return math.floor(measureText(title.Text, 32, (ovFamilyFonts() or BASE_FONTS)[3]).X + 0.5) end)
 				tw = (okm and tonumber(tw)) or 170
@@ -31066,27 +31071,33 @@ do
 				NumberSequenceKeypoint.new(1, 1) }) }, sep)
 
 			-- ================= onglets (un par colonne) + pages (la colonne choisie) =================
-			local tabBar = new("ScrollingFrame", { Name = "Tabs", Position = UDim2.fromOffset(16, HEAD_H + 12), Size = UDim2.new(1, -32, 0, TABS_H),
+			local tabBar = new("ScrollingFrame", { Name = "Tabs", Position = UDim2.fromOffset(M - 3, HEAD_H + 10), Size = UDim2.new(1, -(M - 3) * 2, 0, TABS_H + 6),
 				BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 0, CanvasSize = UDim2.new(),
 				AutomaticCanvasSize = Enum.AutomaticSize.X, ScrollingDirection = Enum.ScrollingDirection.X, ElasticBehavior = Enum.ElasticBehavior.Never }, root)
 			new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = BYORDER,
 				VerticalAlignment = Enum.VerticalAlignment.Center }, tabBar)
-			local PAGE_Y = HEAD_H + 12 + TABS_H + 12
-			local cont = new("Frame", { Name = "Pages", Position = UDim2.fromOffset(16, PAGE_Y), Size = UDim2.new(1, -32, 1, -(PAGE_Y + 16)),
+			new("UIPadding", { PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 3), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3) }, tabBar)   -- la bordure des onglets ne se fait plus couper
+			local PAGE_Y = HEAD_H + 10 + TABS_H + 6 + 10
+			local cont = new("Frame", { Name = "Pages", Position = UDim2.fromOffset(M, PAGE_Y), Size = UDim2.new(1, -M * 2, 1, -(PAGE_Y + M)),
 				BackgroundTransparency = 1, BorderSizePixel = 0 }, root)
 			local empty = tc(new("TextLabel", { Name = "Empty", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.55),
 				Size = UDim2.fromOffset(320, 26), BackgroundTransparency = 1, Text = tostring(o.EmptyText or "Rien à afficher"),
 				TextSize = 15, Font = F_REG, TextTransparency = 0.3 }, root), "TextColor3", "ElementAccent")
 
-			local function paintTabs()
+			local function paintTabs(force)
+				local lowTr = Sty.RowTr or 0.4
+				local hiTr = math.max(lowTr - 0.3, 0)
 				for _, c in ipairs(OV.Columns) do
 					local on = c == OV._sel
-					c.Frame.Visible = on
-					if c.Tab then
-						tween(c.Tab, { BackgroundTransparency = on and 0.25 or 1 }, 0.12)
-						c.TabLabel.TextColor3 = on and T.Text or T.ElementAccent
-						c.TabIcon.ImageTransparency = on and 0 or 0.45
-						c.TabStroke.Transparency = on and 0.6 or 0.9
+					if force or c._painted ~= on then
+						c._painted = on
+						c.Frame.Visible = on
+						if c.Tab then
+							c.Tab.BackgroundTransparency = on and hiTr or lowTr
+							c.TabLabel.TextColor3 = on and T.Text or T.ElementAccent
+							c.TabIcon.ImageTransparency = on and 0 or 0.45
+							c.TabStroke.Transparency = on and 0.55 or (Sty.StrokeTr or 0.9)
+						end
 					end
 				end
 			end
@@ -31098,16 +31109,20 @@ do
 			end
 			local function selectCol(c) OV._sel = c paintTabs() end
 			local function relayout()
-				empty.Visible = #OV.Columns == 0
-				tabBar.Visible = #OV.Columns > 0
+				local n = #OV.Columns
+				if empty.Visible ~= (n == 0) then empty.Visible = n == 0 end
+				if tabBar.Visible ~= (n > 0) then tabBar.Visible = n > 0 end
 				ensureSel()
 				local aw = cont.AbsoluteSize.X / ups()
 				if aw < 10 then return end
 				local sw = math.clamp(math.floor(aw * 0.36), 170, SIDE_W)
 				for _, c in ipairs(OV.Columns) do
-					c._side.Size = UDim2.new(0, sw, 1, 0)
-					c.List.Position = UDim2.new(0, sw + GAP, 0, 0)
-					c.List.Size = UDim2.new(1, -(sw + GAP), 1, 0)
+					if c._sw ~= sw then   -- ne touche aux tailles que si elles ont changé
+						c._sw = sw
+						c._side.Size = UDim2.new(0, sw, 1, 0)
+						c.List.Position = UDim2.new(0, sw + GAP, 0, 0)
+						c.List.Size = UDim2.new(1, -(sw + GAP), 1, 0)
+					end
 				end
 			end
 			track(cont:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() relayout() end))
@@ -31118,7 +31133,7 @@ do
 					local r = reg[i]
 					if r[1].Parent then pcall(function() r[1][r[2]] = T[r[3]] end) else table.remove(reg, i) end
 				end
-				paintTabs()
+				paintTabs(true)
 				paintClose()
 			end
 
@@ -31134,8 +31149,9 @@ do
 				local tab = new("TextButton", { Name = "Tab", Size = UDim2.fromOffset(0, 34), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1,
 					Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = 0 }, tabBar)
 				tc(tab, "BackgroundColor3", "Element")
-				corner(tab, 10)
-				local tabStroke = stroke(tab, 0.9)
+				corner(tab, 8)
+				local tabStroke = stroke(tab, 0.93)
+				trackStyled(tab, tabStroke, "row")
 				new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 10) }, tab)
 				new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = BYORDER,
 					VerticalAlignment = Enum.VerticalAlignment.Center }, tab)
@@ -31155,10 +31171,10 @@ do
 				-- fiche de gauche (modulable : ov:SetSideOrder / ov:SetSideVisible)
 				local side = new("ScrollingFrame", { Name = "Side", Size = UDim2.new(0, SIDE_W, 1, 0), BackgroundTransparency = 0.45, BorderSizePixel = 0,
 					ScrollBarThickness = 3, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY, ScrollingDirection = Enum.ScrollingDirection.Y }, fr)
-				tc(side, "BackgroundColor3", "Element")
+				tc(side, "BackgroundColor3", "Second")
 				tc(side, "ScrollBarImageColor3", "Accent")
-				corner(side, 14)
-				stroke(side, 0.86)
+				corner(side, 10)
+				trackStyled(side, stroke(side, 0.9), "block")
 				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, side)
 				new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12), PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12) }, side)
 				col._side = side
@@ -31203,7 +31219,7 @@ do
 					ScrollingDirection = Enum.ScrollingDirection.Y }, fr)
 				tc(list, "ScrollBarImageColor3", "Accent")
 				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, list)
-				new("UIPadding", { PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 8) }, list)
+				new("UIPadding", { PaddingLeft = UDim.new(0, 2), PaddingTop = UDim.new(0, 2), PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 8) }, list)
 				col.List = list
 
 				local emptyLbl = tc(new("TextLabel", { Name = "EmptyText", Size = UDim2.new(1, 0, 0, 56), BackgroundTransparency = 1,
@@ -31237,7 +31253,7 @@ do
 					if ok then pic.ImageColor3 = isLucide(v) and T.Text or WHITE end
 					local tv = co.TabIcon or v   -- icône de l'onglet : TabIcon, sinon l'image de la maison, sinon une petite maison
 					if not setPic(tabIc, tv) then tv = "house" setPic(tabIc, tv) end
-					tabIc.ImageColor3 = isLucide(tv) and T.Text or WHITE
+					tabIc.ImageColor3 = isLucide(tv) and (asColor(co.IconColor) or T.Text) or WHITE
 					col._applySide()
 				end
 				function col.SetDescription(...)
@@ -31258,9 +31274,10 @@ do
 						local lb2 = new("TextLabel", { Name = "Chip", Size = UDim2.fromOffset(0, 22), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0.4,
 							BorderSizePixel = 0, Text = tostring(c2.Name or c2[1] or "") .. "  " .. tostring(c2.Value or c2[2] or ""), TextSize = 11, Font = F_MED,
 							LayoutOrder = n }, chipsF)
-						tc(lb2, "BackgroundColor3", "Panel")
+						tc(lb2, "BackgroundColor3", "Element")
 						tc(lb2, "TextColor3", "Text")
 						corner(lb2, 8)
+						trackStyled(lb2, stroke(lb2, 0.9), "input")
 						new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, lb2)
 					end
 					has.chips = n > 0
@@ -31282,23 +31299,24 @@ do
 					local clickable = type(io.Callback) == "function"
 					local row = new("TextButton", { Name = "Item", Size = UDim2.new(1, 0, 0, 64), BackgroundTransparency = 0.5,
 						BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = nextOrder() }, list)
-					tc(row, "BackgroundColor3", "Panel")
-					corner(row, 12)
-					local rowStroke = stroke(row, 0.9)
+					tc(row, "BackgroundColor3", "Element")
+					corner(row, 10)
+					local rowStroke = stroke(row, 0.93)
+					trackStyled(row, rowStroke, "row")
 					local av = new("ImageLabel", { Name = "Avatar", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 10, 0.5, 0),
 						Size = UDim2.fromOffset(44, 44), BackgroundTransparency = 0.3, ScaleType = Enum.ScaleType.Crop }, row)
 					tc(av, "BackgroundColor3", "Element")
 					new("UICorner", { CornerRadius = UDim.new(1, 0) }, av)
-					local it = tc(new("TextLabel", { Name = "Title", Position = UDim2.fromOffset(64, 11), Size = UDim2.new(1, -74, 0, 20),
+					local it = tc(new("TextLabel", { Name = "Title", Position = UDim2.fromOffset(64, 13), Size = UDim2.new(1, -74, 0, 20),
 						BackgroundTransparency = 1, Text = "", TextSize = 15, Font = F_BOLD, TextXAlignment = LEFT, TextTruncate = NONE_TR }, row), "TextColor3", "Text")
 					local isub = tc(new("TextLabel", { Name = "Sub", Position = UDim2.fromOffset(64, 33), Size = UDim2.new(1, -74, 0, 18),
 						BackgroundTransparency = 1, Text = "", TextSize = 12, Font = F_REG, TextXAlignment = LEFT, TextTruncate = NONE_TR }, row), "TextColor3", "ElementAccent")
-					local badge = new("TextLabel", { Name = "Badge", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 10),
+					local badge = new("TextLabel", { Name = "Badge", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
 						Size = UDim2.fromOffset(60, 22), BackgroundTransparency = 0.78, Text = "", TextSize = 11, Font = F_BOLD, Visible = false,
 						BorderSizePixel = 0 }, row)
 					new("UICorner", { CornerRadius = UDim.new(1, 0) }, badge)
 					item.Frame = row
-					local base = 0.5
+					local base = Sty.RowTr or 0.4
 					local function hover(on) tween(row, { BackgroundTransparency = on and (clickable and 0.2 or 0.38) or base }, 0.12) end
 					row.MouseEnter:Connect(function() hover(true) end)
 					row.MouseLeave:Connect(function() hover(false) end)
@@ -31324,8 +31342,8 @@ do
 					end
 					function item.SetHighlight(...)   -- ex. « toi » : ligne mise en avant
 						local on = unself(item, ...) == true
-						base = on and 0.3 or 0.5
-						rowStroke.Transparency = on and 0.6 or 0.9
+						base = on and math.max((Sty.RowTr or 0.4) - 0.2, 0) or (Sty.RowTr or 0.4)
+						rowStroke.Transparency = on and 0.6 or (Sty.StrokeTr or 0.9)
 						tween(row, { BackgroundTransparency = base }, 0.12)
 					end
 					function item.SetUserId(...)
