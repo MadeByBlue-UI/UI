@@ -7,6 +7,7 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.31 — Rétrécissement doux des colonnes (dernier bloc masqué : le contenu glisse au lieu de sauter) · Library.SoftShrink = false pour couper.
 	V9.31 — Paramètres > Apparence > « Tableaux : police » (Library:SetOverlayFont(nom | "Auto")).
 	V9.31 — OVERLAY refait (grand en-tête, vraie croix, colonnes en cartes, boutons : ov:AddHeaderButton · col:AddFooterButton · item.SetHighlight).
 	V9.30 — PANNEAU PLEIN FENÊTRE (OVERLAY) : win:CreateOverlay({ Title, Subtitle, Icon }) ouvre en fondu un grand panneau qui recouvre toute la fenêtre,
@@ -3083,6 +3084,70 @@ function Library._regTopBtn(sf, page)
 	end)
 	restyle()
 	place()
+end
+
+-- RÉTRÉCISSEMENT DOUX : quand le contenu d'une colonne raccourcit d'un coup (dernier bloc masqué, ShowIf, recherche...) alors que la
+-- colonne était défilée vers le bas, Roblox ramène instantanément le contenu en haut. Un espaceur invisible en bas de colonne
+-- compense la perte de hauteur, puis se réduit en douceur : le contenu remonte en glissant. Library.SoftShrink = false pour couper.
+Library.SoftShrink = true
+function Library._regSoftShrink(sf)
+	if not sf:FindFirstChildOfClass("UIListLayout") then return end
+	local spacer = Instance.new("Frame")
+	spacer.Name = "ShrinkSpacer"
+	spacer.BackgroundTransparency = 1
+	spacer.BorderSizePixel = 0
+	spacer.Active = false
+	spacer.LayoutOrder = 2147483000
+	spacer.Size = UDim2.new(1, 0, 0, 0)
+	spacer.Parent = sf
+	local function geo()
+		local ps = math.max(pxScale(), 0.05)
+		local canvas = sf.AbsoluteCanvasSize.Y / ps
+		return canvas, math.max(0, canvas - sf.AbsoluteWindowSize.Y / ps)
+	end
+	local lastCanvas = geo()
+	local lastY, prevY = sf.CanvasPosition.Y, sf.CanvasPosition.Y
+	local conn, gen, setY = nil, 0, nil
+	local function stop()
+		gen += 1
+		if conn then conn:Disconnect() conn = nil end
+		setY = nil
+		spacer.Size = UDim2.new(1, 0, 0, 0)
+	end
+	sf:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+		local y = sf.CanvasPosition.Y
+		if setY and math.abs(y - setY) < 1.5 then return end   -- notre propre écriture
+		if conn then stop() end                                 -- l'utilisateur reprend la main (molette, barre)
+		prevY, lastY = lastY, y
+	end)
+	sf:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(function()
+		local canvas, mx = geo()
+		local drop = lastCanvas - canvas
+		lastCanvas = canvas
+		if conn or Library.SoftShrink == false or not sf.Visible then return end
+		if drop < 40 then return end                 -- rétrécissement progressif (animation de repli) : déjà fluide
+		local y0 = math.max(lastY, prevY)
+		if y0 <= mx + 2 then return end              -- la position reste valide : rien à compenser
+		local extra = math.min(y0 - mx, drop)
+		gen += 1
+		local my = gen
+		spacer.Size = UDim2.new(1, 0, 0, extra)
+		setY = y0
+		sf.CanvasPosition = Vector2.new(sf.CanvasPosition.X, y0)
+		local t0 = os.clock()
+		local dur = Library.Animations and (0.32 / math.max(Library.AnimSpeed or 1, 0.05)) or 0
+		conn = Ticker.connect(function()
+			if my ~= gen or not sf.Parent then return end
+			local a = dur <= 0 and 1 or math.clamp((os.clock() - t0) / dur, 0, 1)
+			local e = TweenService:GetValue(a, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
+			spacer.Size = UDim2.new(1, 0, 0, extra * (1 - e))
+			local _, mx2 = geo()
+			setY = math.min(y0 - extra * e, math.max(mx2, 0))
+			sf.CanvasPosition = Vector2.new(sf.CanvasPosition.X, setY)
+			lastY, prevY = sf.CanvasPosition.Y, sf.CanvasPosition.Y
+			if a >= 1 then stop() lastCanvas = geo() end
+		end)
+	end)
 end
 
 -- MÉMOIRE DE DÉFILEMENT : la position de chaque colonne est retenue tant que son onglet est affiché, puis remise quand on y revient.
@@ -20189,6 +20254,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 		if Library.SquareMode then Library._sqApplyCol(sf) end
 		if Library._regTopBtn then Library._regTopBtn(sf, page) end
 		if Library._regScrollMemory then Library._regScrollMemory(sf, page) end
+		if Library._regSoftShrink then Library._regSoftShrink(sf) end
 		return sf
 	end
 
@@ -20466,6 +20532,7 @@ function Tab:CreateSubTabs(list)
 			new("UIPadding", { PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 10), PaddingTop = UDim.new(0, 2) }, sf)
 			if Library._regTopBtn then Library._regTopBtn(sf, page) end
 			if Library._regScrollMemory then Library._regScrollMemory(sf, page) end
+			if Library._regSoftShrink then Library._regSoftShrink(sf) end
 			return sf
 		end
 		local sub = setmetatable({ Name = tostring(parent.Name) .. " / " .. name, SubName = name, Page = page,
@@ -30876,7 +30943,7 @@ do
 				corner(btn, 10)
 				if not (primary or danger) then stroke(btn, 0.88) end
 				new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = BYORDER,
-					HorizontalAlignment = CENTERX, VerticalAlignment = Enum.VerticalAlignment.Center }, btn)
+					HorizontalAlignment = Enum.HorizontalAlignment.Center, VerticalAlignment = Enum.VerticalAlignment.Center }, btn)
 				local fgKey = (primary and not danger) and "Main" or "Text"
 				local ic = new("ImageLabel", { Name = "Icon", Size = UDim2.fromOffset(ISZ, ISZ), BackgroundTransparency = 1,
 					ScaleType = Enum.ScaleType.Fit, LayoutOrder = 1, Visible = false }, btn)
