@@ -7,6 +7,11 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.33 — TABLEAU (OVERLAY) REFAIT : plus aucun contour · couleurs liées au thème ET au style (Standard / Verre / Mat…), repeintes en direct si le thème change ·
+		  changement d'onglet fluide (la page glisse + fondu dans le sens du déplacement, pastille qui glisse sous l'onglet actif, l'onglet choisi reste visible) ·
+		  textes qui changent en fondu (titre, description, statut, pseudo, badge, compteur…) · lignes qui apparaissent en cascade et disparaissent en refermant la liste sans saut ·
+		  survol / appui sur les boutons et lignes · ligne « mise en avant » = repère à gauche. L'API ne change pas (+ option OnSelect = function(col) sur CreateOverlay).
+
 	V9.32 — OVERLAY « version C » : dans la zone des blocs (plus toute la fenêtre) · gros titre + description à droite + trait qui s'estompe · un ONGLET par colonne
 		  (TabTitle, compteur) · fiche à gauche (image, nom, statut, Description, Chips = { { Name, Value } }, boutons) modulable : ov:SetSideOrder / ov:SetSideVisible / ov:Select.
 	V9.31 — Rétrécissement doux des colonnes (dernier bloc masqué : le contenu glisse au lieu de sauter) · Library.SoftShrink = false pour couper.
@@ -30854,17 +30859,8 @@ do
 		local function isLucide(v)
 			return type(v) == "string" and not string.find(v, "://", 1, true) and not string.match(v, "^%d+$")
 		end
-		local function applyPic(img, v)
-			if v == nil or v == false or v == "" then img.Image = "" img.Visible = false return end
-			img.Visible = true
-			img.ImageRectOffset = Vector2.new(0, 0)
-			img.ImageRectSize = Vector2.new(0, 0)
-			if not Library.ApplyIcon(img, v) then img.Image = tostring(v) end
-			img.ImageColor3 = isLucide(v) and T.Text or Color3.new(1, 1, 1)
-		end
 		local function asColor(c) return typeof(c) == "Color3" and c or nil end
 		local NONE_TR = Enum.TextTruncate.AtEnd
-		local CENTERX = Enum.TextXAlignment.Center
 
 		-- police des tableaux (Paramètres > Apparence > « Tableaux : police ») : « Auto » = la police de l'interface
 		Library.OverlayFont = Library.OverlayFont or "Auto"
@@ -30903,10 +30899,17 @@ do
 			Library._applyOverlayFonts()
 		end
 
+		-- ---- V9.33 : outils de fluidité (partagés par tous les tableaux) ----------------------------------------------
+		local FX = { SLIDE = 22 }   -- (une seule variable locale : le fichier est près de la limite de 200 locals)
+		function FX.speed() return math.max(Library.AnimSpeed or 1, 0.05) end
+		function FX.gt(f, v) if canvasSupported then f.GroupTransparency = v end end
+		function FX.fade(f, v, t) if canvasSupported then tween(f, { GroupTransparency = v }, t) end end
+
 		function Window:CreateOverlay(o)
 			o = type(o) == "table" and o or {}
 			local main = self.Main
 			if not main then warn("[Ui-Lib] CreateOverlay : fenêtre introuvable") return nil end
+			local speedDiv, setGT, fadeTo, SLIDE = FX.speed, FX.gt, FX.fade, FX.SLIDE
 			local OV = { Columns = {}, _open = false }
 			local host = self.Content or main   -- la zone des blocs (et non toute la fenêtre)
 			local SIDE_KEYS = { "image", "name", "status", "desc", "chips", "buttons" }
@@ -30917,12 +30920,80 @@ do
 			local TABS_H = 40
 			local M = 18   -- marge commune : titre, onglets et pages sont alignés
 			local SIDE_W = tonumber(o.SideWidth) or 270
+			local ITEM_H, ITEM_GAP = 64, 8   -- l'espace sous une ligne fait partie de la ligne : quand elle disparaît, la liste se referme sans saut
 			local WHITE = Color3.new(1, 1, 1)
-			local reg = {}
+
+			-- ---------- thème : tout passe par ces registres, repeints à l'ouverture et dès que le thème / le style change ----------
+			local reg = {}      -- { instance, propriété, clé du thème }
+			local sty = {}      -- { instance, "row" | "block" }  (transparence liée au style actif)
 			local function tc(inst, prop, key)
 				inst[prop] = T[key]
 				reg[#reg + 1] = { inst, prop, key }
 				return inst
+			end
+			-- pas de bordures : le contraste vient du remplissage, donc on borne la transparence pour que les styles très
+			-- translucides (Verre, Givré) restent lisibles
+			local function styleTr(kind)
+				if kind == "block" then return math.min(Sty.BlockTr or 0.35, 0.55) end
+				return math.min(Sty.RowTr or 0.4, 0.55)
+			end
+			local function st(inst, kind)
+				inst.BackgroundTransparency = styleTr(kind)
+				sty[#sty + 1] = { inst, kind }
+				return inst
+			end
+			local function prune()   -- retire des registres les éléments détruits (listes rafraîchies en direct)
+				for i = #reg, 1, -1 do if not reg[i][1].Parent then table.remove(reg, i) end end
+				for i = #sty, 1, -1 do if not sty[i][1].Parent then table.remove(sty, i) end end
+			end
+			local function rootTr() return math.clamp(main.BackgroundTransparency, 0, 0.18) end   -- suit l'opacité / le style de la fenêtre
+
+			local function animating() return OV._open and Library.Animations end
+			-- applique en douceur si le tableau est ouvert, d'un coup sinon
+			local function put(inst, props, t)
+				if animating() then
+					tween(inst, props, t or 0.2)
+				else
+					for k, v in pairs(props) do inst[k] = v end
+				end
+			end
+			-- change un texte en douceur : le vieux texte s'efface, le nouveau apparaît (rien si le texte est identique)
+			local function swapText(lbl, text, onSet)
+				text = tostring(text or "")
+				if lbl.Text == text then return end
+				if not animating() then
+					lbl.Text = text
+					if onSet then onSet() end
+					return
+				end
+				if lbl.Text == "" and not lbl:GetAttribute("OvBusy") then   -- rien à faire disparaître : le texte apparaît en fondu
+					local base0 = lbl.TextTransparency
+					lbl.Text = text
+					if onSet then onSet() end
+					lbl.TextTransparency = 1
+					tween(lbl, { TextTransparency = base0 }, 0.25)
+					return
+				end
+				if not lbl:GetAttribute("OvBusy") then lbl:SetAttribute("OvBase", lbl.TextTransparency) end
+				lbl:SetAttribute("OvBusy", true)
+				local base = lbl:GetAttribute("OvBase") or 0
+				local tok = (lbl:GetAttribute("OvTok") or 0) + 1
+				lbl:SetAttribute("OvTok", tok)
+				tween(lbl, { TextTransparency = 1 }, 0.1)
+				task.delay(0.1 / speedDiv(), function()
+					if not lbl.Parent or lbl:GetAttribute("OvTok") ~= tok then return end
+					lbl.Text = text
+					if onSet then onSet() end
+					tween(lbl, { TextTransparency = base }, 0.22)
+					task.delay(0.24 / speedDiv(), function()
+						if lbl.Parent and lbl:GetAttribute("OvTok") == tok then lbl:SetAttribute("OvBusy", nil) end
+					end)
+				end)
+			end
+			local function fadeInImage(img)
+				if not animating() then return end
+				img.ImageTransparency = 1
+				tween(img, { ImageTransparency = 0 }, 0.3)
 			end
 			-- pose une icône (Lucide / asset) ; retourne false (et cache l'image) si introuvable
 			local function setPic(img, v)
@@ -30937,19 +31008,18 @@ do
 				return true
 			end
 
-			-- bouton générique (en-tête, pied de colonne, corps de colonne) : icône 22 px + texte, survol, désactivable
+			-- bouton générique (en-tête, pied de colonne, corps de colonne) : icône 22 px + texte, survol, appui, désactivable
 			local function makeButton(parent, bo, opt)
 				bo = type(bo) == "table" and bo or { Name = tostring(bo) }
 				opt = opt or {}
 				local h = tonumber(opt.Height) or 40
 				local primary, danger = bo.Primary == true, bo.Danger == true
-				local base = (primary or danger) and 0.05 or 0.3
+				local function base() return (primary or danger) and 0.05 or 0.25 end
 				local btn = new("TextButton", { Name = "Button", Size = opt.Full and UDim2.new(1, 0, 0, h) or UDim2.fromOffset(100, h),
-					BackgroundTransparency = base, Text = "", AutoButtonColor = false, BorderSizePixel = 0,
+					BackgroundTransparency = base(), Text = "", AutoButtonColor = false, BorderSizePixel = 0,
 					LayoutOrder = tonumber(bo.Order) or tonumber(opt.Order) or 0 }, parent)
-				if danger then btn.BackgroundColor3 = RED else tc(btn, "BackgroundColor3", primary and "Accent" or "Element") end
+				if danger then btn.BackgroundColor3 = RED else tc(btn, "BackgroundColor3", primary and "Accent" or "Off") end
 				corner(btn, 10)
-				if not (primary or danger) then stroke(btn, 0.88) end
 				new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = BYORDER,
 					HorizontalAlignment = Enum.HorizontalAlignment.Center, VerticalAlignment = Enum.VerticalAlignment.Center }, btn)
 				local fgKey = (primary and not danger) and "Main" or "Text"
@@ -30959,12 +31029,18 @@ do
 					BackgroundTransparency = 1, Text = "", TextSize = tonumber(opt.TextSize) or 14, Font = F_BOLD, LayoutOrder = 2 }, btn),
 					"TextColor3", fgKey)
 				local b = { Frame = btn, _on = true }
+				local hovering = false
 				local function fit()
 					if opt.Full then return end
 					local w = math.floor(measureText(lb.Text, tonumber(opt.TextSize) or 14, (ovFamilyFonts() or BASE_FONTS)[3]).X) + 34 + (ic.Visible and (ISZ + 8) or 0)
-					btn.Size = UDim2.fromOffset(math.max(tonumber(opt.MinWidth) or 96, w), h)
+					local sz = UDim2.fromOffset(math.max(tonumber(opt.MinWidth) or 96, w), h)
+					if animating() then tween(btn, { Size = sz }, 0.2) else btn.Size = sz end
 				end
-				function b.SetText(...) lb.Text = tostring((unself(b, ...)) or "") lb.Visible = lb.Text ~= "" fit() end
+				function b.SetText(...)
+					local t = tostring((unself(b, ...)) or "")
+					lb.Visible = t ~= ""
+					swapText(lb, t, fit)
+				end
 				function b.SetIcon(...)
 					local v = unself(b, ...)
 					if setPic(ic, v) then tc(ic, "ImageColor3", fgKey) end
@@ -30976,7 +31052,7 @@ do
 					if b._on == nv and b._enSet then return end
 					b._enSet = true
 					b._on = nv
-					tween(btn, { BackgroundTransparency = b._on and base or math.min(base + 0.35, 0.9) }, 0.15)
+					put(btn, { BackgroundTransparency = b._on and base() or math.min(base() + 0.35, 0.9) }, 0.15)
 					lb.TextTransparency = b._on and 0 or 0.55
 					ic.ImageTransparency = b._on and 0 or 0.55
 				end
@@ -30984,18 +31060,21 @@ do
 				b.SetText(bo.Name or bo.Text or "Button")
 				b.SetIcon(bo.Icon)
 				if bo.Enabled == false then b.SetEnabled(false) end
-				btn.MouseEnter:Connect(function() if b._on then tween(btn, { BackgroundTransparency = math.max(base - 0.15, 0) }, 0.12) end end)
-				btn.MouseLeave:Connect(function() if b._on then tween(btn, { BackgroundTransparency = base }, 0.12) end end)
+				btn.MouseEnter:Connect(function() hovering = true if b._on then tween(btn, { BackgroundTransparency = math.max(base() - 0.15, 0) }, 0.14) end end)
+				btn.MouseLeave:Connect(function() hovering = false if b._on then tween(btn, { BackgroundTransparency = base() }, 0.18) end end)
+				btn.MouseButton1Down:Connect(function() if b._on then tween(btn, { BackgroundTransparency = math.max(base() - 0.25, 0) }, 0.07) end end)
+				btn.MouseButton1Up:Connect(function() if b._on then tween(btn, { BackgroundTransparency = math.max(base() - (hovering and 0.15 or 0), 0) }, 0.14) end end)
 				btn.MouseButton1Click:Connect(function() if b._on then fire(bo.Callback, b) end end)
 				return b
 			end
 
-			local root = new("CanvasGroup", {
-				Name = "UiOverlay", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 0, BorderSizePixel = 0,
-				ClipsDescendants = true, Visible = false, GroupTransparency = 1, Active = true, ZIndex = 900,
+			local root = new(canvasSupported and "CanvasGroup" or "Frame", {
+				Name = "UiOverlay", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = rootTr(), BorderSizePixel = 0,
+				ClipsDescendants = true, Visible = false, Active = true, ZIndex = 900,
 			}, host)
+			setGT(root, 1)
 			tc(root, "BackgroundColor3", "Main")
-			local rc = new("UICorner", { CornerRadius = UDim.new(0, 12) }, root)
+			new("UICorner", { CornerRadius = UDim.new(0, 12) }, root)
 			local sc = new("UIScale", { Scale = 1 }, root)
 			new("TextButton", { Name = "Sink", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
 				Active = true, BorderSizePixel = 0 }, root)   -- absorbe les clics : rien ne passe aux blocs derrière
@@ -31008,10 +31087,9 @@ do
 			-- ================= en-tête =================
 			local head = new("Frame", { Name = "Head", Size = UDim2.new(1, 0, 0, HEAD_H), BackgroundTransparency = 1 }, root)
 			local tile = new("Frame", { Name = "IconTile", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 20, 0.5, 0),
-				Size = UDim2.fromOffset(46, 46), BackgroundTransparency = 0.35, BorderSizePixel = 0, Visible = false }, head)
-			tc(tile, "BackgroundColor3", "Element")
+				Size = UDim2.fromOffset(46, 46), BackgroundTransparency = 0.5, BorderSizePixel = 0, Visible = false }, head)
+			tc(tile, "BackgroundColor3", "Off")
 			corner(tile, 12)
-			stroke(tile, 0.88)
 			local icon = new("ImageLabel", { Name = "Icon", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 				Size = UDim2.fromOffset(ISZ, ISZ), BackgroundTransparency = 1, ScaleType = Enum.ScaleType.Fit }, tile)
 			local title = tc(new("TextLabel", { Name = "Title", Size = UDim2.fromOffset(200, 40), BackgroundTransparency = 1, Text = "",
@@ -31026,11 +31104,10 @@ do
 			new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = BYORDER,
 				HorizontalAlignment = Enum.HorizontalAlignment.Right, VerticalAlignment = Enum.VerticalAlignment.Center }, actions)
 
-			local closeBtn = new("TextButton", { Name = "Close", Size = UDim2.fromOffset(42, 42), BackgroundTransparency = 0.35, Text = "",
+			local closeBtn = new("TextButton", { Name = "Close", Size = UDim2.fromOffset(42, 42), BackgroundTransparency = 0.5, Text = "",
 				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = 1000 }, actions)
-			tc(closeBtn, "BackgroundColor3", "Element")
+			tc(closeBtn, "BackgroundColor3", "Off")
 			corner(closeBtn, 12)
-			stroke(closeBtn, 0.88)
 			local closeIcon = new("ImageLabel", { Name = "Icon", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 				Size = UDim2.fromOffset(ISZ, ISZ), BackgroundTransparency = 1, ScaleType = Enum.ScaleType.Fit, Visible = false }, closeBtn)
 			local crossParts = {}
@@ -31047,8 +31124,9 @@ do
 				for _, p in ipairs(crossParts) do p.Visible = not ok end
 			end
 			paintClose()
-			closeBtn.MouseEnter:Connect(function() tween(closeBtn, { BackgroundColor3 = RED, BackgroundTransparency = 0.1 }, 0.12) end)
-			closeBtn.MouseLeave:Connect(function() tween(closeBtn, { BackgroundColor3 = T.Element, BackgroundTransparency = 0.35 }, 0.12) end)
+			closeBtn.MouseEnter:Connect(function() tween(closeBtn, { BackgroundColor3 = RED, BackgroundTransparency = 0.1 }, 0.14) end)
+			closeBtn.MouseLeave:Connect(function() tween(closeBtn, { BackgroundColor3 = T.Off, BackgroundTransparency = 0.5 }, 0.2) end)
+			closeBtn.MouseButton1Down:Connect(function() tween(closeBtn, { BackgroundTransparency = 0 }, 0.07) end)
 
 			local function ups() return pxScale() * sc.Scale end   -- échelle réelle (fenêtre x petite animation d'ouverture)
 			local function layoutHead()
@@ -31070,13 +31148,19 @@ do
 			new("UIGradient", { Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.5, 0.7),
 				NumberSequenceKeypoint.new(1, 1) }) }, sep)
 
-			-- ================= onglets (un par colonne) + pages (la colonne choisie) =================
+			-- ================= onglets (un par colonne) + pastille qui glisse + pages =================
 			local tabBar = new("ScrollingFrame", { Name = "Tabs", Position = UDim2.fromOffset(M - 3, HEAD_H + 10), Size = UDim2.new(1, -(M - 3) * 2, 0, TABS_H + 6),
-				BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 0, CanvasSize = UDim2.new(),
-				AutomaticCanvasSize = Enum.AutomaticSize.X, ScrollingDirection = Enum.ScrollingDirection.X, ElasticBehavior = Enum.ElasticBehavior.Never }, root)
+				BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 0, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.X,
+				ScrollingDirection = Enum.ScrollingDirection.X, ElasticBehavior = Enum.ElasticBehavior.Never }, root)
+			new("UIPadding", { PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 3), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3) }, tabBar)
+			-- la pastille est hors de la rangée (la rangée a un UIListLayout) : elle glisse d'un onglet à l'autre
+			local pill = new("Frame", { Name = "Pill", BackgroundTransparency = 0.88, BorderSizePixel = 0, Visible = false, ZIndex = 1 }, tabBar)
+			tc(pill, "BackgroundColor3", "Accent")
+			corner(pill, 8)
+			local tabRow = new("Frame", { Name = "Row", Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1,
+				BorderSizePixel = 0, ZIndex = 2 }, tabBar)
 			new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = BYORDER,
-				VerticalAlignment = Enum.VerticalAlignment.Center }, tabBar)
-			new("UIPadding", { PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 3), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3) }, tabBar)   -- la bordure des onglets ne se fait plus couper
+				VerticalAlignment = Enum.VerticalAlignment.Center }, tabRow)
 			local PAGE_Y = HEAD_H + 10 + TABS_H + 6 + 10
 			local cont = new("Frame", { Name = "Pages", Position = UDim2.fromOffset(M, PAGE_Y), Size = UDim2.new(1, -M * 2, 1, -(PAGE_Y + M)),
 				BackgroundTransparency = 1, BorderSizePixel = 0 }, root)
@@ -31084,19 +31168,101 @@ do
 				Size = UDim2.fromOffset(320, 26), BackgroundTransparency = 1, Text = tostring(o.EmptyText or "Rien à afficher"),
 				TextSize = 15, Font = F_REG, TextTransparency = 0.3 }, root), "TextColor3", "ElementAccent")
 
-			local function paintTabs(force)
-				local lowTr = Sty.RowTr or 0.4
-				local hiTr = math.max(lowTr - 0.3, 0)
+			local function indexOf(c)
+				for i, x in ipairs(OV.Columns) do if x == c then return i end end
+			end
+
+			-- la pastille se place derrière l'onglet choisi (glisse si animate)
+			local function movePill(animate)
+				local c = OV._sel
+				local t = c and c.Tab
+				if not (t and t.Parent) then pill.Visible = false return end
+				local u = ups()
+				if t.AbsoluteSize.X < 2 or u <= 0 then return end
+				local pos = UDim2.fromOffset(math.floor((t.AbsolutePosition.X - tabRow.AbsolutePosition.X) / u + 0.5),
+					math.floor((t.AbsolutePosition.Y - tabRow.AbsolutePosition.Y) / u + 0.5))
+				local size = UDim2.fromOffset(math.floor(t.AbsoluteSize.X / u + 0.5), math.floor(t.AbsoluteSize.Y / u + 0.5))
+				if pill.Position == pos and pill.Size == size and pill.Visible then return end
+				if animate and pill.Visible and animating() then
+					tween(pill, { Position = pos, Size = size }, 0.34)
+				else
+					pill.Position, pill.Size = pos, size
+					pill.Visible = true
+				end
+			end
+			-- fait défiler la barre pour que l'onglet choisi reste visible
+			local function revealTab(c)
+				local t = c and c.Tab
+				if not (t and t.Parent) then return end
+				local u = ups()
+				if u <= 0 then return end
+				local left = (t.AbsolutePosition.X - tabBar.AbsolutePosition.X) / u + tabBar.CanvasPosition.X
+				local right = left + t.AbsoluteSize.X / u
+				local view = tabBar.AbsoluteSize.X / u
+				local cx = tabBar.CanvasPosition.X
+				local target
+				if left < cx + 8 then target = left - 14 elseif right > cx + view - 8 then target = right - view + 14 end
+				if target then
+					target = math.max(target, 0)
+					if animating() then tween(tabBar, { CanvasPosition = Vector2.new(target, 0) }, 0.3) else tabBar.CanvasPosition = Vector2.new(target, 0) end
+				end
+			end
+			track(tabRow:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() movePill(true) end))
+
+			-- apparition / disparition d'une page (glisse + fondu, dans le sens du déplacement)
+			local function showCol(c, anim, dir)
+				local f = c.Frame
+				c._tok = (c._tok or 0) + 1
+				f.Visible = true
+				if anim then
+					f.Position = UDim2.fromOffset(dir * SLIDE, 0)
+					setGT(f, 1)
+					tween(f, { Position = UDim2.fromOffset(0, 0) }, 0.42)
+					fadeTo(f, 0, 0.32)
+				else
+					f.Position = UDim2.fromOffset(0, 0)
+					setGT(f, 0)
+				end
+			end
+			local function hideCol(c, anim, dir)
+				local f = c.Frame
+				c._tok = (c._tok or 0) + 1
+				local tok = c._tok
+				if anim and f.Visible then
+					tween(f, { Position = UDim2.fromOffset(-dir * SLIDE, 0) }, 0.26)
+					fadeTo(f, 1, 0.18)
+					task.delay(0.28 / speedDiv(), function()
+						if c._tok == tok and f.Parent then f.Visible = false end
+					end)
+				else
+					f.Visible = false
+				end
+			end
+			local function styleTab(c, on, anim)
+				if not c.Tab then return end
+				local props = function(inst, p) if anim then tween(inst, p, 0.25) else for k, v in pairs(p) do inst[k] = v end end end
+				props(c.TabLabel, { TextColor3 = on and T.Text or T.ElementAccent })
+				props(c.TabIcon, { ImageTransparency = on and 0 or 0.45 })
+				props(c.Tab, { BackgroundTransparency = 1 })
+			end
+			local function paintTabs(force, anim, dir)
+				if anim == nil then anim = OV._open and Library.Animations end
+				dir = dir or 1
 				for _, c in ipairs(OV.Columns) do
 					local on = c == OV._sel
 					if force or c._painted ~= on then
+						local was = c._painted
 						c._painted = on
-						c.Frame.Visible = on
-						if c.Tab then
-							c.Tab.BackgroundTransparency = on and hiTr or lowTr
-							c.TabLabel.TextColor3 = on and T.Text or T.ElementAccent
-							c.TabIcon.ImageTransparency = on and 0 or 0.45
-							c.TabStroke.Transparency = on and 0.55 or (Sty.StrokeTr or 0.9)
+						styleTab(c, on, anim and not force)
+						if force then
+							c._tok = (c._tok or 0) + 1
+							c.Frame.Visible = on
+							c.Frame.Position = UDim2.fromOffset(0, 0)
+							setGT(c.Frame, 0)
+						elseif on then
+							showCol(c, anim, dir)
+						elseif was then
+							hideCol(c, anim, dir)
 						end
 					end
 				end
@@ -31106,8 +31272,21 @@ do
 				for _, c in ipairs(OV.Columns) do if c == OV._sel then found = true end end
 				if not found then OV._sel = OV.Columns[1] end
 				paintTabs()
+				movePill(false)
 			end
-			local function selectCol(c) OV._sel = c paintTabs() end
+			local function selectCol(c)
+				if not c or OV._sel == c then return end
+				local prev, dir = OV._sel, 1
+				if prev then
+					local pi, ci = indexOf(prev), indexOf(c)
+					if pi and ci and ci < pi then dir = -1 end
+				end
+				OV._sel = c
+				paintTabs(false, OV._open and Library.Animations, dir)
+				revealTab(c)
+				movePill(true)
+				fire(o.OnSelect, c)
+			end
 			local function relayout()
 				local n = #OV.Columns
 				if empty.Visible ~= (n == 0) then empty.Visible = n == 0 end
@@ -31127,31 +31306,67 @@ do
 			end
 			track(cont:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() relayout() end))
 
-
-			local function repaint()
+			-- repeint complet : couleurs du thème, transparences du style, onglets (à l'ouverture, et dès que le thème ou le style change)
+			local function repaint(anim)
 				for i = #reg, 1, -1 do
 					local r = reg[i]
 					if r[1].Parent then pcall(function() r[1][r[2]] = T[r[3]] end) else table.remove(reg, i) end
 				end
+				for i = #sty, 1, -1 do
+					local r = sty[i]
+					if r[1].Parent then
+						local tr = styleTr(r[2])
+						if r[1]:GetAttribute("OvHl") then tr = math.max(tr - 0.2, 0) end
+						if anim then tween(r[1], { BackgroundTransparency = tr }, 0.25) else r[1].BackgroundTransparency = tr end
+					else
+						table.remove(sty, i)
+					end
+				end
+				if anim then tween(root, { BackgroundTransparency = rootTr() }, 0.25) else root.BackgroundTransparency = rootTr() end
 				paintTabs(true)
 				paintClose()
+				movePill(false)
+			end
+
+			-- surveille le thème / le style pendant que le tableau est ouvert (attend la fin de la transition globale des couleurs)
+			local function themeKey()
+				return table.concat({ tostring(T.Main), tostring(T.Second), tostring(T.Accent), tostring(T.Text), tostring(T.ElementAccent),
+					tostring(Sty.RowTr), tostring(Sty.BlockTr), string.format("%.3f", main.BackgroundTransparency) }, "|")
+			end
+			local watching = false
+			local function startWatch()
+				if watching then return end
+				watching = true
+				task.spawn(function()
+					local last = themeKey()
+					while OV._open and root.Parent do
+						task.wait(0.35)
+						local k = themeKey()
+						if k ~= last then
+							task.wait(0.55)
+							if not (OV._open and root.Parent) then break end
+							last = themeKey()
+							repaint(true)
+						end
+					end
+					watching = false
+				end)
 			end
 
 			-- ================= colonnes =================
 			local function buildColumn(co)
 				co = type(co) == "table" and co or { Title = tostring(co) }
 				local col = { Key = co.Key, Items = {}, _byKey = {}, _n = 0, Footer = {} }
-				local fr = new("Frame", { Name = "Column", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, cont)
+				local fr = new(canvasSupported and "CanvasGroup" or "Frame", { Name = "Column", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+					BorderSizePixel = 0, Visible = false }, cont)
 				col.Frame = fr
 				local has = {}
 
-				-- onglet de la maison (nom + nombre de joueurs)
+				-- onglet de la maison (nom + nombre de joueurs) : sans contour, la pastille de la barre marque l'onglet actif
 				local tab = new("TextButton", { Name = "Tab", Size = UDim2.fromOffset(0, 34), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1,
-					Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = 0 }, tabBar)
-				tc(tab, "BackgroundColor3", "Element")
+					Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = 0 }, tabRow)
+				tc(tab, "BackgroundColor3", "Accent")
 				corner(tab, 8)
-				local tabStroke = stroke(tab, 0.93)
-				trackStyled(tab, tabStroke, "row")
 				new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 10) }, tab)
 				new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = BYORDER,
 					VerticalAlignment = Enum.VerticalAlignment.Center }, tab)
@@ -31165,16 +31380,29 @@ do
 				tc(tabCnt, "TextColor3", "Text")
 				new("UICorner", { CornerRadius = UDim.new(1, 0) }, tabCnt)
 				new("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, tabCnt)
-				col.Tab, col.TabLabel, col.TabStroke, col.TabIcon = tab, tabLbl, tabStroke, tabIc
+				col.Tab, col.TabLabel, col.TabIcon = tab, tabLbl, tabIc
 				tab.MouseButton1Click:Connect(function() selectCol(col) end)
+				tab.MouseEnter:Connect(function()
+					if OV._sel ~= col then
+						tween(tabLbl, { TextColor3 = T.ElementAccent:Lerp(T.Text, 0.6) }, 0.12)
+						tween(tab, { BackgroundTransparency = 0.93 }, 0.12)
+					end
+				end)
+				tab.MouseLeave:Connect(function()
+					if OV._sel ~= col then
+						tween(tabLbl, { TextColor3 = T.ElementAccent }, 0.18)
+						tween(tab, { BackgroundTransparency = 1 }, 0.18)
+					end
+				end)
+				track(tab:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() if OV._sel == col then movePill(true) end end))
 
 				-- fiche de gauche (modulable : ov:SetSideOrder / ov:SetSideVisible)
 				local side = new("ScrollingFrame", { Name = "Side", Size = UDim2.new(0, SIDE_W, 1, 0), BackgroundTransparency = 0.45, BorderSizePixel = 0,
 					ScrollBarThickness = 3, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY, ScrollingDirection = Enum.ScrollingDirection.Y }, fr)
-				tc(side, "BackgroundColor3", "Second")
+				tc(side, "BackgroundColor3", "Element")
 				tc(side, "ScrollBarImageColor3", "Accent")
 				corner(side, 10)
-				trackStyled(side, stroke(side, 0.9), "block")
+				st(side, "block")
 				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, side)
 				new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12), PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12) }, side)
 				col._side = side
@@ -31183,16 +31411,16 @@ do
 					ScaleType = Enum.ScaleType.Fit, LayoutOrder = 1, Visible = false }, side)
 				local ct = tc(new("TextLabel", { Name = "Title", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
 					Text = "", TextWrapped = true, TextSize = 19, Font = F_BOLD, TextXAlignment = LEFT, LayoutOrder = 2 }, side), "TextColor3", "Text")
-				local pill = new("Frame", { Name = "Status", Size = UDim2.fromOffset(0, 24), AutomaticSize = Enum.AutomaticSize.X,
+				local pill2 = new("Frame", { Name = "Status", Size = UDim2.fromOffset(0, 24), AutomaticSize = Enum.AutomaticSize.X,
 					BackgroundTransparency = 0.82, BorderSizePixel = 0, LayoutOrder = 3, Visible = false }, side)
-				new("UICorner", { CornerRadius = UDim.new(1, 0) }, pill)
-				new("UIPadding", { PaddingLeft = UDim.new(0, 11), PaddingRight = UDim.new(0, 12) }, pill)
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, pill2)
+				new("UIPadding", { PaddingLeft = UDim.new(0, 11), PaddingRight = UDim.new(0, 12) }, pill2)
 				new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 7), SortOrder = BYORDER,
-					VerticalAlignment = Enum.VerticalAlignment.Center }, pill)
-				local dot = new("Frame", { Name = "Dot", Size = UDim2.fromOffset(8, 8), BorderSizePixel = 0, LayoutOrder = 1 }, pill)
+					VerticalAlignment = Enum.VerticalAlignment.Center }, pill2)
+				local dot = new("Frame", { Name = "Dot", Size = UDim2.fromOffset(8, 8), BorderSizePixel = 0, LayoutOrder = 1 }, pill2)
 				new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
 				local cs = new("TextLabel", { Name = "Text", Size = UDim2.fromOffset(0, 24), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1,
-					Text = "", TextSize = 12, Font = F_BOLD, LayoutOrder = 2 }, pill)
+					Text = "", TextSize = 12, Font = F_BOLD, LayoutOrder = 2 }, pill2)
 				local descL = tc(new("TextLabel", { Name = "Desc", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, Text = "",
 					TextWrapped = true, TextSize = 12, Font = F_REG, TextXAlignment = LEFT, TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 4,
 					Visible = false }, side), "TextColor3", "ElementAccent")
@@ -31202,7 +31430,7 @@ do
 				local foot = new("Frame", { Name = "Footer", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = 6,
 					Visible = false }, side)
 				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, foot)
-				col._sideObj = { image = pic, name = ct, status = pill, desc = descL, chips = chipsF, buttons = foot }
+				col._sideObj = { image = pic, name = ct, status = pill2, desc = descL, chips = chipsF, buttons = foot }
 				has.name = true
 				function col._applySide()
 					local order, hide = OV._sideOrder or SIDE_KEYS, OV._sideHide or {}
@@ -31213,12 +31441,12 @@ do
 					for k, ob in pairs(col._sideObj) do ob.Visible = has[k] == true and not hide[k] end
 				end
 
-				-- liste des joueurs à droite
+				-- liste à droite : les lignes portent leur propre espace (ITEM_GAP), donc pas de Padding dans la liste
 				local list = new("ScrollingFrame", { Name = "List", Position = UDim2.new(0, SIDE_W + GAP, 0, 0), Size = UDim2.new(1, -(SIDE_W + GAP), 1, 0),
 					BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY,
 					ScrollingDirection = Enum.ScrollingDirection.Y }, fr)
 				tc(list, "ScrollBarImageColor3", "Accent")
-				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, list)
+				new("UIListLayout", { Padding = UDim.new(0, 0), SortOrder = BYORDER }, list)
 				new("UIPadding", { PaddingLeft = UDim.new(0, 2), PaddingTop = UDim.new(0, 2), PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 8) }, list)
 				col.List = list
 
@@ -31226,31 +31454,43 @@ do
 					Text = tostring(co.EmptyText or "Personne ici"), TextSize = 13, Font = F_MED, TextTransparency = 0.35, LayoutOrder = 0 }, list),
 					"TextColor3", "ElementAccent")
 				local function refreshEmpty()
-					emptyLbl.Visible = #col.Items == 0
-					tabCnt.Text = tostring(#col.Items)
+					local n = #col.Items
+					local want = n == 0
+					if emptyLbl.Visible ~= want then
+						emptyLbl.Visible = want
+						if want and animating() then
+							emptyLbl.TextTransparency = 1
+							tween(emptyLbl, { TextTransparency = 0.35 }, 0.3)
+						end
+					end
+					swapText(tabCnt, tostring(n))
 				end
 
 				function col.SetTitle(...)
 					local t = tostring((unself(col, ...)) or "")
-					ct.Text = t
-					if not col._tabTitle then tabLbl.Text = t end
+					swapText(ct, t)
+					if not col._tabTitle then swapText(tabLbl, t, function() movePill(true) end) end
 				end
 				function col.SetSubtitle(...)
 					local t, c = unself(col, ...)
 					t = tostring(t or "")
-					cs.Text = t
+					swapText(cs, t)
 					has.status = t ~= ""
 					local base = asColor(c) or T.ElementAccent
-					pill.BackgroundColor3 = base
-					dot.BackgroundColor3 = base
-					cs.TextColor3 = base:Lerp(WHITE, 0.4)
+					put(pill2, { BackgroundColor3 = base }, 0.25)
+					put(dot, { BackgroundColor3 = base }, 0.25)
+					put(cs, { TextColor3 = base:Lerp(WHITE, 0.4) }, 0.25)
 					col._applySide()
 				end
 				function col.SetIcon(...)
 					local v = unself(col, ...)
+					local before = pic.Image
 					local ok = setPic(pic, v)
 					has.image = ok
-					if ok then pic.ImageColor3 = isLucide(v) and T.Text or WHITE end
+					if ok then
+						pic.ImageColor3 = isLucide(v) and T.Text or WHITE
+						if before ~= pic.Image then fadeInImage(pic) end
+					end
 					local tv = co.TabIcon or v   -- icône de l'onglet : TabIcon, sinon l'image de la maison, sinon une petite maison
 					if not setPic(tabIc, tv) then tv = "house" setPic(tabIc, tv) end
 					tabIc.ImageColor3 = isLucide(tv) and (asColor(co.IconColor) or T.Text) or WHITE
@@ -31258,7 +31498,7 @@ do
 				end
 				function col.SetDescription(...)
 					local t = tostring((unself(col, ...)) or "")
-					descL.Text = t
+					swapText(descL, t)
 					has.desc = t ~= ""
 					col._applySide()
 				end
@@ -31271,14 +31511,21 @@ do
 					local n = 0
 					for _, c2 in ipairs(type(chips) == "table" and chips or {}) do
 						n += 1
-						local lb2 = new("TextLabel", { Name = "Chip", Size = UDim2.fromOffset(0, 22), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0.4,
+						local lb2 = new("TextLabel", { Name = "Chip", Size = UDim2.fromOffset(0, 22), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0.45,
 							BorderSizePixel = 0, Text = tostring(c2.Name or c2[1] or "") .. "  " .. tostring(c2.Value or c2[2] or ""), TextSize = 11, Font = F_MED,
 							LayoutOrder = n }, chipsF)
-						tc(lb2, "BackgroundColor3", "Element")
+						tc(lb2, "BackgroundColor3", "Off")
 						tc(lb2, "TextColor3", "Text")
 						corner(lb2, 8)
-						trackStyled(lb2, stroke(lb2, 0.9), "input")
 						new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, lb2)
+						if animating() then   -- les nouvelles puces apparaissent l'une après l'autre
+							lb2.BackgroundTransparency, lb2.TextTransparency = 1, 1
+							task.delay(math.min(n * 0.04, 0.3) / speedDiv(), function()
+								if lb2.Parent then
+									tween(lb2, { BackgroundTransparency = 0.45, TextTransparency = 0 }, 0.3)
+								end
+							end)
+						end
 					end
 					has.chips = n > 0
 					col._applySide()
@@ -31292,65 +31539,102 @@ do
 
 
 				local function nextOrder() col._n += 1 return col._n end
+				-- emplacement transparent qui porte l'espace sous un élément de la liste (ITEM_GAP)
+				local function slot(h)
+					return new("Frame", { Name = "Slot", Size = UDim2.new(1, 0, 0, h + ITEM_GAP), BackgroundTransparency = 1, BorderSizePixel = 0,
+						LayoutOrder = nextOrder() }, list)
+				end
 
 				function col:AddItem(io)
 					io = type(io) == "table" and io or { Title = tostring(io) }
 					local item = { Key = io.Key }
 					local clickable = type(io.Callback) == "function"
-					local row = new("TextButton", { Name = "Item", Size = UDim2.new(1, 0, 0, 64), BackgroundTransparency = 0.5,
-						BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = nextOrder() }, list)
+					local wrap = new(canvasSupported and "CanvasGroup" or "Frame", { Name = "ItemSlot", Size = UDim2.new(1, 0, 0, ITEM_H + ITEM_GAP),
+						BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true, LayoutOrder = nextOrder() }, list)
+					local row = new("TextButton", { Name = "Item", Size = UDim2.new(1, 0, 0, ITEM_H), BackgroundTransparency = 0.5,
+						BorderSizePixel = 0, Text = "", AutoButtonColor = false }, wrap)
 					tc(row, "BackgroundColor3", "Element")
 					corner(row, 10)
-					local rowStroke = stroke(row, 0.93)
-					trackStyled(row, rowStroke, "row")
-					local av = new("ImageLabel", { Name = "Avatar", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 10, 0.5, 0),
+					st(row, "row")
+					local hlBar = new("Frame", { Name = "Highlight", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+						Size = UDim2.fromOffset(3, 26), BackgroundTransparency = 1, BorderSizePixel = 0 }, row)
+					tc(hlBar, "BackgroundColor3", "Accent")
+					new("UICorner", { CornerRadius = UDim.new(1, 0) }, hlBar)
+					local av = new("ImageLabel", { Name = "Avatar", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0.5, 0),
 						Size = UDim2.fromOffset(44, 44), BackgroundTransparency = 0.3, ScaleType = Enum.ScaleType.Crop }, row)
-					tc(av, "BackgroundColor3", "Element")
+					tc(av, "BackgroundColor3", "Off")
 					new("UICorner", { CornerRadius = UDim.new(1, 0) }, av)
-					local it = tc(new("TextLabel", { Name = "Title", Position = UDim2.fromOffset(64, 13), Size = UDim2.new(1, -74, 0, 20),
+					local it = tc(new("TextLabel", { Name = "Title", Position = UDim2.fromOffset(66, 13), Size = UDim2.new(1, -76, 0, 20),
 						BackgroundTransparency = 1, Text = "", TextSize = 15, Font = F_BOLD, TextXAlignment = LEFT, TextTruncate = NONE_TR }, row), "TextColor3", "Text")
-					local isub = tc(new("TextLabel", { Name = "Sub", Position = UDim2.fromOffset(64, 33), Size = UDim2.new(1, -74, 0, 18),
+					local isub = tc(new("TextLabel", { Name = "Sub", Position = UDim2.fromOffset(66, 33), Size = UDim2.new(1, -76, 0, 18),
 						BackgroundTransparency = 1, Text = "", TextSize = 12, Font = F_REG, TextXAlignment = LEFT, TextTruncate = NONE_TR }, row), "TextColor3", "ElementAccent")
 					local badge = new("TextLabel", { Name = "Badge", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
 						Size = UDim2.fromOffset(60, 22), BackgroundTransparency = 0.78, Text = "", TextSize = 11, Font = F_BOLD, Visible = false,
 						BorderSizePixel = 0 }, row)
 					new("UICorner", { CornerRadius = UDim.new(1, 0) }, badge)
-					item.Frame = row
-					local base = Sty.RowTr or 0.4
-					local function hover(on) tween(row, { BackgroundTransparency = on and (clickable and 0.2 or 0.38) or base }, 0.12) end
+					item.Frame = wrap
+					local function baseTr()
+						local t = styleTr("row")
+						if item._hl then t = math.max(t - 0.2, 0) end
+						return t
+					end
+					local hot = false
+					local function hover(on)
+						hot = on
+						tween(row, { BackgroundTransparency = on and math.max(baseTr() - (clickable and 0.2 or 0.08), 0) or baseTr() }, on and 0.12 or 0.2)
+					end
 					row.MouseEnter:Connect(function() hover(true) end)
 					row.MouseLeave:Connect(function() hover(false) end)
-					if clickable then row.MouseButton1Click:Connect(function() fire(io.Callback, item) end) end
+					if clickable then
+						row.MouseButton1Down:Connect(function() tween(row, { BackgroundTransparency = math.max(baseTr() - 0.32, 0) }, 0.07) end)
+						row.MouseButton1Up:Connect(function() hover(hot) end)
+						row.MouseButton1Click:Connect(function() fire(io.Callback, item) end)
+					end
 
-					function item.SetTitle(...) it.Text = tostring((unself(item, ...)) or "") end
-					function item.SetSubtitle(...) isub.Text = tostring((unself(item, ...)) or "") end
+					function item.SetTitle(...) swapText(it, tostring((unself(item, ...)) or "")) end
+					function item.SetSubtitle(...) swapText(isub, tostring((unself(item, ...)) or "")) end
 					function item.SetBadge(...)
 						local text, color = unself(item, ...)
 						if text == nil or text == "" then
 							badge.Visible = false
-							it.Size = UDim2.new(1, -74, 0, 20)
+							it.Size = UDim2.new(1, -76, 0, 20)
 							return
 						end
 						color = asColor(color) or T.Accent
 						local w = math.floor(measureText(tostring(text), 11, (ovFamilyFonts() or BASE_FONTS)[3]).X) + 26
-						badge.Text = tostring(text)
-						badge.BackgroundColor3 = color
-						badge.TextColor3 = color:Lerp(WHITE, 0.45)
-						badge.Size = UDim2.fromOffset(w, 22)
-						badge.Visible = true
-						it.Size = UDim2.new(1, -(64 + w + 20), 0, 20)
+						local tsz = UDim2.new(1, -(66 + w + 22), 0, 20)
+						if badge.Visible and animating() then   -- le badge change : texte en fondu, couleur et largeur qui glissent
+							swapText(badge, tostring(text))
+							tween(badge, { BackgroundColor3 = color, TextColor3 = color:Lerp(WHITE, 0.45), Size = UDim2.fromOffset(w, 22) }, 0.22)
+							tween(it, { Size = tsz }, 0.22)
+						else
+							badge.Text = tostring(text)
+							badge.BackgroundColor3 = color
+							badge.TextColor3 = color:Lerp(WHITE, 0.45)
+							badge.Size = UDim2.fromOffset(w, 22)
+							badge.Visible = true
+							it.Size = tsz
+						end
 					end
-					function item.SetHighlight(...)   -- ex. « toi » : ligne mise en avant
+					function item.SetHighlight(...)   -- ex. « toi » : ligne mise en avant (fond + petit repère à gauche)
 						local on = unself(item, ...) == true
-						base = on and math.max((Sty.RowTr or 0.4) - 0.2, 0) or (Sty.RowTr or 0.4)
-						rowStroke.Transparency = on and 0.6 or (Sty.StrokeTr or 0.9)
-						tween(row, { BackgroundTransparency = base }, 0.12)
+						item._hl = on
+						row:SetAttribute("OvHl", on or nil)
+						put(row, { BackgroundTransparency = baseTr() }, 0.2)
+						put(hlBar, { BackgroundTransparency = on and 0 or 1 }, 0.25)
 					end
 					function item.SetUserId(...)
 						local id = unself(item, ...)
 						if id == item._userId then return end
 						item._userId = id
-						if id then avatarOf(id, function(url) if av.Parent and item._userId == id then av.Image = url end end) end
+						if id then
+							avatarOf(id, function(url)
+								if av.Parent and item._userId == id then
+									av.Image = url
+									fadeInImage(av)
+								end
+							end)
+						end
 					end
 					function item.SetImage(...)
 						local v = unself(item, ...)
@@ -31359,32 +31643,69 @@ do
 						av.Visible = true
 					end
 					function item.Destroy()
-						pcall(function() row:Destroy() end)
+						if item._dead then return end
+						item._dead = true
 						if item.Key ~= nil and col._byKey[item.Key] == item then col._byKey[item.Key] = nil end
 						for i, x in ipairs(col.Items) do if x == item then table.remove(col.Items, i) break end end
 						refreshEmpty()
+						if animating() and wrap.Parent then   -- la ligne glisse, s'efface, puis la liste se referme sans saut
+							fadeTo(wrap, 1, 0.2)
+							tween(row, { Position = UDim2.fromOffset(-16, 0) }, 0.25)
+							tween(wrap, { Size = UDim2.new(1, 0, 0, 0) }, 0.3)
+							task.delay(0.34 / speedDiv(), function() pcall(function() wrap:Destroy() end) end)
+						else
+							pcall(function() wrap:Destroy() end)
+						end
 					end
-					item.SetTitle(io.Title or io.Name or "")
-					item.SetSubtitle(io.Subtitle or "")
-					item.SetBadge(io.Badge, io.BadgeColor)
-					if io.Highlight then item.SetHighlight(true) end
+					-- premier remplissage : valeurs posées d'un coup (l'apparition de la ligne s'en charge ensuite)
+					it.Text = tostring(io.Title or io.Name or "")
+					isub.Text = tostring(io.Subtitle or "")
+					do
+						local bt = io.Badge
+						if bt ~= nil and bt ~= "" then
+							local bc = asColor(io.BadgeColor) or T.Accent
+							local w = math.floor(measureText(tostring(bt), 11, (ovFamilyFonts() or BASE_FONTS)[3]).X) + 26
+							badge.Text, badge.BackgroundColor3, badge.TextColor3 = tostring(bt), bc, bc:Lerp(WHITE, 0.45)
+							badge.Size = UDim2.fromOffset(w, 22)
+							badge.Visible = true
+							it.Size = UDim2.new(1, -(66 + w + 22), 0, 20)
+						end
+					end
+					if io.Highlight then
+						item._hl = true
+						row:SetAttribute("OvHl", true)
+						row.BackgroundTransparency = baseTr()
+						hlBar.BackgroundTransparency = 0
+					end
 					if io.UserId then item.SetUserId(io.UserId) elseif io.Image or io.Icon then item.SetImage(io.Image or io.Icon) end
 					col.Items[#col.Items + 1] = item
 					if item.Key ~= nil then col._byKey[item.Key] = item end
 					refreshEmpty()
+					if animating() then   -- apparition : fondu + petit glissement, en cascade quand plusieurs lignes arrivent ensemble
+						setGT(wrap, 1)
+						row.Position = UDim2.fromOffset(18, 0)
+						task.delay((tonumber(io._delay) or 0) / speedDiv(), function()
+							if not wrap.Parent or item._dead then return end
+							fadeTo(wrap, 0, 0.3)
+							tween(row, { Position = UDim2.fromOffset(0, 0) }, 0.4)
+						end)
+					end
 					return item
 				end
 
 				function col:SyncItems(items)
 					local seen = {}
+					local added = 0
 					for i, io in ipairs(items or {}) do
 						local key = io.Key ~= nil and io.Key or ("#" .. i)
 						seen[key] = true
 						local it2 = self._byKey[key]
 						if not it2 then
 							io.Key = key
+							io._delay = math.min(added * 0.04, 0.4)
+							added += 1
 							it2 = self:AddItem(io)
-							it2._title, it2._sub, it2._badge, it2._badgeC, it2._hl = io.Title, io.Subtitle, io.Badge, io.BadgeColor, io.Highlight
+							it2._title, it2._sub, it2._badge, it2._badgeC, it2._hl2 = io.Title, io.Subtitle, io.Badge, io.BadgeColor, io.Highlight
 						else
 							if it2._title ~= io.Title then it2._title = io.Title it2.SetTitle(io.Title or "") end
 							if it2._sub ~= io.Subtitle then it2._sub = io.Subtitle it2.SetSubtitle(io.Subtitle or "") end
@@ -31392,7 +31713,7 @@ do
 								it2._badge, it2._badgeC = io.Badge, io.BadgeColor
 								it2.SetBadge(io.Badge, io.BadgeColor)
 							end
-							if it2._hl ~= io.Highlight then it2._hl = io.Highlight it2.SetHighlight(io.Highlight == true) end
+							if it2._hl2 ~= io.Highlight then it2._hl2 = io.Highlight it2.SetHighlight(io.Highlight == true) end
 							if io.UserId then it2.SetUserId(io.UserId) end
 						end
 						it2.Frame.LayoutOrder = 1000 + i
@@ -31400,6 +31721,7 @@ do
 					for key, it2 in pairs(self._byKey) do
 						if not seen[key] then it2.Destroy() end
 					end
+					if #reg > 500 or #sty > 200 then prune() end
 					refreshEmpty()
 				end
 
@@ -31408,21 +31730,26 @@ do
 					local l = new("TextLabel", { Name = "Label", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
 						Text = tostring(text or ""), TextWrapped = true, TextSize = tonumber(lo.TextSize) or 13, Font = F_REG, TextXAlignment = LEFT,
 						LayoutOrder = nextOrder() }, list)
+					new("UIPadding", { PaddingBottom = UDim.new(0, ITEM_GAP) }, l)
 					tc(l, "TextColor3", "Text")
 					if asColor(lo.Color) then l.TextColor3 = lo.Color end
-					return { SetText = function(...) l.Text = tostring((unself(l, ...)) or "") end, Frame = l }
+					return { SetText = function(...) swapText(l, tostring((unself(l, ...)) or "")) end, Frame = l }
 				end
 
 				function col:AddDivider()
-					local d = new("Frame", { Name = "Divider", Size = UDim2.new(1, 0, 0, 1), BackgroundTransparency = 0.9, BorderSizePixel = 0,
-						LayoutOrder = nextOrder() }, list)
+					local s = slot(1)
+					local d = new("Frame", { Name = "Divider", Position = UDim2.fromOffset(0, 0), Size = UDim2.new(1, 0, 0, 1), BackgroundTransparency = 0.9,
+						BorderSizePixel = 0 }, s)
 					tc(d, "BackgroundColor3", "Text")
-					return d
+					return s
 				end
 
 				-- bouton dans la liste (défile avec elle)
 				function col:AddButton(bo)
-					return makeButton(list, bo, { Full = true, Height = 40, Order = nextOrder() })
+					local s = slot(40)
+					local b = makeButton(s, bo, { Full = true, Height = 40 })
+					function b.Destroy() pcall(function() s:Destroy() end) end
+					return b
 				end
 				-- bouton fixe en bas de la colonne (toujours visible)
 				function col:AddFooterButton(bo)
@@ -31435,11 +31762,12 @@ do
 				function col:AddToggle(to)
 					to = type(to) == "table" and to or { Name = tostring(to) }
 					local on = to.Default == true
+					local s = slot(42)
 					local row = new("TextButton", { Name = "Toggle", Size = UDim2.new(1, 0, 0, 42), BackgroundTransparency = 0.5, BorderSizePixel = 0,
-						Text = "", AutoButtonColor = false, LayoutOrder = nextOrder() }, list)
-					tc(row, "BackgroundColor3", "Panel")
+						Text = "", AutoButtonColor = false }, s)
+					tc(row, "BackgroundColor3", "Element")
 					corner(row, 10)
-					stroke(row, 0.9)
+					st(row, "row")
 					tc(new("TextLabel", { Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -70, 1, 0), BackgroundTransparency = 1,
 						Text = tostring(to.Name or to.Text or ""), TextSize = 14, Font = F_MED, TextXAlignment = LEFT, TextTruncate = NONE_TR }, row), "TextColor3", "Text")
 					local sw = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(40, 22),
@@ -31453,8 +31781,8 @@ do
 						local bg = on and T.Accent or T.Off
 						local pos = on and UDim2.new(1, -19, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
 						if anim then
-							tween(sw, { BackgroundColor3 = bg }, 0.15)
-							tween(knob, { Position = pos }, 0.15)
+							tween(sw, { BackgroundColor3 = bg }, 0.2)
+							tween(knob, { Position = pos }, 0.22)
 						else
 							sw.BackgroundColor3, knob.Position = bg, pos
 						end
@@ -31467,7 +31795,12 @@ do
 						paint(true)
 						fire(to.Callback, on)
 					end
-					row.MouseButton1Click:Connect(function() tg.Set(not on) end)
+					row.MouseEnter:Connect(function() tween(row, { BackgroundTransparency = math.max(styleTr("row") - 0.12, 0) }, 0.12) end)
+					row.MouseLeave:Connect(function() tween(row, { BackgroundTransparency = styleTr("row") }, 0.2) end)
+					row.MouseButton1Click:Connect(function()
+						uiSnd(on and "off" or "on")
+						tg.Set(not on)
+					end)
 					return tg
 				end
 
@@ -31564,8 +31897,12 @@ do
 			end
 
 			-- ================= en-tête / ouverture / fermeture =================
-			function OV:SetTitle(...) title.Text = tostring((unself(self, ...)) or "") layoutHead() end
-			function OV:SetSubtitle(...) sub.Text = tostring((unself(self, ...)) or "") sub.Visible = sub.Text ~= "" layoutHead() end
+			function OV:SetTitle(...) swapText(title, tostring((unself(self, ...)) or ""), layoutHead) end
+			function OV:SetSubtitle(...)
+				local t = tostring((unself(self, ...)) or "")
+				sub.Visible = t ~= ""
+				swapText(sub, t, layoutHead)
+			end
 			function OV:SetIcon(...)
 				local v = unself(self, ...)
 				tile.Visible = setPic(icon, v)
@@ -31586,23 +31923,40 @@ do
 			function OV:IsOpen() return self._open end
 			function OV:Open()
 				if self._open then return end
-				self._open = true
-				repaint()
+				repaint(false)                                  -- _open est encore faux : tout est posé d'un coup (couleurs du thème à jour)
 				root.Visible = true
-				root.GroupTransparency = 1
-				sc.Scale = 1                                   -- pas de zoom : l'échelle qui bouge faisait regrossir les éléments de 1 px à la fin
-				root.Position = UDim2.fromOffset(0, 10)        -- on glisse seulement (n'affecte pas les tailles)
-				tween(root, { GroupTransparency = 0, Position = UDim2.fromOffset(0, 0) }, 0.25)
+				setGT(root, 1)
+				root.Position = UDim2.fromOffset(0, 12)         -- on glisse seulement (aucun zoom : ça faisait regrossir les éléments de 1 px)
+				self._open = true
+				tween(root, { Position = UDim2.fromOffset(0, 0) }, 0.4)
+				fadeTo(root, 0, 0.28)
 				relayout(true)
 				layoutHead()
-				task.defer(function() relayout(true) layoutHead() end)
+				local c = OV._sel
+				if c and Library.Animations then                -- la page choisie arrive en douceur, un peu après le fond
+					c._tok = (c._tok or 0) + 1
+					c.Frame.Visible = true
+					c.Frame.Position = UDim2.fromOffset(SLIDE * 0.7, 0)
+					setGT(c.Frame, 1)
+					tween(c.Frame, { Position = UDim2.fromOffset(0, 0) }, 0.5)
+					fadeTo(c.Frame, 0, 0.42)
+				end
+				task.defer(function()
+					relayout(true)
+					layoutHead()
+					movePill(false)
+					revealTab(OV._sel)
+				end)
+				task.delay(0.12, function() if OV._open then movePill(false) end end)
+				startWatch()
 				fire(o.OnOpen, self)
 			end
 			function OV:Close()
 				if not self._open then return end
 				self._open = false
-				tween(root, { GroupTransparency = 1, Position = UDim2.fromOffset(0, 6) }, 0.2)
-				task.delay(0.24, function()
+				tween(root, { Position = UDim2.fromOffset(0, 8) }, 0.25)
+				fadeTo(root, 1, 0.22)
+				task.delay(0.28 / speedDiv(), function()
 					if not self._open and root.Parent then root.Visible = false end
 				end)
 				fire(o.OnClose, self)
