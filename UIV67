@@ -7,6 +7,8 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.31 — Paramètres > Apparence > « Tableaux : police » (Library:SetOverlayFont(nom | "Auto")).
+	V9.31 — OVERLAY refait (grand en-tête, vraie croix, colonnes en cartes, boutons : ov:AddHeaderButton · col:AddFooterButton · item.SetHighlight).
 	V9.30 — PANNEAU PLEIN FENÊTRE (OVERLAY) : win:CreateOverlay({ Title, Subtitle, Icon }) ouvre en fondu un grand panneau qui recouvre toute la fenêtre,
 		  avec des colonnes (en-tête : grande icône + titre + statut) contenant des listes (photo de profil, pseudo, badge), labels, boutons, toggles.
 		  ov:Open / Close / Toggle · ov:AddColumn · col:AddItem / SyncItems · ov:SyncColumns (rafraîchissement en direct sans tout recréer). Voir « 2b) OVERLAY ».
@@ -6638,6 +6640,7 @@ function Library:SetFont(name)
 			end
 		end
 	end
+	if Library._applyOverlayFonts then Library._applyOverlayFonts() end   -- les tableaux gardent leur propre police
 end
 
 -- ---------------------------------------------------------------------------
@@ -21441,6 +21444,12 @@ function Window:CreateSettingsTab(name, icon, docked)
 		Default = pct(Library.FontScale), Callback = function(v) Library:SetFontScale(v / 100) end })
 	A:CreateDropdown({ Name = "Police", Flag = "ui.fontfamily", Items = Library.FontFamilies, Search = false,
 		Default = Library.FontFamily, Callback = function(v) Library:SetFont(v) end })
+	local ovFonts = { "Auto" }
+	for _, f in ipairs(Library.FontFamilies) do ovFonts[#ovFonts + 1] = f end
+	A:CreateDropdown({ Name = "Tableaux : police", Flag = "ui.overlayfont", Items = ovFonts, Search = false,
+		Default = Library.OverlayFont or "Auto",
+		Tooltip = "Police des grands tableaux (Plot View, etc.). Auto = la même police que le reste de l'interface.",
+		Callback = function(v) if Library.SetOverlayFont then Library:SetOverlayFont(v) else Library.OverlayFont = v end end })
 	A:CreateToggle({ Name = "Afficher la méthode sur les toggles", Flag = "ui.methodbadges", Default = Library.MethodBadges ~= false,
 		Tooltip = "Affiche à côté du nom d'un toggle la méthode actuellement choisie (ex. : Slide [Patinoire]).",
 		Callback = function(v) Library:SetMethodBadges(v) end })
@@ -30788,17 +30797,119 @@ do
 		local NONE_TR = Enum.TextTruncate.AtEnd
 		local CENTERX = Enum.TextXAlignment.Center
 
+		-- police des tableaux (Paramètres > Apparence > « Tableaux : police ») : « Auto » = la police de l'interface
+		Library.OverlayFont = Library.OverlayFont or "Auto"
+		local ovRoots = {}
+		local BASE_FONTS = { F_REG, F_MED, F_BOLD }
+		local function ovFamilyFonts()
+			local fam = Library.OverlayFont ~= "Auto" and FONT_FAMILIES[Library.OverlayFont]
+			if not fam then return nil end
+			local out = {}
+			for i = 1, 3 do
+				local ok, f = pcall(function() return Enum.Font[fam[i]] end)
+				out[i] = (ok and f) or BASE_FONTS[i]
+			end
+			return out
+		end
+		local function ovApply(d, fonts)
+			if TEXTCLASS[d.ClassName] then
+				local r = d:GetAttribute("FontRole")
+				if r then d.Font = (fonts and fonts[r]) or (Library.Fonts and Library.Fonts[r]) or BASE_FONTS[r] end
+			end
+		end
+		function Library._applyOverlayFonts()
+			local fonts = ovFamilyFonts()
+			for i = #ovRoots, 1, -1 do
+				local r = ovRoots[i]
+				if r.Parent then
+					for _, d in ipairs(r:GetDescendants()) do ovApply(d, fonts) end
+				else
+					table.remove(ovRoots, i)
+				end
+			end
+		end
+		function Library:SetOverlayFont(name)
+			if name ~= "Auto" and not FONT_FAMILIES[name] then return end
+			Library.OverlayFont = name
+			Library._applyOverlayFonts()
+		end
+
 		function Window:CreateOverlay(o)
 			o = type(o) == "table" and o or {}
 			local main = self.Main
 			if not main then warn("[Ui-Lib] CreateOverlay : fenêtre introuvable") return nil end
 			local OV = { Columns = {}, _open = false }
-			local GAP = tonumber(o.Gap) or 10
+			local GAP = tonumber(o.Gap) or 14
+			local ISZ = Library.IconSize or 22          -- règle de la lib : toutes les icônes font 22 x 22
+			local HEAD_H = 78
+			local WHITE = Color3.new(1, 1, 1)
 			local reg = {}
 			local function tc(inst, prop, key)
 				inst[prop] = T[key]
 				reg[#reg + 1] = { inst, prop, key }
 				return inst
+			end
+			-- pose une icône (Lucide / asset) ; retourne false (et cache l'image) si introuvable
+			local function setPic(img, v)
+				if v == nil or v == false or v == "" then img.Image = "" img.Visible = false return false end
+				local url, off, sz = Library.ResolveIcon(v)
+				if not url then img.Image = "" img.Visible = false return false end
+				img.Image = url
+				img.ImageRectOffset = off or Vector2.new(0, 0)
+				img.ImageRectSize = sz or Vector2.new(0, 0)
+				img.ImageColor3 = isLucide(v) and T.Text or WHITE
+				img.Visible = true
+				return true
+			end
+
+			-- bouton générique (en-tête, pied de colonne, corps de colonne) : icône 22 px + texte, survol, désactivable
+			local function makeButton(parent, bo, opt)
+				bo = type(bo) == "table" and bo or { Name = tostring(bo) }
+				opt = opt or {}
+				local h = tonumber(opt.Height) or 40
+				local primary, danger = bo.Primary == true, bo.Danger == true
+				local base = (primary or danger) and 0.05 or 0.3
+				local btn = new("TextButton", { Name = "Button", Size = opt.Full and UDim2.new(1, 0, 0, h) or UDim2.fromOffset(100, h),
+					BackgroundTransparency = base, Text = "", AutoButtonColor = false, BorderSizePixel = 0,
+					LayoutOrder = tonumber(bo.Order) or tonumber(opt.Order) or 0 }, parent)
+				if danger then btn.BackgroundColor3 = RED else tc(btn, "BackgroundColor3", primary and "Accent" or "Element") end
+				corner(btn, 10)
+				if not (primary or danger) then stroke(btn, 0.88) end
+				new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = BYORDER,
+					HorizontalAlignment = CENTERX, VerticalAlignment = Enum.VerticalAlignment.Center }, btn)
+				local fgKey = (primary and not danger) and "Main" or "Text"
+				local ic = new("ImageLabel", { Name = "Icon", Size = UDim2.fromOffset(ISZ, ISZ), BackgroundTransparency = 1,
+					ScaleType = Enum.ScaleType.Fit, LayoutOrder = 1, Visible = false }, btn)
+				local lb = tc(new("TextLabel", { Name = "Text", Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X,
+					BackgroundTransparency = 1, Text = "", TextSize = tonumber(opt.TextSize) or 14, Font = F_BOLD, LayoutOrder = 2 }, btn),
+					"TextColor3", fgKey)
+				local b = { Frame = btn, _on = true }
+				local function fit()
+					if opt.Full then return end
+					local w = math.floor(measureText(lb.Text, tonumber(opt.TextSize) or 14, (ovFamilyFonts() or BASE_FONTS)[3]).X) + 34 + (ic.Visible and (ISZ + 8) or 0)
+					btn.Size = UDim2.fromOffset(math.max(tonumber(opt.MinWidth) or 96, w), h)
+				end
+				function b.SetText(...) lb.Text = tostring((unself(b, ...)) or "") lb.Visible = lb.Text ~= "" fit() end
+				function b.SetIcon(...)
+					local v = unself(b, ...)
+					if setPic(ic, v) then tc(ic, "ImageColor3", fgKey) end
+					fit()
+				end
+				function b.SetEnabled(...)
+					local v = unself(b, ...)
+					b._on = v ~= false
+					tween(btn, { BackgroundTransparency = b._on and base or math.min(base + 0.35, 0.9) }, 0.15)
+					lb.TextTransparency = b._on and 0 or 0.55
+					ic.ImageTransparency = b._on and 0 or 0.55
+				end
+				function b.Destroy() pcall(function() btn:Destroy() end) end
+				b.SetText(bo.Name or bo.Text or "Button")
+				b.SetIcon(bo.Icon)
+				if bo.Enabled == false then b.SetEnabled(false) end
+				btn.MouseEnter:Connect(function() if b._on then tween(btn, { BackgroundTransparency = math.max(base - 0.15, 0) }, 0.12) end end)
+				btn.MouseLeave:Connect(function() if b._on then tween(btn, { BackgroundTransparency = base }, 0.12) end end)
+				btn.MouseButton1Click:Connect(function() if b._on then fire(bo.Callback, b) end end)
+				return b
 			end
 
 			local root = new("CanvasGroup", {
@@ -30809,47 +30920,83 @@ do
 			local rc = new("UICorner", { CornerRadius = UDim.new(0, 14) }, root)
 			local sc = new("UIScale", { Scale = 0.97 }, root)
 			OV.Gui = root
+			ovRoots[#ovRoots + 1] = root
+			track(root.DescendantAdded:Connect(function(d)
+				if Library.OverlayFont ~= "Auto" then ovApply(d, ovFamilyFonts()) end
+			end))
 
-			-- en-tête
-			local head = new("Frame", { Name = "Head", Size = UDim2.new(1, 0, 0, 58), BackgroundTransparency = 1 }, root)
-			local icon = new("ImageLabel", { Name = "Icon", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 18, 0.5, 0),
-				Size = UDim2.fromOffset(Library.IconSize, Library.IconSize), BackgroundTransparency = 1, ScaleType = Enum.ScaleType.Fit, Visible = false }, head)
-			local title = tc(new("TextLabel", { Name = "Title", Size = UDim2.new(1, -80, 0, 24), BackgroundTransparency = 1, Text = "",
-				TextSize = 18, Font = F_BOLD, TextXAlignment = LEFT, TextTruncate = NONE_TR }, head), "TextColor3", "Text")
-			local sub = tc(new("TextLabel", { Name = "Subtitle", Size = UDim2.new(1, -80, 0, 16), BackgroundTransparency = 1, Text = "",
-				TextSize = 12, Font = F_REG, TextXAlignment = LEFT, TextTruncate = NONE_TR }, head), "TextColor3", "ElementAccent")
-			local function layoutHead()
-				local x = icon.Visible and (18 + Library.IconSize + 10) or 18
-				local hasSub = sub.Text ~= ""
-				title.Position = UDim2.fromOffset(x, hasSub and 9 or 17)
-				sub.Position = UDim2.fromOffset(x, 33)
-				title.Size = UDim2.new(1, -(x + 62), 0, 24)
-				sub.Size = UDim2.new(1, -(x + 62), 0, 16)
-			end
-			local closeBtn = new("TextButton", { Name = "Close", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
-				Size = UDim2.fromOffset(34, 34), BackgroundTransparency = 0.5, Text = "✕", TextSize = 16, Font = F_BOLD,
-				AutoButtonColor = false, BorderSizePixel = 0 }, head)
+			-- ================= en-tête =================
+			local head = new("Frame", { Name = "Head", Size = UDim2.new(1, 0, 0, HEAD_H), BackgroundTransparency = 1 }, root)
+			local tile = new("Frame", { Name = "IconTile", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 20, 0.5, 0),
+				Size = UDim2.fromOffset(46, 46), BackgroundTransparency = 0.35, BorderSizePixel = 0, Visible = false }, head)
+			tc(tile, "BackgroundColor3", "Element")
+			corner(tile, 12)
+			stroke(tile, 0.88)
+			local icon = new("ImageLabel", { Name = "Icon", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(ISZ, ISZ), BackgroundTransparency = 1, ScaleType = Enum.ScaleType.Fit }, tile)
+			local title = tc(new("TextLabel", { Name = "Title", Size = UDim2.new(1, -80, 0, 28), BackgroundTransparency = 1, Text = "",
+				TextSize = 22, Font = F_BOLD, TextXAlignment = LEFT, TextTruncate = NONE_TR }, head), "TextColor3", "Text")
+			local sub = tc(new("TextLabel", { Name = "Subtitle", Size = UDim2.new(1, -80, 0, 18), BackgroundTransparency = 1, Text = "",
+				TextSize = 13, Font = F_REG, TextXAlignment = LEFT, TextTruncate = NONE_TR }, head), "TextColor3", "ElementAccent")
+
+			-- actions à droite : boutons perso puis la croix
+			local actions = new("Frame", { Name = "Actions", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -18, 0.5, 0),
+				Size = UDim2.fromOffset(0, 42), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1 }, head)
+			new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = BYORDER,
+				HorizontalAlignment = Enum.HorizontalAlignment.Right, VerticalAlignment = Enum.VerticalAlignment.Center }, actions)
+
+			local closeBtn = new("TextButton", { Name = "Close", Size = UDim2.fromOffset(42, 42), BackgroundTransparency = 0.35, Text = "",
+				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = 1000 }, actions)
 			tc(closeBtn, "BackgroundColor3", "Element")
-			tc(closeBtn, "TextColor3", "Text")
-			corner(closeBtn, 10)
-			closeBtn.MouseEnter:Connect(function() tween(closeBtn, { BackgroundTransparency = 0.2 }, 0.12) end)
-			closeBtn.MouseLeave:Connect(function() tween(closeBtn, { BackgroundTransparency = 0.5 }, 0.12) end)
-			local sep = new("Frame", { Name = "Sep", Position = UDim2.fromOffset(0, 58), Size = UDim2.new(1, 0, 0, 1),
-				BackgroundTransparency = 0.92, BorderSizePixel = 0 }, root)
+			corner(closeBtn, 12)
+			stroke(closeBtn, 0.88)
+			local closeIcon = new("ImageLabel", { Name = "Icon", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(ISZ, ISZ), BackgroundTransparency = 1, ScaleType = Enum.ScaleType.Fit, Visible = false }, closeBtn)
+			local crossParts = {}
+			for _, rot in ipairs({ 45, -45 }) do   -- croix dessinée : sert de secours si l'icône Lucide n'est pas disponible
+				local bar = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(18, 2.5),
+					Rotation = rot, BorderSizePixel = 0 }, closeBtn)
+				tc(bar, "BackgroundColor3", "Text")
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
+				crossParts[#crossParts + 1] = bar
+			end
+			local function paintClose()
+				local ok = setPic(closeIcon, "x") or setPic(closeIcon, "x-circle")
+				if ok then closeIcon.ImageColor3 = T.Text end
+				for _, p in ipairs(crossParts) do p.Visible = not ok end
+			end
+			paintClose()
+			closeBtn.MouseEnter:Connect(function() tween(closeBtn, { BackgroundColor3 = RED, BackgroundTransparency = 0.1 }, 0.12) end)
+			closeBtn.MouseLeave:Connect(function() tween(closeBtn, { BackgroundColor3 = T.Element, BackgroundTransparency = 0.35 }, 0.12) end)
+
+			local function ups() return pxScale() * sc.Scale end   -- échelle réelle (fenêtre x petite animation d'ouverture)
+			local function layoutHead()
+				local x = tile.Visible and (20 + 46 + 14) or 22
+				local hasSub = sub.Text ~= ""
+				local aw = math.floor(actions.AbsoluteSize.X / ups() + 0.5)
+				local w = -(x + aw + 30)
+				title.Position = UDim2.fromOffset(x, hasSub and 14 or 25)
+				sub.Position = UDim2.fromOffset(x, 43)
+				title.Size = UDim2.new(1, w, 0, 28)
+				sub.Size = UDim2.new(1, w, 0, 18)
+			end
+			track(actions:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutHead))
+
+			local sep = new("Frame", { Name = "Sep", Position = UDim2.fromOffset(0, HEAD_H), Size = UDim2.new(1, 0, 0, 1),
+				BackgroundTransparency = 0.9, BorderSizePixel = 0 }, root)
 			tc(sep, "BackgroundColor3", "Text")
 
-			-- zone des colonnes (défile à l'horizontale si les colonnes sont trop étroites)
-			local cont = new("ScrollingFrame", { Name = "Columns", Position = UDim2.fromOffset(16, 72), Size = UDim2.new(1, -32, 1, -88),
-				BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4, CanvasSize = UDim2.new(),
+			-- ================= zone des colonnes (défile à l'horizontale si trop étroit) =================
+			local cont = new("ScrollingFrame", { Name = "Columns", Position = UDim2.fromOffset(18, HEAD_H + 16), Size = UDim2.new(1, -36, 1, -(HEAD_H + 34)),
+				BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 5, CanvasSize = UDim2.new(),
 				AutomaticCanvasSize = Enum.AutomaticSize.X, ScrollingDirection = Enum.ScrollingDirection.X,
 				ElasticBehavior = Enum.ElasticBehavior.Never }, root)
 			tc(cont, "ScrollBarImageColor3", "Accent")
 			new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, GAP), SortOrder = BYORDER }, cont)
 			local empty = tc(new("TextLabel", { Name = "Empty", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromOffset(300, 24), BackgroundTransparency = 1, Text = tostring(o.EmptyText or "Rien à afficher"),
-				TextSize = 14, Font = F_REG, TextTransparency = 0.3 }, root), "TextColor3", "ElementAccent")
+				Size = UDim2.fromOffset(320, 26), BackgroundTransparency = 1, Text = tostring(o.EmptyText or "Rien à afficher"),
+				TextSize = 15, Font = F_REG, TextTransparency = 0.3 }, root), "TextColor3", "ElementAccent")
 
-			local function ups() return pxScale() * sc.Scale end   -- échelle réelle (fenêtre x petite animation d'ouverture)
 			local lastN, lastW, lastH = -1, -1, -1
 			local function relayout(force)
 				local n = #OV.Columns
@@ -30858,8 +31005,8 @@ do
 				local ps = ups()
 				local aw, ah = cont.AbsoluteSize.X / ps, cont.AbsoluteSize.Y / ps
 				if aw < 10 or ah < 10 then return end
-				local h = math.max(80, math.floor(ah - 8))
-				local minW = tonumber(o.MinColumnWidth) or 170
+				local h = math.max(120, math.floor(ah - 10))
+				local minW = tonumber(o.MinColumnWidth) or 220
 				local w = math.floor((aw - GAP * (n - 1)) / n)
 				if w < minW then w = minW end
 				-- rien à refaire si les dimensions n'ont pas bougé (évite du travail à chaque image pendant le fondu)
@@ -30876,52 +31023,88 @@ do
 				end
 				local mc = main:FindFirstChildOfClass("UICorner")
 				if mc then rc.CornerRadius = mc.CornerRadius end
+				paintClose()
 			end
 
-			-- ---------------- colonnes ----------------
+			-- ================= colonnes =================
 			local function buildColumn(co)
 				co = type(co) == "table" and co or { Title = tostring(co) }
-				local col = { Key = co.Key, Items = {}, _byKey = {}, _n = 0 }
-				local fr = new("Frame", { Name = "Column", Size = UDim2.fromOffset(200, 300), BackgroundTransparency = 0.45, BorderSizePixel = 0 }, cont)
+				local col = { Key = co.Key, Items = {}, _byKey = {}, _n = 0, Footer = {} }
+				local fr = new("Frame", { Name = "Column", Size = UDim2.fromOffset(240, 300), BackgroundTransparency = 0.45, BorderSizePixel = 0 }, cont)
 				tc(fr, "BackgroundColor3", "Element")
-				corner(fr, 12)
-				stroke(fr, 0.85)
+				corner(fr, 14)
+				stroke(fr, 0.86)
 				col.Frame = fr
 
-				local ch = new("Frame", { Name = "Head", Position = UDim2.fromOffset(10, 10), Size = UDim2.new(1, -20, 0, 0),
+				-- en-tête de colonne : grande image, nom, pastille de statut
+				local ch = new("Frame", { Name = "Head", Position = UDim2.fromOffset(14, 16), Size = UDim2.new(1, -28, 0, 0),
 					AutomaticSize = AY, BackgroundTransparency = 1 }, fr)
-				new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = BYORDER, HorizontalAlignment = Enum.HorizontalAlignment.Center }, ch)
-				local psz = tonumber(co.IconSize) or 72
+				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER, HorizontalAlignment = Enum.HorizontalAlignment.Center }, ch)
+				local psz = tonumber(co.IconSize) or 96
 				local pic = new("ImageLabel", { Name = "Pic", Size = UDim2.fromOffset(psz, psz), BackgroundTransparency = 1,
 					ScaleType = Enum.ScaleType.Fit, LayoutOrder = 1, Visible = false }, ch)
 				local ct = tc(new("TextLabel", { Name = "Title", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
-					Text = "", TextWrapped = true, TextSize = 16, Font = F_BOLD, LayoutOrder = 2 }, ch), "TextColor3", "Text")
-				local cs = tc(new("TextLabel", { Name = "Subtitle", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
-					Text = "", TextWrapped = true, TextSize = 12, Font = F_MED, LayoutOrder = 3 }, ch), "TextColor3", "ElementAccent")
-				local div = new("Frame", { Name = "Div", Size = UDim2.new(1, -20, 0, 1), BackgroundTransparency = 0.92, BorderSizePixel = 0 }, fr)
+					Text = "", TextWrapped = true, TextSize = 19, Font = F_BOLD, LayoutOrder = 2 }, ch), "TextColor3", "Text")
+				local pill = new("Frame", { Name = "Status", Size = UDim2.fromOffset(0, 24), AutomaticSize = Enum.AutomaticSize.X,
+					BackgroundTransparency = 0.82, BorderSizePixel = 0, LayoutOrder = 3, Visible = false }, ch)
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, pill)
+				new("UIPadding", { PaddingLeft = UDim.new(0, 11), PaddingRight = UDim.new(0, 12) }, pill)
+				new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 7), SortOrder = BYORDER,
+					VerticalAlignment = Enum.VerticalAlignment.Center }, pill)
+				local dot = new("Frame", { Name = "Dot", Size = UDim2.fromOffset(8, 8), BorderSizePixel = 0, LayoutOrder = 1 }, pill)
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+				local cs = new("TextLabel", { Name = "Text", Size = UDim2.fromOffset(0, 24), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1,
+					Text = "", TextSize = 12, Font = F_BOLD, LayoutOrder = 2 }, pill)
+
+				local div = new("Frame", { Name = "Div", Size = UDim2.new(1, -28, 0, 1), BackgroundTransparency = 0.9, BorderSizePixel = 0 }, fr)
 				tc(div, "BackgroundColor3", "Text")
 				local list = new("ScrollingFrame", { Name = "List", BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
 					CanvasSize = UDim2.new(), AutomaticCanvasSize = AY, ScrollingDirection = Enum.ScrollingDirection.Y }, fr)
 				tc(list, "ScrollBarImageColor3", "Accent")
-				new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = BYORDER }, list)
-				new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10), PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 10) }, list)
+				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, list)
+				new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12), PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 12) }, list)
 				col.List = list
+
+				-- boutons fixes en bas de colonne
+				local foot = new("Frame", { Name = "Footer", AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 14, 1, -14),
+					Size = UDim2.new(1, -28, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1 }, fr)
+				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, foot)
+
+				local emptyLbl = tc(new("TextLabel", { Name = "EmptyText", Size = UDim2.new(1, 0, 0, 56), BackgroundTransparency = 1,
+					Text = tostring(co.EmptyText or "Personne ici"), TextSize = 13, Font = F_MED, TextTransparency = 0.35, LayoutOrder = 0 }, list),
+					"TextColor3", "ElementAccent")
+				local function refreshEmpty() emptyLbl.Visible = #col.Items == 0 end
+
 				local function place()
-					local hh = math.floor(ch.AbsoluteSize.Y / ups() + 0.5)
-					div.Position = UDim2.fromOffset(10, 10 + hh + 8)
-					list.Position = UDim2.fromOffset(0, 10 + hh + 18)
-					list.Size = UDim2.new(1, 0, 1, -(10 + hh + 18))
+					local sc2 = ups()
+					local hh = math.floor(ch.AbsoluteSize.Y / sc2 + 0.5)
+					local fh = math.floor(foot.AbsoluteSize.Y / sc2 + 0.5)
+					local top = 16 + hh + 16
+					local bottom = fh > 0 and (fh + 14 + 12) or 0
+					div.Position = UDim2.fromOffset(14, 16 + hh + 8)
+					list.Position = UDim2.fromOffset(0, top)
+					list.Size = UDim2.new(1, 0, 1, -(top + bottom))
 				end
 				track(ch:GetPropertyChangedSignal("AbsoluteSize"):Connect(place))
+				track(foot:GetPropertyChangedSignal("AbsoluteSize"):Connect(place))
 				place()
 
 				function col.SetTitle(...) ct.Text = tostring((unself(col, ...)) or "") end
 				function col.SetSubtitle(...)
 					local t, c = unself(col, ...)
-					cs.Text = tostring(t or "")
-					cs.TextColor3 = asColor(c) or T.ElementAccent
+					t = tostring(t or "")
+					cs.Text = t
+					pill.Visible = t ~= ""
+					local base = asColor(c) or T.ElementAccent
+					pill.BackgroundColor3 = base
+					dot.BackgroundColor3 = base
+					cs.TextColor3 = base:Lerp(WHITE, 0.4)
 				end
-				function col.SetIcon(...) applyPic(pic, (unself(col, ...))) end
+				function col.SetIcon(...)
+					local v = unself(col, ...)
+					if not setPic(pic, v) then return end
+					pic.ImageColor3 = isLucide(v) and T.Text or WHITE
+				end
 				col.SetTitle(co.Title or co.Name or "")
 				col.SetSubtitle(co.Subtitle or "", co.SubtitleColor or co.Color)
 				col.SetIcon(co.Icon or co.Image)
@@ -30932,25 +31115,28 @@ do
 					io = type(io) == "table" and io or { Title = tostring(io) }
 					local item = { Key = io.Key }
 					local clickable = type(io.Callback) == "function"
-					local row = new("TextButton", { Name = "Item", Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 0.5,
+					local row = new("TextButton", { Name = "Item", Size = UDim2.new(1, 0, 0, 64), BackgroundTransparency = 0.5,
 						BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = nextOrder() }, list)
 					tc(row, "BackgroundColor3", "Panel")
-					corner(row, 10)
-					local av = new("ImageLabel", { Name = "Avatar", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0.5, 0),
-						Size = UDim2.fromOffset(36, 36), BackgroundTransparency = 0.3, ScaleType = Enum.ScaleType.Crop }, row)
+					corner(row, 12)
+					local rowStroke = stroke(row, 0.9)
+					local av = new("ImageLabel", { Name = "Avatar", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 10, 0.5, 0),
+						Size = UDim2.fromOffset(44, 44), BackgroundTransparency = 0.3, ScaleType = Enum.ScaleType.Crop }, row)
 					tc(av, "BackgroundColor3", "Element")
 					new("UICorner", { CornerRadius = UDim.new(1, 0) }, av)
-					local it = tc(new("TextLabel", { Name = "Title", Position = UDim2.fromOffset(52, 8), Size = UDim2.new(1, -60, 0, 18),
-						BackgroundTransparency = 1, Text = "", TextSize = 14, Font = F_BOLD, TextXAlignment = LEFT, TextTruncate = NONE_TR }, row), "TextColor3", "Text")
-					local isub = tc(new("TextLabel", { Name = "Sub", Position = UDim2.fromOffset(52, 27), Size = UDim2.new(1, -60, 0, 15),
-						BackgroundTransparency = 1, Text = "", TextSize = 11, Font = F_REG, TextXAlignment = LEFT, TextTruncate = NONE_TR }, row), "TextColor3", "ElementAccent")
-					local badge = new("TextLabel", { Name = "Badge", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -8, 0, 8),
-						Size = UDim2.fromOffset(60, 18), BackgroundTransparency = 0.8, Text = "", TextSize = 10, Font = F_BOLD, Visible = false,
+					local it = tc(new("TextLabel", { Name = "Title", Position = UDim2.fromOffset(64, 11), Size = UDim2.new(1, -74, 0, 20),
+						BackgroundTransparency = 1, Text = "", TextSize = 15, Font = F_BOLD, TextXAlignment = LEFT, TextTruncate = NONE_TR }, row), "TextColor3", "Text")
+					local isub = tc(new("TextLabel", { Name = "Sub", Position = UDim2.fromOffset(64, 33), Size = UDim2.new(1, -74, 0, 18),
+						BackgroundTransparency = 1, Text = "", TextSize = 12, Font = F_REG, TextXAlignment = LEFT, TextTruncate = NONE_TR }, row), "TextColor3", "ElementAccent")
+					local badge = new("TextLabel", { Name = "Badge", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 10),
+						Size = UDim2.fromOffset(60, 22), BackgroundTransparency = 0.78, Text = "", TextSize = 11, Font = F_BOLD, Visible = false,
 						BorderSizePixel = 0 }, row)
 					new("UICorner", { CornerRadius = UDim.new(1, 0) }, badge)
 					item.Frame = row
-					row.MouseEnter:Connect(function() tween(row, { BackgroundTransparency = clickable and 0.25 or 0.4 }, 0.12) end)
-					row.MouseLeave:Connect(function() tween(row, { BackgroundTransparency = 0.5 }, 0.12) end)
+					local base = 0.5
+					local function hover(on) tween(row, { BackgroundTransparency = on and (clickable and 0.2 or 0.38) or base }, 0.12) end
+					row.MouseEnter:Connect(function() hover(true) end)
+					row.MouseLeave:Connect(function() hover(false) end)
 					if clickable then row.MouseButton1Click:Connect(function() fire(io.Callback, item) end) end
 
 					function item.SetTitle(...) it.Text = tostring((unself(item, ...)) or "") end
@@ -30959,17 +31145,23 @@ do
 						local text, color = unself(item, ...)
 						if text == nil or text == "" then
 							badge.Visible = false
-							it.Size = UDim2.new(1, -60, 0, 18)
+							it.Size = UDim2.new(1, -74, 0, 20)
 							return
 						end
 						color = asColor(color) or T.Accent
-						local w = math.floor(measureText(tostring(text), 10, F_BOLD).X) + 18
+						local w = math.floor(measureText(tostring(text), 11, (ovFamilyFonts() or BASE_FONTS)[3]).X) + 26
 						badge.Text = tostring(text)
 						badge.BackgroundColor3 = color
-						badge.TextColor3 = color:Lerp(T.Text, 0.35)
-						badge.Size = UDim2.fromOffset(w, 18)
+						badge.TextColor3 = color:Lerp(WHITE, 0.45)
+						badge.Size = UDim2.fromOffset(w, 22)
 						badge.Visible = true
-						it.Size = UDim2.new(1, -(52 + w + 14), 0, 18)
+						it.Size = UDim2.new(1, -(64 + w + 20), 0, 20)
+					end
+					function item.SetHighlight(...)   -- ex. « toi » : ligne mise en avant
+						local on = unself(item, ...) == true
+						base = on and 0.3 or 0.5
+						rowStroke.Transparency = on and 0.6 or 0.9
+						tween(row, { BackgroundTransparency = base }, 0.12)
 					end
 					function item.SetUserId(...)
 						local id = unself(item, ...)
@@ -30977,18 +31169,26 @@ do
 						item._userId = id
 						if id then avatarOf(id, function(url) if av.Parent and item._userId == id then av.Image = url end end) end
 					end
-					function item.SetImage(...) applyPic(av, (unself(item, ...))) av.Visible = true end
+					function item.SetImage(...)
+						local v = unself(item, ...)
+						if not setPic(av, v) then return end
+						av.ImageColor3 = WHITE
+						av.Visible = true
+					end
 					function item.Destroy()
 						pcall(function() row:Destroy() end)
 						if item.Key ~= nil and col._byKey[item.Key] == item then col._byKey[item.Key] = nil end
 						for i, x in ipairs(col.Items) do if x == item then table.remove(col.Items, i) break end end
+						refreshEmpty()
 					end
 					item.SetTitle(io.Title or io.Name or "")
 					item.SetSubtitle(io.Subtitle or "")
 					item.SetBadge(io.Badge, io.BadgeColor)
+					if io.Highlight then item.SetHighlight(true) end
 					if io.UserId then item.SetUserId(io.UserId) elseif io.Image or io.Icon then item.SetImage(io.Image or io.Icon) end
 					col.Items[#col.Items + 1] = item
 					if item.Key ~= nil then col._byKey[item.Key] = item end
+					refreshEmpty()
 					return item
 				end
 
@@ -31001,6 +31201,7 @@ do
 						if not it2 then
 							io.Key = key
 							it2 = self:AddItem(io)
+							it2._title, it2._sub, it2._badge, it2._badgeC, it2._hl = io.Title, io.Subtitle, io.Badge, io.BadgeColor, io.Highlight
 						else
 							if it2._title ~= io.Title then it2._title = io.Title it2.SetTitle(io.Title or "") end
 							if it2._sub ~= io.Subtitle then it2._sub = io.Subtitle it2.SetSubtitle(io.Subtitle or "") end
@@ -31008,6 +31209,7 @@ do
 								it2._badge, it2._badgeC = io.Badge, io.BadgeColor
 								it2.SetBadge(io.Badge, io.BadgeColor)
 							end
+							if it2._hl ~= io.Highlight then it2._hl = io.Highlight it2.SetHighlight(io.Highlight == true) end
 							if io.UserId then it2.SetUserId(io.UserId) end
 						end
 						it2.Frame.LayoutOrder = 1000 + i
@@ -31015,12 +31217,13 @@ do
 					for key, it2 in pairs(self._byKey) do
 						if not seen[key] then it2.Destroy() end
 					end
+					refreshEmpty()
 				end
 
 				function col:AddLabel(text, lo)
 					lo = type(lo) == "table" and lo or {}
 					local l = new("TextLabel", { Name = "Label", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
-						Text = tostring(text or ""), TextWrapped = true, TextSize = tonumber(lo.TextSize) or 12, Font = F_REG, TextXAlignment = LEFT,
+						Text = tostring(text or ""), TextWrapped = true, TextSize = tonumber(lo.TextSize) or 13, Font = F_REG, TextXAlignment = LEFT,
 						LayoutOrder = nextOrder() }, list)
 					tc(l, "TextColor3", "Text")
 					if asColor(lo.Color) then l.TextColor3 = lo.Color end
@@ -31028,45 +31231,42 @@ do
 				end
 
 				function col:AddDivider()
-					local d = new("Frame", { Name = "Divider", Size = UDim2.new(1, 0, 0, 1), BackgroundTransparency = 0.92, BorderSizePixel = 0,
+					local d = new("Frame", { Name = "Divider", Size = UDim2.new(1, 0, 0, 1), BackgroundTransparency = 0.9, BorderSizePixel = 0,
 						LayoutOrder = nextOrder() }, list)
 					tc(d, "BackgroundColor3", "Text")
 					return d
 				end
 
+				-- bouton dans la liste (défile avec elle)
 				function col:AddButton(bo)
-					bo = type(bo) == "table" and bo or { Name = tostring(bo) }
-					local b = new("TextButton", { Name = "Button", Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 0.35, BorderSizePixel = 0,
-						Text = tostring(bo.Name or bo.Text or "Button"), TextSize = 13, Font = F_BOLD, AutoButtonColor = false,
-						LayoutOrder = nextOrder() }, list)
-					tc(b, "BackgroundColor3", "Element")
-					tc(b, "TextColor3", "Text")
-					corner(b, 10)
-					b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0.15 }, 0.12) end)
-					b.MouseLeave:Connect(function() tween(b, { BackgroundTransparency = 0.35 }, 0.12) end)
-					b.MouseButton1Click:Connect(function() fire(bo.Callback, b) end)
-					return b
+					return makeButton(list, bo, { Full = true, Height = 40, Order = nextOrder() })
+				end
+				-- bouton fixe en bas de la colonne (toujours visible)
+				function col:AddFooterButton(bo)
+					col.Footer[#col.Footer + 1] = true
+					return makeButton(foot, bo, { Full = true, Height = 42, Order = #col.Footer })
 				end
 
 				function col:AddToggle(to)
 					to = type(to) == "table" and to or { Name = tostring(to) }
 					local on = to.Default == true
-					local row = new("TextButton", { Name = "Toggle", Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 0.5, BorderSizePixel = 0,
+					local row = new("TextButton", { Name = "Toggle", Size = UDim2.new(1, 0, 0, 42), BackgroundTransparency = 0.5, BorderSizePixel = 0,
 						Text = "", AutoButtonColor = false, LayoutOrder = nextOrder() }, list)
 					tc(row, "BackgroundColor3", "Panel")
 					corner(row, 10)
-					tc(new("TextLabel", { Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -62, 1, 0), BackgroundTransparency = 1,
-						Text = tostring(to.Name or to.Text or ""), TextSize = 13, Font = F_MED, TextXAlignment = LEFT, TextTruncate = NONE_TR }, row), "TextColor3", "Text")
-					local sw = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -10, 0.5, 0), Size = UDim2.fromOffset(34, 18),
+					stroke(row, 0.9)
+					tc(new("TextLabel", { Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -70, 1, 0), BackgroundTransparency = 1,
+						Text = tostring(to.Name or to.Text or ""), TextSize = 14, Font = F_MED, TextXAlignment = LEFT, TextTruncate = NONE_TR }, row), "TextColor3", "Text")
+					local sw = new("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(40, 22),
 						BorderSizePixel = 0 }, row)
 					new("UICorner", { CornerRadius = UDim.new(1, 0) }, sw)
-					local knob = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Size = UDim2.fromOffset(14, 14), BorderSizePixel = 0 }, sw)
+					local knob = new("Frame", { AnchorPoint = Vector2.new(0, 0.5), Size = UDim2.fromOffset(16, 16), BorderSizePixel = 0 }, sw)
 					tc(knob, "BackgroundColor3", "Text")
 					new("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
 					local tg = { Frame = row }
 					local function paint(anim)
 						local bg = on and T.Accent or T.Off
-						local pos = on and UDim2.new(1, -16, 0.5, 0) or UDim2.new(0, 2, 0.5, 0)
+						local pos = on and UDim2.new(1, -19, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
 						if anim then
 							tween(sw, { BackgroundColor3 = bg }, 0.15)
 							tween(knob, { Position = pos }, 0.15)
@@ -31088,11 +31288,15 @@ do
 
 				function col:Clear()
 					for _, ch2 in ipairs(list:GetChildren()) do
-						if ch2:IsA("GuiObject") then pcall(function() ch2:Destroy() end) end
+						if ch2:IsA("GuiObject") and ch2 ~= emptyLbl then pcall(function() ch2:Destroy() end) end
 					end
 					self.Items, self._byKey, self._n = {}, {}, 0
+					refreshEmpty()
 				end
 				function col:Remove() OV:RemoveColumn(self) end
+
+				for _, bo in ipairs(co.Buttons or {}) do col:AddFooterButton(bo) end
+				refreshEmpty()
 				return col
 			end
 
@@ -31123,7 +31327,7 @@ do
 				relayout(true)
 			end
 			function OV:SyncColumns(list)
-				local seen, order = {}, {}
+				local seen = {}
 				for i, co in ipairs(list or {}) do
 					local key = co.Key ~= nil and co.Key or co.Title or ("#" .. i)
 					seen[key] = true
@@ -31131,6 +31335,7 @@ do
 					if not col then
 						co.Key = key
 						col = self:AddColumn(co)
+						col._title, col._sub, col._subC, col._icon = co.Title, co.Subtitle, (co.SubtitleColor or co.Color), (co.Icon or co.Image)
 					else
 						if col._title ~= co.Title then col._title = co.Title col.SetTitle(co.Title or "") end
 						if col._sub ~= co.Subtitle or col._subC ~= (co.SubtitleColor or co.Color) then
@@ -31140,7 +31345,6 @@ do
 						if col._icon ~= (co.Icon or co.Image) then col._icon = co.Icon or co.Image col.SetIcon(col._icon) end
 					end
 					col.Frame.LayoutOrder = i
-					order[#order + 1] = col
 					if co.Items then col:SyncItems(co.Items) end
 				end
 				for i = #self.Columns, 1, -1 do
@@ -31154,16 +31358,25 @@ do
 				relayout(true)
 			end
 
-			-- ---------------- en-tête / ouverture / fermeture ----------------
+			-- ================= en-tête / ouverture / fermeture =================
 			function OV:SetTitle(...) title.Text = tostring((unself(self, ...)) or "") layoutHead() end
 			function OV:SetSubtitle(...) sub.Text = tostring((unself(self, ...)) or "") sub.Visible = sub.Text ~= "" layoutHead() end
 			function OV:SetIcon(...)
-				applyPic(icon, (unself(self, ...)))
+				local v = unself(self, ...)
+				tile.Visible = setPic(icon, v)
+				if tile.Visible then icon.ImageColor3 = isLucide(v) and T.Text or WHITE end
 				layoutHead()
+			end
+			-- bouton dans l'en-tête, à gauche de la croix : ov:AddHeaderButton({ Name = "Actualiser", Icon = "refresh-cw", Callback = f })
+			function OV:AddHeaderButton(bo)
+				return makeButton(actions, bo, { Height = 42, Order = #actions:GetChildren() })
 			end
 			OV:SetTitle(o.Title or o.Name or "")
 			OV:SetSubtitle(o.Subtitle or "")
 			if o.Icon then OV:SetIcon(o.Icon) end
+			for i, bo in ipairs(o.Buttons or {}) do
+				if type(bo) == "table" then bo.Order = i OV:AddHeaderButton(bo) end
+			end
 
 			function OV:IsOpen() return self._open end
 			function OV:Open()
@@ -31175,7 +31388,7 @@ do
 				sc.Scale = 0.97
 				tween(root, { GroupTransparency = 0 }, 0.25)
 				tween(sc, { Scale = 1 }, 0.25)
-				task.defer(function() relayout(true) end)
+				task.defer(function() relayout(true) layoutHead() end)
 				fire(o.OnOpen, self)
 			end
 			function OV:Close()
