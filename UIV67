@@ -9191,6 +9191,23 @@ function Block:CreateDropdown(o)
 	trackStyled(head, hst, "row")
 	hover(head, hst)
 	local nameL = label(head, o.Name or "Dropdown", 13, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0.5, -12, 1, 0) })
+	-- V9.34 : Icon = "nom-lucide" | "rbxassetid://..." | nombre, à GAUCHE du nom du dropdown (comme Toggle / Button...). Icon = false : aucune.
+	local nameIcon, nameIconW = nil, 0
+	do
+		local want = o.Icon
+		if want == nil then want = Library.IconFor(o.Name) end
+		if want and want ~= false and want ~= "" then
+			local url, off, sz = Library.ResolveIcon(want)
+			if url then
+				local isz = Library.IconSize
+				nameIcon = new("ImageLabel", { Name = "NameIcon", BackgroundTransparency = 1, BorderSizePixel = 0, Active = false,
+					Image = url, ImageRectOffset = off or Vector2.new(0, 0), ImageRectSize = sz or Vector2.new(0, 0), ImageColor3 = T.Text,
+					ScaleType = Enum.ScaleType.Fit, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0, 17),
+					Size = UDim2.fromOffset(isz, isz), ZIndex = nameL.ZIndex }, head)
+				nameIconW = isz + 6
+			end
+		end
+	end
 	local valL = label(head, "", 12, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -34, 0, 0), Size = UDim2.new(0.5, -34, 1, 0),
 		TextXAlignment = RIGHT, TextColor3 = T.ElementAccent, TextTruncate = Enum.TextTruncate.AtEnd })
 	local arrow = label(head, ">", 13, { Position = UDim2.new(1, -26, 0, 0), Size = UDim2.new(0, 16, 1, 0),
@@ -9261,7 +9278,7 @@ function Block:CreateDropdown(o)
 			valL.TextTruncate = Enum.TextTruncate.AtEnd
 			valL.TextXAlignment = RIGHT
 			valL.TextYAlignment = Enum.TextYAlignment.Center
-			local avail = W - 12 - 34 - 8 - headIconW
+			local avail = W - 12 - 34 - 8 - headIconW - nameIconW
 			local nameNeed = measureText(nameL.Text, nameL.TextSize, nameL.Font).X + 2
 			local valNeed = measureText(txt, valL.TextSize, valL.Font).X + 2
 			local valW
@@ -9278,7 +9295,7 @@ function Block:CreateDropdown(o)
 					im.Visible = true
 				end
 			end
-			go(nameL, { Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0, math.max(avail - valW, 20), 1, 0) })
+			go(nameL, { Position = UDim2.new(0, 12 + nameIconW, 0, 0), Size = UDim2.new(0, math.max(avail - valW, 20), 1, 0) })
 			go(valL, { Position = UDim2.new(1, -34 - valW, 0, 0), Size = UDim2.new(0, valW, 1, 0), BackgroundTransparency = 1 })
 			go(boxPad, { PaddingLeft = UDim.new(0, 0), PaddingRight = UDim.new(0, 0), PaddingTop = UDim.new(0, 0), PaddingBottom = UDim.new(0, 0) })
 			headH = 34
