@@ -7,6 +7,8 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.32 — OVERLAY « version C » : dans la zone des blocs (plus toute la fenêtre) · gros titre + description à droite + trait qui s'estompe · un ONGLET par colonne
+		  (TabTitle, compteur) · fiche à gauche (image, nom, statut, Description, Chips = { { Name, Value } }, boutons) modulable : ov:SetSideOrder / ov:SetSideVisible / ov:Select.
 	V9.31 — Rétrécissement doux des colonnes (dernier bloc masqué : le contenu glisse au lieu de sauter) · Library.SoftShrink = false pour couper.
 	V9.31 — Paramètres > Apparence > « Tableaux : police » (Library:SetOverlayFont(nom | "Auto")).
 	V9.31 — OVERLAY refait (grand en-tête, vraie croix, colonnes en cartes, boutons : ov:AddHeaderButton · col:AddFooterButton · item.SetHighlight).
@@ -30906,9 +30908,14 @@ do
 			local main = self.Main
 			if not main then warn("[Ui-Lib] CreateOverlay : fenêtre introuvable") return nil end
 			local OV = { Columns = {}, _open = false }
+			local host = self.Content or main   -- la zone des blocs (et non toute la fenêtre)
+			local SIDE_KEYS = { "image", "name", "status", "desc", "chips", "buttons" }
+			OV._sideOrder, OV._sideHide = o.SideOrder, o.SideHide
 			local GAP = tonumber(o.Gap) or 14
 			local ISZ = Library.IconSize or 22          -- règle de la lib : toutes les icônes font 22 x 22
-			local HEAD_H = 78
+			local HEAD_H = 72
+			local TABS_H = 40
+			local SIDE_W = tonumber(o.SideWidth) or 270
 			local WHITE = Color3.new(1, 1, 1)
 			local reg = {}
 			local function tc(inst, prop, key)
@@ -30982,9 +30989,10 @@ do
 			local root = new("CanvasGroup", {
 				Name = "UiOverlay", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 0.02, BorderSizePixel = 0,
 				ClipsDescendants = true, Visible = false, GroupTransparency = 1, Active = true, ZIndex = 700,
-			}, main)
-			tc(root, "BackgroundColor3", "Main")
-			local rc = new("UICorner", { CornerRadius = UDim.new(0, 14) }, root)
+			}, host)
+			tc(root, "BackgroundColor3", "Panel")
+			local rc = new("UICorner", { CornerRadius = UDim.new(0, 12) }, root)
+			stroke(root, 0.88)
 			local sc = new("UIScale", { Scale = 1 }, root)
 			OV.Gui = root
 			ovRoots[#ovRoots + 1] = root
@@ -31001,10 +31009,11 @@ do
 			stroke(tile, 0.88)
 			local icon = new("ImageLabel", { Name = "Icon", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 				Size = UDim2.fromOffset(ISZ, ISZ), BackgroundTransparency = 1, ScaleType = Enum.ScaleType.Fit }, tile)
-			local title = tc(new("TextLabel", { Name = "Title", Size = UDim2.new(1, -80, 0, 28), BackgroundTransparency = 1, Text = "",
-				TextSize = 22, Font = F_BOLD, TextXAlignment = LEFT, TextTruncate = NONE_TR }, head), "TextColor3", "Text")
-			local sub = tc(new("TextLabel", { Name = "Subtitle", Size = UDim2.new(1, -80, 0, 18), BackgroundTransparency = 1, Text = "",
-				TextSize = 13, Font = F_REG, TextXAlignment = LEFT, TextTruncate = NONE_TR }, head), "TextColor3", "ElementAccent")
+			local title = tc(new("TextLabel", { Name = "Title", Size = UDim2.fromOffset(200, 40), BackgroundTransparency = 1, Text = "",
+				TextSize = 32, Font = F_BOLD, TextXAlignment = LEFT, TextTruncate = NONE_TR }, head), "TextColor3", "Text")
+			local sub = tc(new("TextLabel", { Name = "Description", Size = UDim2.new(1, -80, 1, 0), BackgroundTransparency = 1, Text = "",
+				TextSize = 13, Font = F_REG, TextXAlignment = Enum.TextXAlignment.Right, TextYAlignment = Enum.TextYAlignment.Center,
+				TextWrapped = true }, head), "TextColor3", "ElementAccent")
 
 			-- actions à droite : boutons perso puis la croix
 			local actions = new("Frame", { Name = "Actions", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -18, 0.5, 0),
@@ -31039,57 +31048,77 @@ do
 			local function ups() return pxScale() * sc.Scale end   -- échelle réelle (fenêtre x petite animation d'ouverture)
 			local function layoutHead()
 				local x = tile.Visible and (20 + 46 + 14) or 22
-				local hasSub = sub.Text ~= ""
 				local aw = math.floor(actions.AbsoluteSize.X / ups() + 0.5)
-				local w = -(x + aw + 30)
-				title.Position = UDim2.fromOffset(x, hasSub and 14 or 25)
-				sub.Position = UDim2.fromOffset(x, 43)
-				title.Size = UDim2.new(1, w, 0, 28)
-				sub.Size = UDim2.new(1, w, 0, 18)
+				local okm, tw = pcall(function() return math.floor(measureText(title.Text, 32, (ovFamilyFonts() or BASE_FONTS)[3]).X + 0.5) end)
+				tw = (okm and tonumber(tw)) or 170
+				title.Position = UDim2.new(0, x, 0.5, -20)
+				title.Size = UDim2.fromOffset(tw + 8, 40)
+				local dx = x + tw + 30
+				sub.Position = UDim2.fromOffset(dx, 0)
+				sub.Size = UDim2.new(1, -(dx + aw + 36), 1, 0)
 			end
 			track(actions:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutHead))
 
 			local sep = new("Frame", { Name = "Sep", Position = UDim2.fromOffset(0, HEAD_H), Size = UDim2.new(1, 0, 0, 1),
-				BackgroundTransparency = 0.9, BorderSizePixel = 0 }, root)
-			tc(sep, "BackgroundColor3", "Text")
+				BackgroundTransparency = 0, BorderSizePixel = 0 }, root)
+			tc(sep, "BackgroundColor3", "Accent")
+			new("UIGradient", { Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.5, 0.7),
+				NumberSequenceKeypoint.new(1, 1) }) }, sep)
 
-			-- ================= zone des colonnes (défile à l'horizontale si trop étroit) =================
-			local cont = new("ScrollingFrame", { Name = "Columns", Position = UDim2.fromOffset(18, HEAD_H + 16), Size = UDim2.new(1, -36, 1, -(HEAD_H + 34)),
-				BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 5, CanvasSize = UDim2.new(),
-				AutomaticCanvasSize = Enum.AutomaticSize.X, ScrollingDirection = Enum.ScrollingDirection.X,
-				ElasticBehavior = Enum.ElasticBehavior.Never }, root)
-			tc(cont, "ScrollBarImageColor3", "Accent")
-			new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, GAP), SortOrder = BYORDER }, cont)
-			local empty = tc(new("TextLabel", { Name = "Empty", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			-- ================= onglets (un par colonne) + pages (la colonne choisie) =================
+			local tabBar = new("ScrollingFrame", { Name = "Tabs", Position = UDim2.fromOffset(16, HEAD_H + 12), Size = UDim2.new(1, -32, 0, TABS_H),
+				BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 0, CanvasSize = UDim2.new(),
+				AutomaticCanvasSize = Enum.AutomaticSize.X, ScrollingDirection = Enum.ScrollingDirection.X, ElasticBehavior = Enum.ElasticBehavior.Never }, root)
+			new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = BYORDER,
+				VerticalAlignment = Enum.VerticalAlignment.Center }, tabBar)
+			local PAGE_Y = HEAD_H + 12 + TABS_H + 12
+			local cont = new("Frame", { Name = "Pages", Position = UDim2.fromOffset(16, PAGE_Y), Size = UDim2.new(1, -32, 1, -(PAGE_Y + 16)),
+				BackgroundTransparency = 1, BorderSizePixel = 0 }, root)
+			local empty = tc(new("TextLabel", { Name = "Empty", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.55),
 				Size = UDim2.fromOffset(320, 26), BackgroundTransparency = 1, Text = tostring(o.EmptyText or "Rien à afficher"),
 				TextSize = 15, Font = F_REG, TextTransparency = 0.3 }, root), "TextColor3", "ElementAccent")
 
-			local lastN, lastW, lastH = -1, -1, -1
-			local function relayout(force)
-				local n = #OV.Columns
-				empty.Visible = n == 0
-				if n == 0 then lastN = 0 return end
-				local ps = ups()
-				local aw, ah = cont.AbsoluteSize.X / ps, cont.AbsoluteSize.Y / ps
-				if aw < 10 or ah < 10 then return end
-				local h = math.max(120, math.floor(ah - 10))
-				local minW = tonumber(o.MinColumnWidth) or 220
-				local w = math.floor((aw - GAP * (n - 1)) / n)
-				if w < minW then w = minW end
-				-- rien à refaire si les dimensions n'ont pas bougé (évite du travail à chaque image pendant le fondu)
-				if force ~= true and n == lastN and w == lastW and h == lastH then return end
-				lastN, lastW, lastH = n, w, h
-				for _, c in ipairs(OV.Columns) do c.Frame.Size = UDim2.fromOffset(w, h) end
+			local function paintTabs()
+				for _, c in ipairs(OV.Columns) do
+					local on = c == OV._sel
+					c.Frame.Visible = on
+					if c.Tab then
+						tween(c.Tab, { BackgroundTransparency = on and 0.25 or 1 }, 0.12)
+						c.TabLabel.TextColor3 = on and T.Text or T.ElementAccent
+						c.TabIcon.ImageTransparency = on and 0 or 0.45
+						c.TabStroke.Transparency = on and 0.6 or 0.9
+					end
+				end
+			end
+			local function ensureSel()
+				local found = false
+				for _, c in ipairs(OV.Columns) do if c == OV._sel then found = true end end
+				if not found then OV._sel = OV.Columns[1] end
+				paintTabs()
+			end
+			local function selectCol(c) OV._sel = c paintTabs() end
+			local function relayout()
+				empty.Visible = #OV.Columns == 0
+				tabBar.Visible = #OV.Columns > 0
+				ensureSel()
+				local aw = cont.AbsoluteSize.X / ups()
+				if aw < 10 then return end
+				local sw = math.clamp(math.floor(aw * 0.36), 170, SIDE_W)
+				for _, c in ipairs(OV.Columns) do
+					c._side.Size = UDim2.new(0, sw, 1, 0)
+					c.List.Position = UDim2.new(0, sw + GAP, 0, 0)
+					c.List.Size = UDim2.new(1, -(sw + GAP), 1, 0)
+				end
 			end
 			track(cont:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() relayout() end))
+
 
 			local function repaint()
 				for i = #reg, 1, -1 do
 					local r = reg[i]
 					if r[1].Parent then pcall(function() r[1][r[2]] = T[r[3]] end) else table.remove(reg, i) end
 				end
-				local mc = main:FindFirstChildOfClass("UICorner")
-				if mc then rc.CornerRadius = mc.CornerRadius end
+				paintTabs()
 				paintClose()
 			end
 
@@ -31097,23 +31126,49 @@ do
 			local function buildColumn(co)
 				co = type(co) == "table" and co or { Title = tostring(co) }
 				local col = { Key = co.Key, Items = {}, _byKey = {}, _n = 0, Footer = {} }
-				local fr = new("Frame", { Name = "Column", Size = UDim2.fromOffset(240, 300), BackgroundTransparency = 0.45, BorderSizePixel = 0 }, cont)
-				tc(fr, "BackgroundColor3", "Element")
-				corner(fr, 14)
-				stroke(fr, 0.86)
+				local fr = new("Frame", { Name = "Column", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, cont)
 				col.Frame = fr
+				local has = {}
 
-				-- en-tête de colonne : grande image, nom, pastille de statut
-				local ch = new("Frame", { Name = "Head", Position = UDim2.fromOffset(14, 16), Size = UDim2.new(1, -28, 0, 0),
-					AutomaticSize = AY, BackgroundTransparency = 1 }, fr)
-				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER, HorizontalAlignment = Enum.HorizontalAlignment.Center }, ch)
-				local psz = tonumber(co.IconSize) or 96
-				local pic = new("ImageLabel", { Name = "Pic", Size = UDim2.fromOffset(psz, psz), BackgroundTransparency = 1,
-					ScaleType = Enum.ScaleType.Fit, LayoutOrder = 1, Visible = false }, ch)
+				-- onglet de la maison (nom + nombre de joueurs)
+				local tab = new("TextButton", { Name = "Tab", Size = UDim2.fromOffset(0, 34), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1,
+					Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = 0 }, tabBar)
+				tc(tab, "BackgroundColor3", "Element")
+				corner(tab, 10)
+				local tabStroke = stroke(tab, 0.9)
+				new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 10) }, tab)
+				new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = BYORDER,
+					VerticalAlignment = Enum.VerticalAlignment.Center }, tab)
+				local tabIc = new("ImageLabel", { Name = "Icon", Size = UDim2.fromOffset(18, 18), BackgroundTransparency = 1,
+					ScaleType = Enum.ScaleType.Fit, LayoutOrder = 0, Visible = false }, tab)
+				local tabLbl = new("TextLabel", { Name = "Text", Size = UDim2.fromOffset(0, 34), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1,
+					Text = "", TextSize = 13, Font = F_BOLD, TextColor3 = T.ElementAccent, LayoutOrder = 1 }, tab)
+				local tabCnt = new("TextLabel", { Name = "Count", Size = UDim2.fromOffset(0, 18), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0.3,
+					Text = "0", TextSize = 11, Font = F_BOLD, BorderSizePixel = 0, LayoutOrder = 2 }, tab)
+				tc(tabCnt, "BackgroundColor3", "Panel")
+				tc(tabCnt, "TextColor3", "Text")
+				new("UICorner", { CornerRadius = UDim.new(1, 0) }, tabCnt)
+				new("UIPadding", { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, tabCnt)
+				col.Tab, col.TabLabel, col.TabStroke, col.TabIcon = tab, tabLbl, tabStroke, tabIc
+				tab.MouseButton1Click:Connect(function() selectCol(col) end)
+
+				-- fiche de gauche (modulable : ov:SetSideOrder / ov:SetSideVisible)
+				local side = new("ScrollingFrame", { Name = "Side", Size = UDim2.new(0, SIDE_W, 1, 0), BackgroundTransparency = 0.45, BorderSizePixel = 0,
+					ScrollBarThickness = 3, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY, ScrollingDirection = Enum.ScrollingDirection.Y }, fr)
+				tc(side, "BackgroundColor3", "Element")
+				tc(side, "ScrollBarImageColor3", "Accent")
+				corner(side, 14)
+				stroke(side, 0.86)
+				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, side)
+				new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12), PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12) }, side)
+				col._side = side
+				local psz = tonumber(co.IconSize) or 84
+				local pic = new("ImageLabel", { Name = "Pic", Size = UDim2.new(1, 0, 0, psz), BackgroundTransparency = 1,
+					ScaleType = Enum.ScaleType.Fit, LayoutOrder = 1, Visible = false }, side)
 				local ct = tc(new("TextLabel", { Name = "Title", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1,
-					Text = "", TextWrapped = true, TextSize = 19, Font = F_BOLD, LayoutOrder = 2 }, ch), "TextColor3", "Text")
+					Text = "", TextWrapped = true, TextSize = 19, Font = F_BOLD, TextXAlignment = LEFT, LayoutOrder = 2 }, side), "TextColor3", "Text")
 				local pill = new("Frame", { Name = "Status", Size = UDim2.fromOffset(0, 24), AutomaticSize = Enum.AutomaticSize.X,
-					BackgroundTransparency = 0.82, BorderSizePixel = 0, LayoutOrder = 3, Visible = false }, ch)
+					BackgroundTransparency = 0.82, BorderSizePixel = 0, LayoutOrder = 3, Visible = false }, side)
 				new("UICorner", { CornerRadius = UDim.new(1, 0) }, pill)
 				new("UIPadding", { PaddingLeft = UDim.new(0, 11), PaddingRight = UDim.new(0, 12) }, pill)
 				new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 7), SortOrder = BYORDER,
@@ -31122,59 +31177,102 @@ do
 				new("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
 				local cs = new("TextLabel", { Name = "Text", Size = UDim2.fromOffset(0, 24), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1,
 					Text = "", TextSize = 12, Font = F_BOLD, LayoutOrder = 2 }, pill)
+				local descL = tc(new("TextLabel", { Name = "Desc", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, Text = "",
+					TextWrapped = true, TextSize = 12, Font = F_REG, TextXAlignment = LEFT, TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = 4,
+					Visible = false }, side), "TextColor3", "ElementAccent")
+				local chipsF = new("Frame", { Name = "Chips", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = 5,
+					Visible = false }, side)
+				new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Wraps = true, Padding = UDim.new(0, 6), SortOrder = BYORDER }, chipsF)
+				local foot = new("Frame", { Name = "Footer", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1, LayoutOrder = 6,
+					Visible = false }, side)
+				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, foot)
+				col._sideObj = { image = pic, name = ct, status = pill, desc = descL, chips = chipsF, buttons = foot }
+				has.name = true
+				function col._applySide()
+					local order, hide = OV._sideOrder or SIDE_KEYS, OV._sideHide or {}
+					for i, k in ipairs(order) do
+						local ob = col._sideObj[k]
+						if ob then ob.LayoutOrder = i end
+					end
+					for k, ob in pairs(col._sideObj) do ob.Visible = has[k] == true and not hide[k] end
+				end
 
-				local div = new("Frame", { Name = "Div", Size = UDim2.new(1, -28, 0, 1), BackgroundTransparency = 0.9, BorderSizePixel = 0 }, fr)
-				tc(div, "BackgroundColor3", "Text")
-				local list = new("ScrollingFrame", { Name = "List", BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
-					CanvasSize = UDim2.new(), AutomaticCanvasSize = AY, ScrollingDirection = Enum.ScrollingDirection.Y }, fr)
+				-- liste des joueurs à droite
+				local list = new("ScrollingFrame", { Name = "List", Position = UDim2.new(0, SIDE_W + GAP, 0, 0), Size = UDim2.new(1, -(SIDE_W + GAP), 1, 0),
+					BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3, CanvasSize = UDim2.new(), AutomaticCanvasSize = AY,
+					ScrollingDirection = Enum.ScrollingDirection.Y }, fr)
 				tc(list, "ScrollBarImageColor3", "Accent")
 				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, list)
-				new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12), PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 12) }, list)
+				new("UIPadding", { PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 8) }, list)
 				col.List = list
-
-				-- boutons fixes en bas de colonne
-				local foot = new("Frame", { Name = "Footer", AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 14, 1, -14),
-					Size = UDim2.new(1, -28, 0, 0), AutomaticSize = AY, BackgroundTransparency = 1 }, fr)
-				new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = BYORDER }, foot)
 
 				local emptyLbl = tc(new("TextLabel", { Name = "EmptyText", Size = UDim2.new(1, 0, 0, 56), BackgroundTransparency = 1,
 					Text = tostring(co.EmptyText or "Personne ici"), TextSize = 13, Font = F_MED, TextTransparency = 0.35, LayoutOrder = 0 }, list),
 					"TextColor3", "ElementAccent")
-				local function refreshEmpty() emptyLbl.Visible = #col.Items == 0 end
-
-				local function place()
-					local sc2 = ups()
-					local hh = math.floor(ch.AbsoluteSize.Y / sc2 + 0.5)
-					local fh = math.floor(foot.AbsoluteSize.Y / sc2 + 0.5)
-					local top = 16 + hh + 16
-					local bottom = fh > 0 and (fh + 14 + 12) or 0
-					div.Position = UDim2.fromOffset(14, 16 + hh + 8)
-					list.Position = UDim2.fromOffset(0, top)
-					list.Size = UDim2.new(1, 0, 1, -(top + bottom))
+				local function refreshEmpty()
+					emptyLbl.Visible = #col.Items == 0
+					tabCnt.Text = tostring(#col.Items)
 				end
-				track(ch:GetPropertyChangedSignal("AbsoluteSize"):Connect(place))
-				track(foot:GetPropertyChangedSignal("AbsoluteSize"):Connect(place))
-				place()
 
-				function col.SetTitle(...) ct.Text = tostring((unself(col, ...)) or "") end
+				function col.SetTitle(...)
+					local t = tostring((unself(col, ...)) or "")
+					ct.Text = t
+					if not col._tabTitle then tabLbl.Text = t end
+				end
 				function col.SetSubtitle(...)
 					local t, c = unself(col, ...)
 					t = tostring(t or "")
 					cs.Text = t
-					pill.Visible = t ~= ""
+					has.status = t ~= ""
 					local base = asColor(c) or T.ElementAccent
 					pill.BackgroundColor3 = base
 					dot.BackgroundColor3 = base
 					cs.TextColor3 = base:Lerp(WHITE, 0.4)
+					col._applySide()
 				end
 				function col.SetIcon(...)
 					local v = unself(col, ...)
-					if not setPic(pic, v) then return end
-					pic.ImageColor3 = isLucide(v) and T.Text or WHITE
+					local ok = setPic(pic, v)
+					has.image = ok
+					if ok then pic.ImageColor3 = isLucide(v) and T.Text or WHITE end
+					local tv = co.TabIcon or v   -- icône de l'onglet : TabIcon, sinon l'image de la maison, sinon une petite maison
+					if not setPic(tabIc, tv) then tv = "house" setPic(tabIc, tv) end
+					tabIc.ImageColor3 = isLucide(tv) and T.Text or WHITE
+					col._applySide()
 				end
+				function col.SetDescription(...)
+					local t = tostring((unself(col, ...)) or "")
+					descL.Text = t
+					has.desc = t ~= ""
+					col._applySide()
+				end
+				-- puces : { { Name = "Owner", Value = "Kira" }, ... }
+				function col.SetChips(...)
+					local chips = unself(col, ...)
+					for _, x in ipairs(chipsF:GetChildren()) do
+						if x:IsA("TextLabel") then pcall(function() x:Destroy() end) end
+					end
+					local n = 0
+					for _, c2 in ipairs(type(chips) == "table" and chips or {}) do
+						n += 1
+						local lb2 = new("TextLabel", { Name = "Chip", Size = UDim2.fromOffset(0, 22), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0.4,
+							BorderSizePixel = 0, Text = tostring(c2.Name or c2[1] or "") .. "  " .. tostring(c2.Value or c2[2] or ""), TextSize = 11, Font = F_MED,
+							LayoutOrder = n }, chipsF)
+						tc(lb2, "BackgroundColor3", "Panel")
+						tc(lb2, "TextColor3", "Text")
+						corner(lb2, 8)
+						new("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, lb2)
+					end
+					has.chips = n > 0
+					col._applySide()
+				end
+				if co.TabTitle then col._tabTitle = true tabLbl.Text = tostring(co.TabTitle) end
 				col.SetTitle(co.Title or co.Name or "")
 				col.SetSubtitle(co.Subtitle or "", co.SubtitleColor or co.Color)
 				col.SetIcon(co.Icon or co.Image)
+				col.SetDescription(co.Description or "")
+				col.SetChips(co.Chips or {})
+
 
 				local function nextOrder() col._n += 1 return col._n end
 
@@ -31311,7 +31409,9 @@ do
 				-- bouton fixe en bas de la colonne (toujours visible)
 				function col:AddFooterButton(bo)
 					col.Footer[#col.Footer + 1] = true
-					return makeButton(foot, bo, { Full = true, Height = 42, Order = #col.Footer })
+					has.buttons = true
+					col._applySide()
+					return makeButton(foot, bo, { Full = true, Height = 40, Order = #col.Footer })
 				end
 
 				function col:AddToggle(to)
@@ -31371,6 +31471,7 @@ do
 				local col = buildColumn(co)
 				self.Columns[#self.Columns + 1] = col
 				col.Frame.LayoutOrder = #self.Columns
+				col.Tab.LayoutOrder = #self.Columns
 				relayout(true)
 				return col
 			end
@@ -31381,17 +31482,30 @@ do
 				for i, c in ipairs(self.Columns) do
 					if c == col then
 						table.remove(self.Columns, i)
-						pcall(function() c.Frame:Destroy() end)
+						pcall(function() c.Frame:Destroy() c.Tab:Destroy() end)
 						break
 					end
 				end
-				for i, c in ipairs(self.Columns) do c.Frame.LayoutOrder = i end
+				for i, c in ipairs(self.Columns) do c.Frame.LayoutOrder = i c.Tab.LayoutOrder = i end
 				relayout(true)
 			end
 			function OV:ClearColumns()
-				for _, c in ipairs(self.Columns) do pcall(function() c.Frame:Destroy() end) end
+				for _, c in ipairs(self.Columns) do pcall(function() c.Frame:Destroy() c.Tab:Destroy() end) end
 				self.Columns = {}
 				relayout(true)
+			end
+			local function chipsKey(chips)
+				local k = ""
+				for _, c2 in ipairs(type(chips) == "table" and chips or {}) do k = k .. tostring(c2.Name or c2[1]) .. "=" .. tostring(c2.Value or c2[2]) .. "|" end
+				return k
+			end
+			function OV:Select(key) local c = self:GetColumn(key) if c then selectCol(c) end end
+			-- fiche de gauche modulable : ov:SetSideOrder({ "image", "name", "status", "desc", "chips", "buttons" }) · ov:SetSideVisible("chips", false)
+			function OV:SetSideOrder(l) self._sideOrder = l for _, c in ipairs(self.Columns) do c._applySide() end end
+			function OV:SetSideVisible(k, on)
+				self._sideHide = self._sideHide or {}
+				self._sideHide[k] = (on == false) or nil
+				for _, c in ipairs(self.Columns) do c._applySide() end
 			end
 			function OV:SyncColumns(list)
 				local seen = {}
@@ -31403,6 +31517,8 @@ do
 						co.Key = key
 						col = self:AddColumn(co)
 						col._title, col._sub, col._subC, col._icon = co.Title, co.Subtitle, (co.SubtitleColor or co.Color), (co.Icon or co.Image)
+						col._desc = co.Description
+						col._chipsK = chipsKey(co.Chips)
 					else
 						if col._title ~= co.Title then col._title = co.Title col.SetTitle(co.Title or "") end
 						if col._sub ~= co.Subtitle or col._subC ~= (co.SubtitleColor or co.Color) then
@@ -31410,15 +31526,19 @@ do
 							col.SetSubtitle(co.Subtitle or "", co.SubtitleColor or co.Color)
 						end
 						if col._icon ~= (co.Icon or co.Image) then col._icon = co.Icon or co.Image col.SetIcon(col._icon) end
+						if col._desc ~= co.Description then col._desc = co.Description col.SetDescription(co.Description or "") end
+						local ck = chipsKey(co.Chips)
+						if col._chipsK ~= ck then col._chipsK = ck col.SetChips(co.Chips or {}) end
 					end
 					col.Frame.LayoutOrder = i
+					col.Tab.LayoutOrder = i
 					if co.Items then col:SyncItems(co.Items) end
 				end
 				for i = #self.Columns, 1, -1 do
 					local c = self.Columns[i]
 					if not seen[c.Key] then
 						table.remove(self.Columns, i)
-						pcall(function() c.Frame:Destroy() end)
+						pcall(function() c.Frame:Destroy() c.Tab:Destroy() end)
 					end
 				end
 				table.sort(self.Columns, function(a, b) return a.Frame.LayoutOrder < b.Frame.LayoutOrder end)
@@ -31439,7 +31559,7 @@ do
 				return makeButton(actions, bo, { Height = 42, Order = #actions:GetChildren() })
 			end
 			OV:SetTitle(o.Title or o.Name or "")
-			OV:SetSubtitle(o.Subtitle or "")
+			OV:SetSubtitle(o.Description or o.Subtitle or "")
 			if o.Icon then OV:SetIcon(o.Icon) end
 			for i, bo in ipairs(o.Buttons or {}) do
 				if type(bo) == "table" then bo.Order = i OV:AddHeaderButton(bo) end
