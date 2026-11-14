@@ -30985,7 +30985,7 @@ do
 			}, main)
 			tc(root, "BackgroundColor3", "Main")
 			local rc = new("UICorner", { CornerRadius = UDim.new(0, 14) }, root)
-			local sc = new("UIScale", { Scale = 0.97 }, root)
+			local sc = new("UIScale", { Scale = 1 }, root)
 			OV.Gui = root
 			ovRoots[#ovRoots + 1] = root
 			track(root.DescendantAdded:Connect(function(d)
@@ -31452,17 +31452,18 @@ do
 				repaint()
 				root.Visible = true
 				root.GroupTransparency = 1
-				sc.Scale = 0.97
-				tween(root, { GroupTransparency = 0 }, 0.25)
-				tween(sc, { Scale = 1 }, 0.25)
+				sc.Scale = 1                                   -- pas de zoom : l'échelle qui bouge faisait regrossir les éléments de 1 px à la fin
+				root.Position = UDim2.fromOffset(0, 10)        -- on glisse seulement (n'affecte pas les tailles)
+				tween(root, { GroupTransparency = 0, Position = UDim2.fromOffset(0, 0) }, 0.25)
+				relayout(true)
+				layoutHead()
 				task.defer(function() relayout(true) layoutHead() end)
 				fire(o.OnOpen, self)
 			end
 			function OV:Close()
 				if not self._open then return end
 				self._open = false
-				tween(root, { GroupTransparency = 1 }, 0.2)
-				tween(sc, { Scale = 0.98 }, 0.2)
+				tween(root, { GroupTransparency = 1, Position = UDim2.fromOffset(0, 6) }, 0.2)
 				task.delay(0.24, function()
 					if not self._open and root.Parent then root.Visible = false end
 				end)
