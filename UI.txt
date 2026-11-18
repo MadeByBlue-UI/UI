@@ -17576,7 +17576,7 @@ end
 --   • Library:CheckUpdate() vérifie tout de suite · Library.AutoUpdateCheck = false coupe la vérification automatique.
 --   • Limite GitHub sans compte : 60 requêtes / heure / IP -> intervalle par défaut 300 s (minimum 60 s).
 -- ---------------------------------------------------------------------------
-Library.UpdateURL = Library.UpdateURL or "https://raw.githubusercontent.com/MadeByBlue-UI/UI/refs/heads/main/UIV67"
+Library.UpdateURL = Library.UpdateURL or "https://raw.githubusercontent.com/MadeByBlue-UI/UI/refs/heads/main/UI.txt"
 Library.UpdateInterval = 300
 Library.UpdateCommits = 15   -- nombre de commits affichés dans Home
 Library.Commits = {}
