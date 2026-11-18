@@ -1,0 +1,604 @@
+--[[
+	Ui-Lib Simple  —  édition « Trou noir »  (noir & blanc, tout en fluidité)
+	Compatible avec Help_1_fixed.txt  (même API qu'avant)
+
+	Utilisation :
+		local Library = loadstring(readfile("Ui-Lib-Simple.lua"))()
+	ou, si tu l'héberges :
+		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
+
+	V9.36 — ONGLETS HOME / RÉGLAGES EN OPTION · EFFETS COUPÉS PAR DÉFAUT
+		• CreateWindow({ Home = true }) / CreateWindow({ Settings = true }) (ou win:CreateHomeTab() / win:CreateSettingsTab() plus tard) : les deux onglets ne sont plus
+		  créés automatiquement. Sans eux : aucun téléchargement GitHub (ThemeManager / SaveManager), aucune vérification de mise à jour en tâche de fond
+		  (sauf si UpdateURL est donné).
+		• Moins de lag : étoiles (StarCount), neige (SnowCount), décor sous la fenêtre (DecorStrip) et bulle de commentaires (DecorBubble) sont coupés par défaut.
+		  Pour les remettre : Library.StarCount = 20 · Library.SnowCount = 40 · Library.DecorStrip = true · Library.DecorBubble = true.
+		V9.35 — CONTOUR « VERRE » : le fondu du contour blanc est maintenant horizontal (Library.GlassEdgeRotation = 0) : tout le côté gauche des blocs / toggles / lignes est lumineux,
+		  coins arrondis compris, puis s'estompe vers la droite. Avant (diagonale à 40°) le bas du côté gauche s'éteignait avant le coin sur les éléments hauts. Library.GlassEdgeRotation = 40 pour l'ancien rendu.
+
+	V9.34 — RÉGLAGES EN UN SEUL SOUS-ONGLET : tous les blocs de « Réglages » sont réunis dans l'unique sous-onglet « Paramètres ». Thèmes (préréglages, couleurs, police, thèmes perso,
+		  thème par défaut) et Configurations (créer / charger / écraser / supprimer / auto-chargement / import-export) viennent de ThemeManager.lua et SaveManager.lua, téléchargés
+		  depuis GitHub (Library.ManagerURL) en tâche de fond dès le début de CreateWindow. Si le téléchargement échoue : les anciens blocs intégrés sont utilisés.
+		  CreateWindow({ RemoteManagers = false }) pour couper le téléchargement · Library.ThemeManager / Library.SaveManager = les modules chargés.
+
+	V9.33 — TABLEAU (OVERLAY) REFAIT : plus aucun contour · couleurs liées au thème ET au style (Standard / Verre / Mat…), repeintes en direct si le thème change ·
+		  changement d'onglet fluide (la page glisse + fondu dans le sens du déplacement, pastille qui glisse sous l'onglet actif, l'onglet choisi reste visible) ·
+		  textes qui changent en fondu (titre, description, statut, pseudo, badge, compteur…) · lignes qui apparaissent en cascade et disparaissent en refermant la liste sans saut ·
+		  survol / appui sur les boutons et lignes · ligne « mise en avant » = repère à gauche. L'API ne change pas (+ option OnSelect = function(col) sur CreateOverlay).
+
+	V9.32 — OVERLAY « version C » : dans la zone des blocs (plus toute la fenêtre) · gros titre + description à droite + trait qui s'estompe · un ONGLET par colonne
+		  (TabTitle, compteur) · fiche à gauche (image, nom, statut, Description, Chips = { { Name, Value } }, boutons) modulable : ov:SetSideOrder / ov:SetSideVisible / ov:Select.
+	V9.31 — Rétrécissement doux des colonnes (dernier bloc masqué : le contenu glisse au lieu de sauter) · Library.SoftShrink = false pour couper.
+	V9.31 — Paramètres > Apparence > « Tableaux : police » (Library:SetOverlayFont(nom | "Auto")).
+	V9.31 — OVERLAY refait (grand en-tête, vraie croix, colonnes en cartes, boutons : ov:AddHeaderButton · col:AddFooterButton · item.SetHighlight).
+	V9.30 — PANNEAU PLEIN FENÊTRE (OVERLAY) : win:CreateOverlay({ Title, Subtitle, Icon }) ouvre en fondu un grand panneau qui recouvre toute la fenêtre,
+		  avec des colonnes (en-tête : grande icône + titre + statut) contenant des listes (photo de profil, pseudo, badge), labels, boutons, toggles.
+		  ov:Open / Close / Toggle · ov:AddColumn · col:AddItem / SyncItems · ov:SyncColumns (rafraîchissement en direct sans tout recréer). Voir « 2b) OVERLAY ».
+
+	V9.29 — HORLOGE DES REPAS : aux heures de repas (Library.MealTimes), voile flouté sur tout l'écran + heure géante en chiffres pixel,
+		  centrée : 11:59 défile jusqu'à 12:00. Library.MealClock · MealClockLead · MealClockHold · MealClockLabel · MealClockBlur ·
+		  Library:PreviewMealClock(12, 0, "Déjeuner") (Paramètres > Apparence > « Horloge pixel aux heures des repas »).
+
+	V9.28 — BULLE DE COMMENTAIRES : STYLE, RÉACTIONS, ALERTES, CLIC, HEURE, PHRASES PERSO, SON
+		• Style : fond / texte / contour suivent le thème (Library.DecorBubbleThemed), contour fin, petit effet d'apparition, teinte rouge / orange / verte
+		  selon le type de message (Kind = "error" | "warn" | "success" | "info").
+		• Library:DecorSay("texte", { Urgent = true, Kind = "error", Hold = 4 }) : l'urgent passe devant la file et coupe la phrase en cours.
+		• Réactions (Library.DecorBubbleReact) : « Annulé ! », config chargée / sauvegardée, « Copié ! », changement d'onglet. Library:DecorReact(clé, texte, kind, cooldown).
+		• Alertes (Library.DecorBubbleAlerts) : les notifications Error / Warning passent devant dans la bulle.
+		• Heure (Library.DecorBubbleTime) : phrases matin / midi / après-midi / soir / nuit + accueil à chaque ouverture de la fenêtre.
+		• Clic (Library.DecorBubbleClick) : clic gauche = phrase suivante · clic droit = effacer · survol = la bulle reste · Library:DecorNext() / DecorClear().
+		• Phrases perso : Library:SetDecorCustom("une par ligne") · Library.DecorCustomOnly · Library:DecorSayNow() (Paramètres : zone de texte + bouton).
+		• Son : Library.DecorBubbleSound = true → léger « tic » (événement « bubble » des sons de l'interface).
+		• Phrases : plus de 280 phrases en 18 catégories (dont « espace »), liées au moment de la journée (petit-déj' le matin, dîner le soir, sommeil la nuit...) (amour, compliments, sommeil, eau, pauses, motivation, astuces, humour, repas, jeux, musique, concentration,
+		  merci, animaux, santé, espace, hiver, été), jours spéciaux (Noël, Nouvel An, Saint-Valentin...) et jours de la semaine. Chaque catégorie a son ICÔNE Lucide
+		  (cœur, lune, flamme, goutte...) colorée, à gauche du texte (Library.DecorReactions / DecorReactIcons pour changer les réactions).
+		  Tes phrases : « [heart] Je t'aime » met une icône ; Library:DecorSay("texte", { Icon = "star" }).
+
+	V9.27 — BULLE DE COMMENTAIRES SOUS LA FENÊTRE : la bulle qui écrit de petits commentaires lettre par lettre, en fondu, est centrée juste sous
+		  la fenêtre (elle la suit), passe au-dessus s'il n'y a pas de place en bas, et marche même sans le décor. Library:DecorSay("texte"),
+		  Library.DecorBubble (bool), Library.DecorBubbleGap (px), Library.DecorBubbleDelay (s), Library.DecorComments = { "phrase", ... }.
+
+	V9.26 — DEUX STYLES POUR LE DÉCOR : « Pixel » (pixel art avec contours sombres, sol en blocs, étincelles qui brillent sur le sol, coffre au trésor)
+		  et « Dessin » (formes lisses et arrondies avec contours, façon cartoon). Library.DecorStyle = "Pixel" | "Dessin"
+		  (Paramètres > Apparence > « Étoiles & forme » > Décor & neige > Style du décor). Marche avec les thèmes Hiver et Été.
+
+	V9.25 — THÈME « ÉTÉ » POUR LE DÉCOR : palmier, parasol + serviette, château de sable, balle qui rebondit, glace, planche de surf, étoile de mer,
+		  crabe qui se balade, soleil dans le coin de l'écran et poussières dorées qui montent. Library.DecorTheme = "Hiver" | "Été"
+		  (Paramètres > Apparence > « Étoiles & forme » > Décor & neige > Thème du décor).
+
+	V9.24 — DÉCOR DE FÊTE : PETITS PERSONNAGES SOUS LA FENÊTRE + NEIGE SUR L'ÉCRAN
+		• Sous la fenêtre : un sol de neige avec un sapin, un bonhomme de neige, un renard qui dort (zzz), un feu de camp,
+		  une tasse qui fume, des cadeaux, et un pingouin qui se balade. Clique sur un personnage : il saute, parle et lance des étincelles.
+		• Neige qui tombe sur tout l'écran (derrière ou devant la fenêtre).
+		• Library.DecorStrip · DecorScale · DecorGap · SnowCount · SnowSpeed · SnowOnWindow (Paramètres > Apparence > « Étoiles & forme » > Décor & neige).
+
+	V9.23 — LA MÉTHODE CHOISIE S'AFFICHE SUR LE TOGGLE
+		• CreateDropdown({ ..., BadgeOn = toggle | "flag" | { ... }, BadgeNames = { valeur = "nom affiché" } }) : une pastille avec la valeur choisie apparaît à côté
+		  du nom du toggle (n'importe quel nom de méthode) · dd.LinkBadge(toggle) · dd.SetBadgeName(valeur, texte) · toggle.SetBadge(texte) / GetBadge()
+		  · CreateToggle({ Badge = "texte" | BadgeFrom = menu }) · Paramètres > Apparence > « Afficher la méthode sur les toggles » (Library.MethodBadges).
+
+	V9.22 — TABBOX : ICÔNES · TEXTE PLUS GRAND · NOM ÉTIRÉ · POLICE
+		• blk:CreateTabbox({ Tabs = { "A", "B" }, Icons = { "sword", "eye" } }) (ou Tabs = { { Name = "A", Icon = "sword" } }) · tb.SetIcon(nom, icône).
+		• Texte des onglets à 14 px (avant 12) · réglages globaux dans Paramètres > Apparence (taille, police, nom étiré, icônes, taille des icônes)
+		  = Library:SetTabboxOption("TextSize" | "Font" | "Stretch" | "Icons" | "IconSize", valeur) · par Tabbox : { TextSize, Font, Stretch, ShowIcons, IconSize }
+		  et tb.SetTextSize / SetFont / SetStretch / ShowIcons / SetIconSize (nil = suivre le réglage global).
+
+	V9.21 — ICÔNES PAR NOM (Icon = "shield-check", noms Lucide comme Apex) SUR TOUS LES ÉLÉMENTS · ICÔNES AUTOMATIQUES (Library.IconRules)
+		• Voir le bloc « V9.21 : ICÔNES PAR NOM » juste après Library.IconSize.
+
+	V9.20 — CORRECTIFS LISTES JOUEURS · RÈGLES ENTRE TOGGLES · 3D / EFFETS · FAVORIS DANS LES PARAMÈTRES
+		• Listes déroulantes avec icônes (CreatePlayerPicker simple ET multiple, ou Items = { { Name, Icon } }) : la miniature est maintenant posée
+		  dans la ligne, ronde et toujours à GAUCHE du pseudo (plus de décalage / chevauchement) ; la valeur affichée dans l'en-tête montre aussi
+		  l'avatar choisi (jusqu'à 3 avatars superposés en multiple). Option { Round = true | false } par entrée pour forcer rond / carré.
+		• Masquage fluide : CreateToggle({ Hides = { élément | bloc | onglet } }) ou HideDisabled = true : les cibles se replient et disparaissent en douceur.
+		• Règles sur les toggles : CreateToggle({ Disables = {...} }) couper d'autres toggles à l'activation · Excludes = {...} exclusion mutuelle ·
+		  Enables = {...} · Locks = {...} (cibles coupées ET grisées avec la raison). Cibles = toggle, nom de Flag ou fonction. Library:Exclusive({...}).
+		• Griser sans rien couper : CreateToggle({ Greys = { élément | bloc | onglet } }) = cibles grisées (visibles, non cliquables, état inchangé) tant que le
+		  toggle est ACTIVÉ · GreysWhenOff = { ... } = grisées tant qu'il est COUPÉ (réglages qui dépendent du toggle) · GreyReason / GreyReasonOff = texte au survol.
+		• Clic droit sur un slider (simple ou à deux poignées) : petite fenêtre « Réinitialiser » (valeur par défaut) / « Copier » (valeur dans le presse-papiers).
+		  CreateSlider({ ContextMenu = false }) ou Library.SliderMenu = false pour le couper.
+		• 3D : blk:CreateScene3D({ Effect = "BlackHole" | "Orbit" | "Helix" | "Vortex" | "Galaxy" | "Cube" | "Sparkles" | "Fireworks", Setup = function(scene) })
+		  scene.AddPart / AddRing / AddEmitter / Emit / AddEffect / OnUpdate / SetCamera ... (voir le bloc « V9.20 » avant V9.18 (A)) et
+		  Library:Scene3D(guiObject, { Effect = ... }) pour poser un effet 3D en surcouche sur n'importe quel élément.
+		• Paramètres > Favoris (nouveau sous-onglet) : liste des favoris (Aller / ✕), tout retirer, export / import par code, afficher / cacher les étoiles
+		  (Library.ShowFavStars).
+
+	V9.19 — KEYBINDS SUR LES BOUTONS (comme les toggles)
+		• blk:CreateButton({ Name = "Téléport", Keybind = Enum.KeyCode.T }) : appuyer sur la touche = cliquer sur le bouton (Confirm, Cooldown et
+		  DoubleClick respectés). Sans option : clic droit sur le bouton (ou clic sur la puce) pour assigner une touche — clavier ou clic gauche /
+		  droit / milieu · Échap = annuler · Retour / Suppr = retirer la touche. Keybind = false : pas de touche pour ce bouton.
+		• KeyCallback = function(touche) · Flag = "x" : la touche est sauvegardée dans les configs (clé "x.key") · item.SetKey(k) / item.GetKey() /
+		  item.Press() (déclenche le bouton depuis le code). Listé dans Paramètres > Raccourcis clavier (conflits signalés) et retiré par
+		  « Réinitialiser les contrôles » ({ Reset = false } pour exclure).
+
+	V9.18b — MODE COMPACT : Library:SetCompact(bool) / CreateWindow({ Compact = true }) / Paramètres > Style > « Mode compact » (type Classique).
+
+	V9.18 — RISKY · RAISON DE DÉSACTIVATION · TABBOX · BOÎTE DE DÉPENDANCE · DIALOGUES · WIDGETS FLOTTANTS · WARNING BOX
+		• Tout élément : Risky = true (barre rouge + info-bulle, RiskyText) · DisabledReason = "..." (la raison s'affiche au survol d'une ligne grisée) ·
+		  item.SetEnabled(false, "raison") · item.SetRisky(bool, texte) · item.SetDisabledReason(texte).
+		• blk:CreateTabbox({ Tabs = { "A", "B" } }) : des onglets dans un bloc (tb.A:CreateToggle(...), tb:Select("B")).
+		• blk:CreateDependencyBox({ Depends = toggle }) : groupe d'options visible seulement si la condition est vraie (accepte tout ShowIf).
+		• Library:Dialog({ Title, Content, Buttons = {...} }) / Library:Confirm(titre, texte, oui, non) / Window:AddDialog(...) : popups modaux.
+		• Library:AddDraggableLabel / AddDraggableButton / AddDraggableMenu : widgets flottants déplaçables (option Flag = position sauvegardée).
+		• tab:AddWarningBox({ Title, Text, Type = "Warning" | "Error" | "Info" | "Success", Dismissable }) : bandeau en haut d'un onglet.
+		• CreateButton({ SubButton = { Name = "⚙", Callback = f } }) · CreateButton({ DoubleClick = true }) · blk:CreateVideo({ Video = id }) ·
+		  Library:SetBackgroundImage(id, transparence).
+
+	V9.17 — LOADER « EAU » (visuel uniquement, inspiré du style Verre + d'une surface d'eau)
+		• Nouvelle intro par défaut : horizon brumeux, eau azur avec nappes de lumière animées (faux shader en dégradés), caustiques, reflets
+		  qui scintillent, ondes elliptiques, bulles, colonne de lumière, carte de verre (bord lumineux + reflet qui balaie) avec anneau et barre.
+		  Aucun texte, aucun son. Le jeu se floute derrière (Library.LoaderBlur = false pour couper). Se dissout sur la fenêtre à la fin.
+		• Library.IntroStyle = "Eau" | "Messages" (l'ancienne intro) · Library:SetIntroStyle(v) · Library.LoaderMinTime (1,9 s) ·
+		  Library:PreviewLoader(secondes) · Paramètres : « Style de l'intro » + bouton « Prévisualiser le loader ».
+
+	V9.16 — APERÇU DE L'AVATAR (Home) SIMPLIFIÉ
+		• Home > Mon personnage : nouvel aperçu Block:CreateAvatarWave — ton avatar de face qui fait coucou en boucle, et c'est tout.
+		  Plus de ragdoll, de zoom, de rotation à la souris, d'emotes, d'étincelles, de boutons, ni de saut / animation de bienvenue :
+		  spammer l'onglet Home ne fait plus rebondir l'avatar. CreatePreview3D (utilisé par l'aperçu ESP) est inchangé.
+
+	V9.14 — CURSEUR REFAIT AU PROPRE (pointeur + curseur libre + curseur dessiné + réglages)
+		• Le calcul de la position du pointeur est réécrit : une seule règle (position brute + décalage mesuré − réglage manuel), un seul état par
+		  périphérique (souris / doigt), une seule fonction de mesure (Library._ptrProbe, appelée sur les clics et les survols). Plus de doublons,
+		  plus de champs « pour compatibilité ». Le réglage manuel est appliqué APRÈS la mesure : la mesure automatique ne le combat plus.
+		• Le curseur dessiné est reconstruit : une table de formes (Point, Flèche Roblox, Cercle, Carré, Croix), position arrondie au pixel,
+		  rétrécissement au clic indépendant du FPS, rien de dessiné au tactile, erreurs d'image signalées une seule fois dans la console.
+		• Correctif : la pipette pouvait prendre la couleur du curseur dessiné (SolarisCursorDot n'était pas dans sa liste d'exclusion).
+		• Paramètres > Curseur : nouveau bloc « Position » (décalage vertical, recalibrer, journal) — ces trois réglages quittent Paramètres > Fenêtre.
+		  Nouveautés d'API : Library:SetPointerRoot(gui), Library.Pointer (état), Library._ptrProbe / _ptrHover. Retirés : _ptrCheck, _ptrVote, _ptrAuto...
+
+	V9.12 — CURSEUR (color picker / aperçu) + RECHERCHE EN VERRE
+		• Curseur : le décalage entre le pointeur et l'UI (~58 px) se calcule maintenant par INTERSECTION des fourchettes données par chaque appui
+		  (le vrai pointeur est forcément dans l'élément cliqué : un bouton de 30 px suffit à exclure un décalage de 58 px). Un seul appui cohérent suffit
+		  (plus de vote sur 2 clics ni de valeurs figées), et ça marche aussi au tactile / curseur virtuel.
+		  Library:ResetPointerCalibration() remet tout à zéro. L'aperçu 3D (et ses zones de membres) ne sert PAS de mesure : sa géométrie vient de la
+		  caméra et pouvait décaler le curseur vers le haut après un clic sur le personnage.
+		• « Recalibrer le curseur » (Paramètres > Fenêtre) est maintenant un CALIBRAGE GUIDÉ : 3 clics sur une barre blanche de 12 px (Échap annule) ;
+		  le décalage mesuré est verrouillé (seul un clic qui le contredit de plus de 14 px le change). « Copier le journal du curseur » liste qui a
+		  modifié la correction et de combien (Library:GetPointerLog()). Library:CalibratePointer() lance le calibrage par script.
+		• SYSTÈME DE POINTEUR REFAIT DE ZÉRO (V9.13) : un seul point d'entrée Library._pointerPos(p) pour souris / curseur virtuel / doigt. BUG corrigé :
+		  au tactile, les appels « pointeur maintenant » (étincelles, ragdoll, survol de l'aperçu, molette...) renvoyaient toujours (0, 58) : le personnage
+		  partait vers le haut dès qu'on le touchait. Le doigt est désormais suivi (Library._ptrTouchPos), souris et tactile mesurent chacun leur décalage.
+		• Le décalage est aussi mesuré EN CONTINU quand la souris bouge sur un bouton / une ligne (MouseMoved, ~12 fois par seconde au plus) : si le
+		  décalage change en cours de route (menu Échap de Roblox ouvert ou fermé, barre du haut), la correction se remet à jour toute seule.
+		• Recherche : le panneau de résultats suit le STYLE courant (vitre translucide en Verre / Givré, fond plein en Mat), reflet clair, lignes en 2 temps
+		  (nom + chemin onglet › bloc) avec pastille d'initiale, ↑ ↓ pour parcourir, Entrée pour ouvrir, ligne d'aide avec le nombre de résultats.
+
+	V9.11 — API PRATIQUE : SetEnabled / Destroy SUR TOUS LES ÉLÉMENTS + UTILITAIRES
+		• Tous les éléments : item.SetEnabled(bool) / item.IsEnabled() (ligne grisée, clics ignorés ; CreateXxx({ Enabled = false }) la crée
+		  désactivée) · item.Destroy() (retire la ligne et son Flag).
+		• Library:GetItem / GetFlag / SetFlag(flag, valeur) · Library:Snapshot() / Restore(snapshot) · Library:WatchFlag(flag, fn(nouvelle, ancienne)) ·
+		  Library:Link(source, cible, transformation) · Library:WaitForFlag(flag, attendu, timeout) · Library:Every(secondes, fn) ·
+		  Library:Debounce(fn, attente) · Library:Throttle(fn, intervalle). Détails dans le bloc « API PRATIQUE » juste avant Library:Destroy.
+
+	V9.10 — MINUTEUR : blk:CreateTimer
+		• Nouvel élément : un temps affiché en grand + boutons Démarrer / Pause / Reprendre / Relancer et remise à zéro (↺). Compte à rebours avec
+		  une barre de progression : blk:CreateTimer({ Name = "Événement", Duration = 90, Callback = function(state, secondes) end }) ; sans Duration :
+		  chronomètre. Callback reçoit "start" | "pause" | "reset" | "finish" (la fin est déclenchée à l'heure exacte, même si l'UI est cachée).
+		  Tenths = false · AutoStart = true · Flag (mémorise le temps affiché) · item.Start() / Pause() / Toggle() / Reset() / Get() / GetElapsed() /
+		  IsRunning() / Set(secondes) / SetDuration(n) / item:OnChanged(fn).
+
+	V9.9 — PASTILLES : blk:CreateChips
+		• Nouvel élément : des pastilles cliquables qui passent à la ligne toutes seules (la ligne du bloc s'agrandit). Choix multiple par défaut :
+		  blk:CreateChips({ Name = "Armes", Items = { "Épée", "Arc", "Bâton" }, Default = { "Arc" }, Flag = "armes", Callback = function(v) end }).
+		  Multi = false : une seule pastille active (Get() renvoie un nom) · Max = n : limite le nombre de pastilles actives · AllowNone = true
+		  (choix unique) : recliquer désactive · item.Get() · item.Set(liste | nom) · item.Toggle(nom) · item.IsSelected(nom) · item.SelectAll() ·
+		  item.Clear() · item.SetItems(liste) · item:OnChanged(fn) · sauvegardé dans les configs comme les autres éléments (Flag).
+
+	V9.8 — NOUVELLE INTRO : MESSAGES + VOIX + ENVOL À GAUCHE
+		• L'ancienne intro « trou noir » (anneaux, étoiles, titre, barre de progression) est retirée. On garde le début : écran noir, interface
+		  Roblox masquée. À la place du « Hi. » : des phrases s'écrivent lettre par lettre avec un son de personne qui parle (bla bla) :
+		  « Slt , » -> « J'espère tu vas bien👌 » -> « Sur ce , Amuse toi bien :) ». Après la dernière, le chargement est fini : le noir se dissipe
+		  sur la fenêtre prête.
+		• Entre deux phrases : pas de fondu, le texte est envoyé valser sur la gauche (il accélère, tourne, sort de l'écran).
+		• Library.IntroMessages = { ... } (ou getgenv().UiLibIntroMessages) · Library.TalkSoundId (id du son de voix) · Library.TalkSound = false ·
+		  Library.TalkSoundVolume (0.6) · Library.TalkSoundPitch (1) · Library.IntroFlingTime (0.5) · Library.IntroHoldTime (0.75) ·
+		  Library.IntroLastHold (1). Library.IntroHi = false / getgenv().UiLibIntroHi = false : plus de phrases (écran noir seulement).
+
+	V9.7 — CIBLE JOUEUR · COOLDOWN · ONCHANGED MULTIPLE · GROUPES DE TOGGLES
+		• Cible joueur : blk:CreatePlayerPicker({ Name = "Cible", Multi = true }) — liste de joueurs qui se met à jour toute seule (arrivées,
+		  départs, changements de pseudo affiché). Get() renvoie des objets Player (une liste si Multi), pas des chaînes.
+		  IncludeLocal · Filter = function(p) · Avatars = false · item.Set(player | nom) · item.Clear() · item.GetNames().
+		• Aperçu du personnage : halo de la tête décalé plus haut (Library.PreviewHaloHeight, 0.88 par défaut — 0.55 avant) · carte d'infos du
+		  joueur ciblé (pseudo, PV + barre, équipe, distance, outil) : CreatePreview3D({ Info = true }) / pv:SetInfo(bool) · pv:BindPicker(picker) :
+		  l'aperçu suit le joueur choisi dans un CreatePlayerPicker (retour à ton avatar quand la sélection est vidée) · rechargement
+		  automatique quand le joueur ciblé réapparaît.
+		• Ragdoll refait (vraie physique Verlet) : le torse est saisi À L'ENDROIT cliqué (épaule, taille...), le corps pend, se plie et tourne
+		  autour de ce point ; au lâcher il garde sa vitesse (on peut le lancer), tombe, rebondit sur le sol / les bords de l'aperçu, puis se relève
+		  tout seul. Library.PreviewRagdollGravity (55) · Library.PreviewRagdollRecover = false · Library.PreviewRagdollGetUpTime (0.9 s) ·
+		  pv:Ragdoll([-1..1]) · pv:GetUp().
+		• Cooldown sur un bouton : blk:CreateButton({ Cooldown = 3 }) — le bouton se grise pendant 3 s avec une barre de progression
+		  (et le temps restant dans le texte, CooldownText = false pour le cacher) ; les clics sont ignorés pendant ce temps.
+		  item.IsCooling() · item.GetCooldown() · item.SetCooldown(n) · item.ResetCooldown().
+		• OnChanged multiple : item:OnChanged(fn) sur n'importe quel élément. Renvoie un handle (h:Disconnect(), h.Connected) ; plusieurs
+		  scripts peuvent écouter le même élément sans toucher au Callback d'origine. item.ClearChanged() retire tout.
+		• Groupes : Library:Group({ toggle1, toggle2 }, { Exclusive = true }) — active / coupe plusieurs toggles d'un coup (g.Set(bool),
+		  g.Toggle(), g.Select(x)). Exclusive = true : un seul toggle actif à la fois (modes de vol, de caméra, de grab...) ·
+		  AllowNone = false : un toggle reste toujours actif · g.Get() · g.GetActive() · g.OnChanged(fn).
+
+	V9.6 — API : BOUCLE DE TOGGLE, PROPRIÉTÉ DIRECTE, ÉLÉMENTS CONDITIONNELS, LISTES ENRICHIES · CLIC SUR L'APERÇU
+		• Toggle avec boucle intégrée : CreateToggle({ Name = "Vol", Loop = function(dt, item) ... end }) — tourne à chaque image tant que le
+		  toggle est activé et se coupe tout seul (désactivation, fermeture de l'UI). LoopEvent = "Heartbeat" | "RenderStepped" | "Stepped" ·
+		  LoopInterval = secondes entre deux appels · item.IsLooping().
+		• Bascule directe sur une propriété, zéro callback :
+		  CreateToggle({ Name = "Vitesse", Bind = { Target = function() return humanoid end, Property = "WalkSpeed", On = 50, Off = 16 } })
+		  Target : instance, fonction qui la renvoie, ou nom de service ("Lighting") · Off absent = valeur d'origine rétablie · Keep = true : la valeur
+		  est ré-imposée si le jeu la change · plusieurs propriétés : Properties = { WalkSpeed = 50, JumpPower = { On = 80, Off = 50 } } ou Bind = { {...}, {...} }.
+		• Éléments conditionnels : ShowIf / HideIf sur n'importe quel élément (élément, nom de Flag, fonction, { Item =, Equals / NotEquals / In /
+		  Contains / Min / Max }, liste de conditions). Library:RefreshConditions() force le recalcul.
+		• Liste déroulante enrichie : Items = { { Name = "Pistolet", Icon = "rbxassetid://...", Desc = "Dégâts : 20", Color = Color3 } } (les chaînes
+		  simples marchent toujours ; la recherche de la liste regarde aussi la description).
+		• Home > Mon personnage : prendre une partie du corps (bras, jambe, tête, torse) ne demande plus de viser ~58 px trop haut. La partie saisie est
+		  désormais désignée par de vrais cadres invisibles (le pointeur réel, sans conversion de coordonnées) et les mouvements de la prise sont
+		  relatifs au point d'appui. Library.PreviewPickOffset = Vector2.new(0, y) pour décaler les zones à la main si besoin.
+
+	V9.5 — TRACKER DE JOUEUR
+		• Home > Serveurs > « Tracker » : pseudo exact (+ PlaceId facultatif) -> cherche le joueur dans les serveurs PUBLICS du jeu en comparant
+		  les avatars (API games / thumbnails de Roblox). Serveur actuel vérifié d'abord, progression en direct, Arrêter, Rejoindre, Copier l'ID.
+		• Région : non fournie par l'API publique -> filtre « Ping max » facultatif (approximation). Nécessite request / http_request.
+		• Library.Tracker = false retire le bloc · Library:TrackerSearch(pseudo, placeId) · Library:TrackerStop().
+
+	V9.4 — APERÇU DU PERSONNAGE : FOND ANIMÉ + INTERACTIF
+		• Home > Mon personnage : le fond bleu uni est remplacé par un décor animé à thèmes. Par défaut « Ange » : fond noir, aura + halo au-dessus
+		  de la tête de la couleur de la TÊTE du joueur, ailes qui battent de la couleur de son TORSE (couleurs très sombres légèrement éclaircies pour
+		  rester visibles sur le noir). Autres thèmes : Nuit (étoiles qui scintillent + étoiles filantes),
+		  Crépuscule (soleil qui se couche), Aurore (rubans qui ondulent), Studio (projecteur) et Cyber (grille néon qui défile).
+		  Le sol et la lumière de l'aperçu s'accordent au thème. Library.PreviewTheme = "night" | "dusk" | "aurora" | "studio" | "cyber" (retenu
+		  pendant la session) · Library.PreviewThemes (tes propres thèmes : top, bot, floor, floorTr, amb, light, accent, stars, starColor, sun,
+		  aurora, spot, grid, shoot) · Library.PreviewThemeOrder (ordre du bouton « Fond »).
+		• Interactions : clic sur l'aperçu = étincelles + emote au hasard · double-clic = zoom sur le haut du corps (re-double-clic = dézoom) ·
+		  le personnage tourne doucement la tête vers le curseur quand il survole l'aperçu · le décor suit le glissement (parallaxe) ·
+		  boutons en haut à droite : « Fond » (change de thème), « Emote », « Zoom », « Vue » (recentre).
+		  CreatePreview3D({ Theme = "night" | true }) active ce système sur n'importe quel aperçu · Toolbar = false cache les boutons.
+		  Sans Theme : ancien comportement (Background / FloorColor unis).
+
+	V9.3 — CHAMPS DE TEXTE QUI GRANDISSENT VERS LE BAS
+		• CreateInput : quand le texte est trop long, il passe à la ligne et le champ (ainsi que sa ligne dans le bloc) s'agrandit vers le bas
+		  avec une transition (ressort), au lieu de s'étirer sur une seule longue ligne. Il se rétracte quand le texte raccourcit.
+		  Entrée = valider (pas de nouvelle ligne) · un texte collé est mis sur une seule ligne · o.MaxHeight (200) = hauteur maximale.
+		• CreateTextArea : la zone grandit aussi vers le bas avec le texte (Height = minimum, o.MaxHeight = 400) · o.AutoGrow = false = hauteur fixe.
+		• Library.AutoGrow = false : retour à des hauteurs fixes. Champ multi-ligne en interne : la sélection native de Roblox est utilisée.
+		• Poignée de redimensionnement (coin bas-droite) : l'arc est maintenant posé À L'EXTÉRIEUR de la fenêtre, concentrique avec son arrondi (calque
+		  qui copie la position / taille / échelle / fondu de la fenêtre : il suit toujours le coin, même pendant le zoom d'ouverture ou un changement d'arrondi).
+
+	V9.2 — « HI. » DANS L'INTRO + SON
+		• Home > Serveur : l'icône du jeu dans lequel tu es s'affiche en haut du bloc (Library.HomeGameImage = false la retire). Si l'exécuteur autorise HTTP + fichiers, c'est la miniature 16:9 du jeu (Library.HomeGameThumb = false : icône seulement).
+		• Au tout début de l'intro : écran noir, interface Roblox masquée (chat, liste des joueurs, barre du haut...), puis « Hi. » apparaît en
+		  fondu au moment précis où le son démarre (Library.HiSoundId, 130780071265356 par défaut), puis l'intro « trou noir » continue.
+		  Tout est remis comme avant ensuite. Clic = passer. getgenv().UiLibIntroHi = false (ou Library.IntroHi = false) le coupe ·
+		  Library.IntroHiTime (durée, 2 s).
+		• Home > Mon personnage : le même son se joue quand l'avatar fait son animation de bienvenue / son petit saut à l'arrivée sur Home.
+		  Library.HiSound = false (ou Réglages > Animations & performances > « Son Hi. ») le coupe · Library.HiSoundVolume (1) ·
+		  Library.HiSoundOnHome = false : seulement dans l'intro · Library:PlayHiSound() le joue à la demande.
+
+	V9.2 — FLUIDITÉ : DÉFILEMENT, CHAMP DE TEXTE, FIN DES ANIMATIONS
+		• Défilement à la molette refait : la lib prend elle-même la molette (le défilement natif est coupé sur ces cadres), donc plus de
+		  « saut puis retour » qui faisait bugger. Un ressort amorti fait glisser le contenu, et la fin est nette (au moins ~1 px par image,
+		  puis arrêt) : plus de micro-décalages d'un pixel. Library.SmoothScrollStep (px par cran, 64) · Library.SmoothScrollSpeed (20) ·
+		  Library:SetSmoothScroll(false) = retour au défilement natif · Library.SmoothScrollLegacy = true = ancien mode.
+		• Champ de texte (CreateInput) : il grandit avec un ressort (la vitesse est conservée à chaque lettre au lieu de repartir de zéro)
+		  et garde de la marge d'avance, donc plus de clignotement du fondu pendant l'agrandissement.
+		• Ressorts : la queue de l'animation ne rampe plus pixel par pixel (arrêt net à moins de 1 px). Les tweens utilisent par défaut
+		  une courbe Cubic (Library.DefaultEase) au lieu de Quint, dont la fin traînait d'un pixel.
+
+	V9.1 — CHARGEMENT DE CONFIG SILENCIEUX + HOME EN R6
+		• Charger une config n'affiche plus des centaines de notifications (une par élément modifié) : les notifications émises par les
+		  callbacks pendant le chargement sont retenues, UNE SEULE notification « Config chargée » apparaît, et Réglages > « Raccourcis &
+		  configs » > « Changements de config » liste tout ce qui a changé (nom, ancienne valeur -> nouvelle valeur).
+		  Library.CfgQuiet = false (ou le toggle du panneau) pour revenir à l'ancien comportement · Library.CfgChanges = l'historique.
+		  Une notification Error ou { Force = true } passe toujours.
+		• Home > Mon personnage : avatar R6 automatiquement (Library.PreviewRigType = "R6" | "R15", ou RigType dans CreatePreview3D),
+		  animation de bienvenue à la première arrivée (2 sauts, bras levés) puis coucou en boucle, tout le temps.
+		  pv.Welcome() la rejoue · Library.HomeWelcome = false la coupe (il reste le petit saut à chaque arrivée).
+		• 17 emotes entre les coucous (refaites) : coucou, pause, coucou, EMOTE, puis on recommence avec l'emote suivante (Saut de joie,
+		  Disco, Floss, Dab, Robot, Glissade, Karaté, Kamehameha, Salto arrière, Pirouette, Révérence, Applaudir, Champion, Zombie,
+		  Bof, Jumping jacks, Chercher).
+		  Le nom de l'emote s'affiche en bas de l'aperçu. Les emotes sont coupées dans Home par défaut : Library.HomeEmotes = true les remet · pv:PlayEmote(n | "Nom") en lance une ·
+		  Library.PreviewEmotes (ta propre liste) · Library.PreviewEmoteWave (durée d'un coucou) · Library.PreviewEmoteRest (pause).
+
+	V9 — INTRO DE CHARGEMENT
+		• Animation « trou noir » dès le lancement : anneaux lumineux, étoiles qui spiralent vers le centre, titre lettre par lettre,
+		  barre de progression réelle et texte d'état. À la fin tout est aspiré, deux ondes de choc partent et le fond se dissipe
+		  sur la fenêtre prête. Clic = passer. Réglages > Animations & performances > « Intro de chargement ».
+		  API : Library:SetIntroEnabled(bool) / HoldIntro(bool) / FinishIntro() · Library.IntroMinTime · Library.IntroYield ·
+		  getgenv().UiLibIntro = false · getgenv().UiLibIntroTitle = "MON NOM".
+
+	V5.9 — TRANSITIONS PLUS FLUIDES
+		• Liste déroulante : le tiroir s'ouvre / se ferme en glissant, les options apparaissent une à une (fondu + léger glissement)
+		  et la flèche pivote en même temps, avec la même durée et la même courbe.
+		• Glisser-déposer d'un bloc : les autres blocs s'écartent en glissant (l'emplacement grandit, l'ancien se referme),
+		  au lieu de sauter d'un coup. L'emplacement a la hauteur réelle du bloc : au dépôt, plus aucun saut.
+		• Réduire / restaurer (double-clic) : le contenu se fond dans l'arrière-plan pendant que la fenêtre rétrécit, et réapparaît
+		  en fondu pendant qu'elle se redéplie (au lieu de disparaître d'un coup).
+		• Color picker : les poignées (carré, teinte, opacité) glissent jusqu'à la nouvelle couleur quand on tape un code hexadécimal
+		  (appliqué en direct dès que le code est complet), colle, utilise la pipette ou clique une couleur récente.
+		  Pendant un glisser à la souris, rien ne change : le curseur suit toujours le pointeur sans retard.
+		• Changement du nombre de colonnes : chaque bloc glisse de son ancienne place vers la nouvelle (la cible est relue à chaque
+		  image, donc ça suit aussi l'agrandissement de la fenêtre). Library.Animations = false coupe tout cela.
+
+	V5.8 — COLOR PICKER REFAIT, FONDU DU TEXTE, APERÇU DU PERSONNAGE
+		• Color picker refait : carré saturation / valeur pleine largeur, barre de teinte horizontale, poignées qui prennent la couleur choisie.
+		  Le pointeur est maintenant lu dans le repère réel de l'UI (correction automatique du décalage vertical de la barre du haut) ;
+		  si un écart persiste : Paramètres > Fenêtre > « Décalage vertical du curseur » (Library.PointerOffset = Vector2.new(0, px)).
+		• Champs de texte (Input, TextArea, hexadécimal du color picker) : chaque lettre tapée apparaît en fondu, chaque lettre supprimée
+		  s'efface en fondu. Library.TextFade = false pour désactiver.
+		• Home > Mon personnage : l'aperçu ignore les outils / objets accrochés loin du corps (boîte englobante énorme -> personnage minuscule,
+		  décentré, sol géant) et reste cadré sur le personnage.
+
+	V5.7 — CHAMP DE TEXTE EXTENSIBLE & SOUS-ONGLETS REFAITS
+		• CreateInput : plus de « ... » en fin de texte ; le champ s'agrandit avec une transition (vers la gauche, jusqu'à la largeur de la ligne,
+		  le nom s'efface en fondu) et se rétracte quand le texte raccourcit. Au-delà de la ligne, le texte défile pendant la saisie.
+		• Tab:CreateSubTabs : plus de grossissement au survol (le texte restait flou / rogné). Une pastille unique glisse et se redimensionne
+		  vers le sous-onglet choisi, le texte garde sa taille, la page arrive du bon côté, la barre défile si un sous-onglet est hors de vue.
+
+	V5.6 — HOME EN SOUS-ONGLETS
+		• Home : « Info » (page de départ : aperçu 3D, FPS / ping, session, météo, serveur...), « Explication » (ce que contient l'UI,
+		  aperçu de l'API, démos en direct) et « Mises à jour » (version, vérification GitHub, nouveautés).
+		• Library:_buildHomeExplain(sous_onglet) construit la page Explication (les blocs de démo n'entrent ni dans les favoris,
+		  ni dans la palette, ni dans les configs).
+
+	V5.4 — NOUVEAU TYPE D'INTERFACE « CARRÉ »
+		• Paramètres > Apparence > Type d'interface > « Carré » (ou CreateWindow({ LayoutStyle = "Carré" }), Library:SetLayoutStyle("Carré")) :
+		  style rétro, simple et 100 % carré : onglets en texte dans une barre du haut (l'onglet actif est souligné), titre des blocs posé sur
+		  la bordure, tous les coins carrés, police monospace. Le type Classique / Éclipse revient tel quel (rien n'est perdu).
+		• Réglages du type Carré (Paramètres > Apparence > « Type Carré ») : police monospace, titre des blocs sur la bordure.
+		  Library.Square = { Mono = true, TitleOnBorder = true } · Library:SetSquareOption(nom, valeur).
+		• Nouveau préréglage de couleurs « Violet rétro » (fond violet foncé, accent violet vif) pour retrouver le look de la capture.
+
+	V5.3 — HOME, APERÇU 3D, CHANGE-LOG AUTOMATIQUE
+		• Onglet « Home » créé automatiquement en premier : aperçu 3D de ton personnage, FPS, ping, joueurs, mémoire, session, serveur
+		  + nouveautés de l'UI (Library.Changelog / Library:AddChangelog). CreateWindow({ Home = false }) pour le retirer,
+		  { ChangeLog = false } pour masquer seulement les nouveautés, HomeName / HomeIcon pour le nom / l'icône.
+		• Block:CreatePreview3D({ Name, Height, Character, Options }) : rig R6 ou vrai personnage dans un ViewportFrame, piloté en direct
+		  (Highlight, Chams, Box Full / Corner, Squelette, Nom, Vie, Distance, Traceur, Point sur la tête). pv:Bind / pv:BindAll / pv:Set.
+		• Block:CreateStats({ Columns, CellHeight, Items }) : grille de tuiles chiffrées (stats:Set(id, texte, couleur)).
+		• Block:CreateGraph({ Name, Samples, Unit, MinMax, ColorFn }) : histogramme glissant (g:Push(v), g:Flush()).
+
+	V5.2 — CURSEUR LIBRE, TOUCHES DU JEU, COLOR PICKER
+		• Paramètres > Fenêtre : « Libérer le curseur » et « Bloquer les touches du jeu » (Library:SetFreeCursor / SetBlockGameKeys,
+		  CreateWindow({ FreeCursor = true, BlockGameKeys = false }), Library.BlockedKeys = touches bloquées : W A S D Espace par défaut).
+		• Un seul mécanisme de curseur libre pour la fenêtre, la Palette (Ctrl+K), la barre de recherche (Ctrl+T) et la pipette :
+		  Library:AcquireCursor(proprietaire, forcer) / Library:ReleaseCursor(proprietaire).
+		• Color picker : barre d'opacité (Callback(couleur, opacité), item:GetAlpha / SetAlpha, { Opacity = false } pour la retirer),
+		  pipette (couleur d'un élément d'interface ou d'un objet du monde), 8 couleurs récentes (sauvegardées), copier / coller en hexadécimal
+		  (#RRGGBB ou #RRGGBBAA). Library:PickScreenColor(fonction) ouvre la pipette seule.
+		• Le fond « trou noir » est en mode « Léger » par défaut (Background = "full" dans CreateWindow pour l'ancien rendu).
+
+	V5.1 — CORRECTIFS
+		• Curseur libéré tant que la fenêtre est ouverte (vue 1re personne / souris verrouillée) ; rendu au jeu à la fermeture.
+		• Toggles & Keybinds : on peut assigner Clic gauche / droit / milieu (en plus du clavier). Config : "MouseButton1/2/3".
+		• Color picker (et glisser de bloc) : position du pointeur alignée sur le curseur (GetMouseLocation).
+		• Animations « Back » : les couleurs / transparences ne dépassent plus la cible (fini le flash noir <-> blanc du style Pilule).
+
+	V5 — NOUVEAUTÉS
+		• Correctif : la fenêtre garde sa taille après fermeture / réouverture (taille « dépliée » de référence).
+		• Keybinds : sélecteur de mode sur chaque ligne -> Toggle / Hold / Always.
+		    Toggle : CreateToggle({ Keybind = Enum.KeyCode.X, KeyMode = "Hold" })  (clic droit = changer la touche)
+		    Keybind : CreateKeybind({ Mode = "Hold", OnState = function(actif) end })  item:IsActive() / GetMode() / SetMode()
+		• Mini-fenêtres : bouton dans l'en-tête de chaque bloc (limite 1 à 5 dans Paramètres), Library:DetachBlock(bloc).
+		• Nouveaux éléments : Block:CreateTextArea / CreateRadio / CreateTable / CreateImage.
+		• Change-Log : affiché dans l'onglet Home (plus d'onglet séparé) : Library:AddChangelog(version, { notes }) le met à jour tout seul.
+		• Onglet « Éditeur de thème » : aperçu en direct + dégradés (Library:SetGradient({...})). ChangeLog = false /
+		  (l'éditeur de thème a été fusionné dans Paramètres > Thèmes).
+
+	API (inchangée) :
+		Library:CreateWindow({...})            -> Window
+		Window:CreateTab(nom, _, icone)        -> Tab
+		Tab:CreateBlock({Name, Side, ImageID}) -> Block
+		Block:CreateSection / CreateLabel / CreateParagraph / CreateDivider /
+		      CreateButton / CreateToggle / CreateSlider / CreateDropdown /
+		      CreateInput / CreateColorPicker / CreateKeybind / CreateProgress / CreateStepper
+		Library:Notify({Title, Content, Duration})
+		Library.Flags / Library.Items / Library.CornerObjects / Library.GlobalCornerValue
+
+	COLONNES DE BLOCS  (1 à 4)
+		• Paramètres > Apparence > « Colonnes de blocs » (ou Window:SetColumns(n) / Library:SetColumns(n) /
+		  CreateWindow({ Columns = n })). La fenêtre s'agrandit toute seule si elle est trop étroite
+		  (≈ 676 px pour 2 colonnes, 941 px pour 3, 1206 px pour 4) et ne peut plus être réduite en dessous.
+		• 2 colonnes : Side = \"Left\" / \"Right\" comme avant. 3 et 4 colonnes : les blocs sont répartis à tour de rôle.
+		• Écran trop petit : le nombre de colonnes affichées est réduit automatiquement.
+		• Library.ColumnMinWidth = largeur minimale d'une colonne (255 par défaut).
+
+	SAUVEGARDE AUTO DES PARAMÈTRES
+		• Tout ce que tu changes dans l'onglet Paramètres (position / durée des notifications, thème, couleurs, colonnes,
+		  sons, trou noir...) est enregistré tout seul dans <ConfigFolder>/_settings.json et restauré au lancement suivant,
+		  même si une config est auto-chargée. Library.AutoSaveSettings = false (ou Paramètres > Fenêtre) pour couper ;
+		  Library:SaveSettings() / Library:LoadSettings() pour le faire à la main.
+
+	DISPOSITION DES BLOCS  (déplacer les blocs, sauvegardée automatiquement)
+		• Paramètres > « Disposition des blocs » > « Mode édition » : l'en-tête de chaque bloc (onglets ET Paramètres)
+		  devient une poignée. Glisse-le vers le haut / le bas, ou vers une autre colonne ; un emplacement s'affiche
+		  à l'endroit où le bloc va tomber. Le défilement se fait tout seul près des bords de la colonne.
+		• La disposition est mémorisée PAR nombre de colonnes (2 colonnes, 3 colonnes...) et par onglet / sous-onglet,
+		  dans <ConfigFolder>/_settings.json (clé « ui.blocklayout »), donc restaurée au lancement suivant, même pour
+		  les blocs que ton script crée après CreateWindow. Un bloc nouveau (jamais déplacé) va en bas de sa colonne.
+		• API : Library:SetLayoutEdit(bool) / Library.LayoutEdit  ·  Library:ResetBlockLayout([nomOnglet])
+		  Library.BlockLayout = les données  ·  Nécessite la sauvegarde auto des paramètres pour persister.
+
+	RACCOURCIS CLAVIER (Paramètres > « Raccourcis clavier »)
+		• Liste tous les keybinds de l'interface (Block:CreateKeybind). Bouton « Aller » à droite : 1er clic = confirmer,
+		  2e clic = ouvre l'onglet, déplie le bloc, défile jusqu'au keybind et le fait clignoter.
+		• Library:RevealElement(entrée) fait la même chose depuis le code ; Library.KeybindEntries = la liste.
+
+	NOUVEAUTÉS
+		• Design « trou noir » : anneau d'horizon qui tourne autour de la fenêtre, trou noir
+		  décoratif avec disque d'accrétion, étoiles aspirées en spirale.
+		• Ouverture / fermeture animées, déplacement lissé, fenêtre limitée à l'écran,
+		  poignée de redimensionnement (coin bas-droite), Window:SetScale(n).
+		• Transition fluide entre onglets, blocs repliables animés, hover partout.
+		• Recherche globale (barre dans la sidebar) : filtre les éléments de tous les onglets.
+		• Slider : clic sur la valeur pour taper un nombre exact (ex. -2.89765, sans accroche sur le pas ; la poignée, elle, suit Step/Increment), options Step/Increment et Suffix.
+		• Dropdown : recherche intégrée (listes longues) et mode Multi = true (retourne une table).
+		  Option Search = true/false pour forcer la barre de recherche.
+		• Input : option Numeric = true, LiveUpdate = true, ClearOnFocus = true.
+		• Console (style CMD) : tab:CreateConsole({ Name, Description, Height, MaxLines, Save, Timestamp, Prompt, Filters, Events }) ;
+		  con:Log / Info / Ok / Warn / Error / Debug(texte, { Tag, Color, Plain }), con:Clear(), con:AddCommand(nom, usage, fonction),
+		  Library:LogEvent(tag, texte, niveau) pour écrire dans les consoles créées avec Events = true.
+		• Notifications : Type = "Info" | "Success" | "Warning" | "Error", barre de durée,
+		  clic pour fermer, 5 max empilées.
+		• Config : Library:SaveConfig(nom) / LoadConfig(nom) / DeleteConfig(nom) / ListConfigs()
+		  et Window:CreateConfigTab("Config") qui crée un onglet tout prêt.
+		• Library:SetCornerRadius(v) met à jour tous les arrondis déjà créés.
+		• Options de CreateWindow en plus : Stars (nombre d'étoiles, 0 = aucune), MinSize (Vector2).
+		• Performances : NoCanvasGroup = true (CreateWindow ou Library.NoCanvasGroup) pour un rendu bien plus
+		  fluide (pas de fondu d'ouverture) ; Background = "full" | "light" | "off" dans CreateWindow, ou
+		  Window:SetBackground(mode) / Library:SetBackground(mode) à tout moment.
+		  Le fond se met en pause tout seul pendant les déplacements, redimensionnements et animations lourdes.
+
+	─────────────  V3 : THÈMES, ANIMATIONS  (les vagues ont été retirées en V4)  ─────────────
+	THÈMES (onglet Paramètres > Thèmes / Couleurs)
+		Library:GetTheme() / ApplyTheme(t) / ApplyPreset(nom) / SaveTheme / LoadTheme / DeleteTheme / ListThemes
+		Library:ExportTheme() -> "UILIB-THEME:{json}" (copié dans le presse-papiers) / ImportTheme(texte)
+		Library:SetColors({ Main, Second, Accent, Text, ElementAccent })  (Color3 ou "#RRGGBB"), en direct
+		Library:SetFont(nom)  Gotham / Builder Sans / Source Sans / Ubuntu / Nunito / Arimo / Code
+	CONFIGS : ExportConfig / ImportConfig / ResetConfig(includeUi) / DuplicateConfig / RenameConfig
+	FORME : Library:SetShape("Vague" | "Douce" | "Classique"), contour ondulant autour de la fenêtre,
+		vagues intérieures, Library:SetOption("WaveAmp" | "WaveSpeed" | "SpinSpeed" | "Breathing" | "Ripple" |
+		"OutlineWaves" | "InnerWaves" | "WinRound" | "HoleVisible" | "HolePos" | "HoleScale", valeur), Library:SetStars(n)
+	ANIMATIONS : onde au clic, bouton qui s'étire, onglets qui glissent, bordure qui respire, titre qui brille.
+
+	─────────────  NOUVEAUTÉS DE CETTE VERSION  ─────────────
+	FLUIDITÉ
+		• BOUCLE D'ANIMATION PARTAGÉE (Library.Ticker) : une seule connexion Heartbeat pour tout (fond, étoiles, graphiques,
+		  ressorts, défilement, couleurs, chiffres, repli des blocs, FPS). Chaque tâche a sa cadence (rate) et un « gate » :
+		  elle dort quand rien ne bouge ou quand son élément est caché ; la fenêtre Roblox sans focus met le décoratif en pause ;
+		  si tout dort, la connexion est coupée. Le FPS est mesuré une seule fois (Library.Ticker.Fps).
+		  Pour tes propres animations : local h = Library.Ticker.connect(function(dt, now) ... end, { rate = 30, gate = monFrame })
+		  puis h:Disconnect() quand c'est fini.
+		• Le fond animé (anneaux + étoiles) n'est plus recalculé à chaque frame : boucle Heartbeat à ~30 Hz
+		  (~15 Hz pendant un geste), au lieu de RenderStepped + pause/reprise brutale (c'était la cause de l'effet « 15 fps »).
+		• RenderStepped ne gère plus que le déplacement / redimensionnement (très léger). Le redimensionnement suit
+		  directement le curseur (moins de recalculs de layout), le déplacement reste lissé.
+		• tween() met les TweenInfo en cache ; le slider se met à jour sans tween empilés pendant le glisser ;
+		  le dropdown ne ré-anime que les lignes qui changent. Bug corrigé : l'appel de glisser sans position.
+	PARAMÈTRES  (Window:CreateSettingsTab("Paramètres"))
+		opacité, couleur d'accent en direct, arrondi, échelle, taille de police, animations on/off + vitesse
+		(0.5x / 1x / 2x), fond animé complet/léger/off, indicateur FPS/ping, position et durée des notifications,
+		réinitialiser la fenêtre, config auto-chargée (Library:SetAutoLoad / Library:AutoLoad).
+		Position + taille de la fenêtre et état replié des blocs sont enregistrés dans les configs.
+	INTERFACE
+		• Double-clic sur la barre de titre : réduit à la barre seule / restaure (Paramètres > Fenêtre > « Barre réduite visible » :
+		  activé = la barre réduite reste toujours à l'écran, masquée ou non ; masquer une fenêtre dépliée la réduit en barre).   • Ctrl+R : recentre.
+		• Bouton « = » dans la barre de titre : tout replier / déplier (Tab:CollapseAll / Tab:ExpandAll).
+		• Poignées de redimensionnement sur tous les bords et coins.
+		• Tooltips : { Tooltip = "texte" } sur Button/Toggle/Slider/Dropdown/Input/Keybind/ColorPicker.
+		• Favoris : étoile ★ sur chaque élément + Window:CreateFavoritesTab("Favoris"). { Favorite = false } pour l'enlever.
+		• Block:CreateConfirmButton({...}) ou CreateButton({ Confirm = true, ConfirmText = "..." }) : double confirmation.
+		• Block:CreateSeparator() (alias de CreateDivider). CreateLabel / CreateParagraph / Dropdown Multi existaient déjà.
+		• Indicateur FPS/ping dans la barre de titre (CreateWindow({ ShowStats = false }) pour le cacher).
+		• Library:SetAccent / SetFontScale / SetAnimSpeed / SetAnimations / SetWindowAnim / SetLockPosition / SetToggleStyle / SetNotifPosition / SetNotifDuration
+
+	─────────────  V4 : FLOU, ÉTOILES QUI REBONDISSENT, STYLES  ─────────────
+		• Les vagues (contour ondulant + vagues intérieures) ont été retirées.
+		• Étoiles qui rebondissent sur les bords de l'écran, DERRIÈRE la fenêtre (elles disparaissent sous la fenêtre) :
+		  Library.StarCount / Library:SetStars(n), Library.StarSpeed, Library.StarsThroughWindow.
+		  Les étoiles aspirées par le trou noir (dans la fenêtre) sont optionnelles : Library.HoleStars = true.
+		• Flou d'arrière-plan (BlurEffect dans Lighting, seulement quand l'interface est ouverte) :
+		  Library:SetBlur(0 à 56)  /  CreateWindow({ Blur = 14 }).  Il floute le jeu, pas les fenêtres.
+		• STYLES : Library:SetStyle("Standard" | "Verre" | "Givré" | "Mat" | "Néon")  /  CreateWindow({ Style = "Verre" })
+		  et dans Réglages > Style. Pour en ajouter un : copie une entrée de la table STYLES plus bas.
+		• Formes : "Arrondie" | "Douce" | "Classique" (l'ancienne "Vague" est convertie en "Arrondie").
+
+	─────────────  V5 : NOTIFICATIONS  (détail de l'API juste avant Library:Notify)  ─────────────
+		• Library:Notify renvoie maintenant un handle : n:Update / SetProgress / SetTitle / SetContent / SetType /
+		  Dismiss / Pause / Resume / IsAlive.  Type = "Loading" ou Progress = 0..1 pour une notif qui évolue.
+		• Animations : entrée en glissant avec rebond, reflet qui balaie la carte, icône qui pop + onde,
+		  Erreur = secousse, Alerte = oscillation, Succès = rotation ; la pile se décale en douceur.
+		• Pause du minuteur au survol, swipe latéral pour fermer, doublons regroupés (badge x2, x3...),
+		  boutons d'action (Actions = {...}), OnClick / OnDismiss, mode « Ne pas déranger », historique
+		  (Window:CreateNotifLogTab), 6 positions (haut / bas x gauche / centre / droite), couleurs par type.
+
+	─────────────  V6 : TROU NOIR À LA FERMETURE, PASTILLE +N, SONS, PALETTE (Ctrl+K)  ─────────────
+		• Look des notifications : pilule noire très arrondie, contour blanc fin, texte blanc net, pastille d'icône blanche
+		  (Library.NotifColored = true pour recolorer la pastille selon le type).
+		• Fermeture d'une notification : la carte se brouille (images fantômes), se froisse en boule de papier (plis
+		  clairs) pendant qu'un trou noir noir & blanc s'ouvre derrière elle, puis elle spirale vers son centre avec des
+		  morceaux de papier arrachés, et une onde de choc referme tout. Library.NotifBlackHole = false pour le couper
+		  (le swipe latéral garde son glissement). Réglages > Notifications.
+		• Au-delà du maximum affiché (NotifMax) les plus anciennes ne sont plus fermées : elles sont masquées (minuteur en
+		  pause) et une pastille « +3 » apparaît. Clic sur la pastille = tout vider. Library.NotifOverflow = "Close" pour
+		  retrouver l'ancien comportement. Library:SetNotifMax(n) / SetNotifOverflow("Pill" | "Close").
+		• Un son par type (Info / Succès / Alerte / Erreur) : Réglages > Sons des notifications (liste de sons, ID perso,
+		  fichier du workspace, volume). Library:SetNotifSound("Error", "Basse") / PlayNotifSound(type).
+		• Palette de commandes : Ctrl+K ouvre une roue de 10 cases au milieu de l'écran (curseur libre).
+		  1-0 ou clic pour choisir, Tab = filtre (Tout / Favoris / Boutons / Toggles / Réglages), molette ou flèches = page,
+		  / = recherche, Échap = retour. Boutons lancés, toggles basculés, curseurs / listes / champs / couleurs / touches
+		  réglés sans ouvrir la fenêtre. Library:OpenPalette() / ClosePalette() / TogglePalette(). { Palette = false } exclut un élément.
+
+	─────────────  V8 : CONFLITS DE TOUCHES, HUD, SOUS-ONGLETS, CONSOLE, « NE PLUS AFFICHER »  ─────────────
+		• Conflits de keybinds : Paramètres > Raccourcis clavier affiche un avertissement ⚠ (liste des touches partagées),
+		  les lignes concernées passent en orange ; pastille « ! » sur les éléments, notification quand tu en crées un.
+		• HUD des actifs : Paramètres > HUD des actifs (afficher, touches, seulement fenêtre fermée, taille, replacer).
+		  Il se déplace à la souris / au doigt et sa position est sauvegardée avec les réglages.
+		• Slider à deux poignées : Block:CreateRangeSlider({ Name, Min, Max, Step, MinGap, Default = { Low, High }, Callback = function(lo, hi) })
+		• Sous-onglets : local subs = Tab:CreateSubTabs({ "A", "B" }) puis subs[1]:CreateBlock({...}) (voir plus bas).
+		• Onglets DANS un onglet (menu déroulant fluide dans la barre latérale, avec une flèche ›) :
+		    local combat = Window:CreateTab("Combat", nil, icon)
+		    local aim    = combat:CreateChildTab("Aimbot", nil, icon)   -- (ou combat:CreateTab(...))
+		    local esp    = combat:CreateChildTab("ESP")
+		    aim:CreateBlock({ Name = "Réglages" }) ...                  -- un enfant est un onglet normal
+		    combat:SetExpanded(true) / combat:ToggleExpanded() / combat.Expanded
+		    local kids = combat:CreateChildTabs({ "Aimbot", { Name = "ESP", Icon = "rbxassetid://..." } })
+		    Les enfants peuvent aussi avoir des enfants (imbrication illimitée). Clic sur la flèche = ouvrir / fermer ;
+		    clic sur l'onglet = l'afficher et déplier ; clic sur l'onglet déjà actif = plier / déplier.
+		• Console : Window:CreateConsoleTab("Console") affiche les print / warn / erreurs ; Library:ConsoleLog(texte, type).
+		• « Ne plus afficher » : une notification répétée (x2) reçoit un bouton qui la masque ; liste + réactivation dans
+		  Paramètres > Notifications masquées (Library:SilenceNotif / UnsilenceNotif / UnsilenceAllNotifs).
+
+	─────────────  V7 : TITRE ÉTIRÉ, BARRE DE RECHERCHE (Ctrl+T)  ─────────────
+		• Titre étiré + en gras (Library.TitleStretch / TitleBold, Réglages > Apparence). Le texte se réduit tout seul
+		  pour tenir dans la barre de titre. Si tu vois des carrés entre les lettres : Library.TitleSpacing = " ".
+		• Ctrl+T : barre de recherche seule au milieu de l'écran (sans la fenêtre), trou noir + étoiles qui spiralent.
+		  Les résultats affichent les vrais contrôles (interrupteur, curseur, bouton, liste, champ, couleur, touche).
+		  Library:OpenSpotlight() / CloseSpotlight() / ToggleSpotlight() / SetSpotlightKey(KeyCode, needCtrl).
+
+	─────────────  V8 : SONS DE L'INTERFACE  ─────────────
+		• Petits bruits calmes (avec un léger écho « trou noir ») : survol des onglets et des éléments, changement d'onglet,
+		  clic sur un bouton, toggle activé / désactivé, liste déroulante, bloc replié, champ de saisie, ouverture et
+		  fermeture de la fenêtre, de la palette (Ctrl+K) et de la barre de recherche (Ctrl+T).
+		• Paramètres > « Sons de l'interface » : on/off, volume, ambiance (Trou noir / Cristal / Doux), bruits au survol,
+		  écho spatial. Sauvegardé automatiquement avec les autres réglages.
+		• API : Library:SetUISoundEnabled(bool) / SetUISoundVolume(0-1) / SetUISoundPack(nom) / SetUISoundHover(bool) /
+		  SetUISoundReverb(bool) / PlayUISound(evenement). Library.UISoundPacks = les ambiances (modifiables).
+
+	─────────────  V9 : STYLES DE FERMETURE DES NOTIFICATIONS  ─────────────
+		• Paramètres > Notifications > « Style de fermeture » (sauvegardé automatiquement) : Trou noir · Fondu · Rétrécir ·
+		  Tourbillon · Briser (éclats projetés) · Casser (cassée en deux) · Dissoudre · Effacer vers le haut / le bas /
+		  la gauche / la droite (masque + trait lumineux) · Glisser · Aléatoire.
+		• API : Library:SetNotifExit("Briser") · Library.NotifExit · Library.NotifExitStyles
+		  Library.NotifExitByType = { Error = "Briser", Success = "Tourbillon" } (un style par type de notification)
+		  Library:Notify({ ..., Exit = "Effacer vers la droite" }) (style pour une seule notification)
+		• Le swipe latéral garde son glissement. Library.NotifBlackHole = false convertit « Trou noir » en « Glisser ».
+
+	─────────────  V11 : TYPES D'INTERFACE  (Classique / Éclipse)  ─────────────
+		• Réglages > Style > « Type d'interface » : change toute la mise en page de la fenêtre d'un coup.
+		    Classique : l'interface d'origine (menu compact à gauche, barre de titre en haut).
+		    Éclipse   : menu large avec marque + slogan en haut et carte utilisateur en bas, en-tête avec le titre de la
+		                page + sous-titre + recherche, barre d'état en bas (nom / version / FPS). Se marie bien avec 3-4 colonnes.
+		• Réglages > « Type Éclipse » : largeur du menu, carte utilisateur, barre d'état, sous-titres, slogan, statut.
+		• Sauvegardé automatiquement (clés « ui.layoutstyle » et « ui.ec.* »). La fenêtre s'agrandit seule si besoin.
+		• API : Library:SetLayoutStyle("Éclipse") / Window:SetLayoutStyle(nom) / Library.LayoutStyle
+		        Library:SetEclipseOption("SidebarWidth" | "UserCard" | "FooterBar" | "Subtitle" | "Tagline" | "Status"
+		                                 | "DefaultSubtitle", valeur)  ·  Tab:SetSubtitle("texte") (sous-titre de l'en-tête)
+		        CreateWindow({ LayoutStyle = "Éclipse", Eclipse = { Tagline = "Mon slogan", SidebarWidth = 190 } })
+
+	─────────────  V10 : JAUGES, COMPTEURS, STYLES D'ENTRÉE, TRANSITIONS D'ONGLETS, HUD  ─────────────
+		• Block:CreateProgress({ Name, Min = 0, Max = 100, Default, Suffix | Format = function(v, ratio, max), Color, Text })
+		  Barre de progression / jauge mise à jour par le script (cooldowns, chargement) :
+		  p:Set(v) · p:Get() · p:GetRatio() · p:SetMax(m) · p:SetText("...") · p:SetColor(c) · p:SetName("...")
+		  p:Countdown(secondes, { Fill = false, ShowTime = true, OnDone = fn }) : se vide (ou se remplit avec Fill = true)
+		  p:SetIndeterminate(true) : chargement sans valeur connue · p:Cancel() : arrête le décompte / le chargement.
+		• Block:CreateStepper({ Name, Min, Max, Step = 1, Default, Suffix, Wrap = false, Flag, Callback })
+		  Compteur  - / valeur / +  pour les entiers (plus précis qu'un curseur). Maintenir le bouton = répétition qui accélère,
+		  Maj = pas x10, clic sur la valeur = saisie au clavier. item:Set(n) · item:Get() · item:Increment() · item:Decrement().
+		• Styles d'entrée des notifications : Paramètres > Notifications > « Styles d'entrée personnalisés » (DÉSACTIVÉ par défaut)
+		  puis « Style d'entrée » : Trou noir (sort d'un trou noir) · Éclats (se reconstitue à partir d'éclats) ·
+		  Balayage depuis la gauche / la droite / le haut / le bas · Aléatoire.
+		  API : Library:SetNotifEntry("Éclats") · Library:SetNotifEntryEnabled(true) · Library.NotifEntryByType = { Error = "Éclats" }
+		  Library:Notify({ ..., Entry = "Trou noir" }) pour une seule notification (marche même réglage coupé ; Entry = false = entrée classique).
+		• Transitions d'onglets : Paramètres > Animations & performances > « Transition des onglets » : Glisser · Fondu · Zoom.
+		  API : Library:SetTabTransition("Zoom") · Library.TabTransitions.
+		• HUD des actifs refait : il est ancré par le coin le plus proche d'un bord de l'écran, donc quand une ligne apparaît ou
+		  disparaît il s'agrandit vers l'intérieur de l'écran au lieu de se décaler. Largeur calculée, colonne des touches alignée
+		  à droite. Chaque ligne affiche sa touche : celle du toggle (Keybind = ...), sinon celle d'un Block:CreateKeybind du même
+		  nom, sinon celle donnée à la main : CreateToggle({ Name = "Vol", HudKey = monKeybind }) (item, Enum.KeyCode ou fonction).
+]]
