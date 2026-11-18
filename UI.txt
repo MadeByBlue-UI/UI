@@ -19737,6 +19737,7 @@ function Tab:CreateBlock(o)
 		foldGen += 1
 		Library.Flags[flagKey] = c
 		tween(arrow, { Rotation = c and 0 or 90 }, 0.3)
+		tween(headLine, { BackgroundTransparency = c and 1 or 0 }, 0.3)   -- replié : le trait sous l'en-tête s'efface (il doublait le contour du bas)
 		Library._busyUntil = os.clock() + 0.45
 		stopFold()
 		-- on part de la hauteur RÉELLEMENT affichée ; la cible est relue à chaque image (le texte à retour à la ligne,
@@ -19784,6 +19785,7 @@ function Tab:CreateBlock(o)
 		clip.Size = UDim2.new(1, 0, 0, 0)
 		clip.Visible = false
 		arrow.Rotation = 0
+		headLine.BackgroundTransparency = 1
 	end
 
 	local blk = setmetatable({
