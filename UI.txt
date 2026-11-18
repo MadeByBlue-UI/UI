@@ -7,6 +7,9 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
+	V9.35 — CONTOUR « VERRE » : le fondu du contour blanc est maintenant horizontal (Library.GlassEdgeRotation = 0) : tout le côté gauche des blocs / toggles / lignes est lumineux,
+		  coins arrondis compris, puis s'estompe vers la droite. Avant (diagonale à 40°) le bas du côté gauche s'éteignait avant le coin sur les éléments hauts. Library.GlassEdgeRotation = 40 pour l'ancien rendu.
+
 	V9.34 — RÉGLAGES EN UN SEUL SOUS-ONGLET : tous les blocs de « Réglages » sont réunis dans l'unique sous-onglet « Paramètres ». Thèmes (préréglages, couleurs, police, thèmes perso,
 		  thème par défaut) et Configurations (créer / charger / écraser / supprimer / auto-chargement / import-export) viennent de ThemeManager.lua et SaveManager.lua, téléchargés
 		  depuis GitHub (Library.ManagerURL) en tâche de fond dès le début de CreateWindow. Si le téléchargement échoue : les anciens blocs intégrés sont utilisés.
@@ -2081,6 +2084,7 @@ local STYLE_KIND = {
 	input = { "InputTr", "InputStroke" },
 }
 -- reflet de verre sur les bordures : lumineuse en haut à gauche, qui s'éteint vers le bas à droite
+Library.GlassEdgeRotation = Library.GlassEdgeRotation or 0   -- 0 = fondu horizontal (tout le côté gauche, coins arrondis compris, est lumineux) · 40 = ancienne diagonale
 local GLASS_EDGE = NumberSequence.new({
 	NumberSequenceKeypoint.new(0, 0),
 	NumberSequenceKeypoint.new(0.45, 0.5),
@@ -2100,10 +2104,10 @@ local function styleOne(e)
 			if not g then
 				g = Instance.new("UIGradient")
 				g.Name = "GlassGrad"
-				g.Rotation = 40
 				g.Transparency = GLASS_EDGE
 				g.Parent = st
 			end
+			g.Rotation = Library.GlassEdgeRotation
 			g.Enabled = true
 		elseif g then
 			g.Enabled = false
@@ -5472,10 +5476,10 @@ function Library:Notify(o)
 			if not g then
 				g = Instance.new("UIGradient")
 				g.Name = "GlassGrad"
-				g.Rotation = 40
 				g.Transparency = GLASS_EDGE
 				g.Parent = outSt
 			end
+			g.Rotation = Library.GlassEdgeRotation
 			g.Enabled = true
 		elseif g then
 			g.Enabled = false
@@ -19961,7 +19965,7 @@ local function srBuild(win)
 		BorderSizePixel = 0, ZIndex = 300 }, sr.box)
 	sr.sheenGrad = new("UIGradient", { Rotation = 90, Transparency = SR_SHEEN_GLASS }, sr.sheen)
 	sr.stroke = new("UIStroke", { Color = T.Text, Thickness = 1, Transparency = 0.3, ApplyStrokeMode = BORDER, Enabled = false }, sr.box)   -- contour du panneau retiré
-	new("UIGradient", { Rotation = 40, Transparency = GLASS_EDGE }, sr.stroke)
+	new("UIGradient", { Rotation = Library.GlassEdgeRotation, Transparency = GLASS_EDGE }, sr.stroke)
 	sr.sep = new("Frame", { BackgroundColor3 = T.Text, BackgroundTransparency = 0.9, BorderSizePixel = 0, ZIndex = 301 }, sr.box)
 	sr.list = new("ScrollingFrame", { BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
 		ScrollBarImageColor3 = T.Accent, ScrollBarImageTransparency = 0.5, CanvasSize = UDim2.new(),
@@ -24778,7 +24782,7 @@ function Library:CreateWindow(cfg)
 	-- Barre de recherche « verre » : pilule bien arrondie, large et visible, placée dans la barre du titre (voir ec.placeSearch)
 	local function glassEdge(parent, tr)
 		local st = new("UIStroke", { Color = T.Text, Thickness = 1, Transparency = tr, ApplyStrokeMode = BORDER, Enabled = false }, parent)   -- contour retiré (barre de recherche, puce « Modifiés »)
-		new("UIGradient", { Rotation = 40, Transparency = GLASS_EDGE }, st)
+		new("UIGradient", { Rotation = Library.GlassEdgeRotation, Transparency = GLASS_EDGE }, st)
 		return st
 	end
 	local function roundOf(parent)   -- coins en pilule, gardés ronds même dans le type Carré
