@@ -7,7 +7,13 @@
 	ou, si tu l'héberges :
 		local Library = loadstring(game:HttpGet("TON_LIEN_RAW"))()
 
-	V9.35 — CONTOUR « VERRE » : le fondu du contour blanc est maintenant horizontal (Library.GlassEdgeRotation = 0) : tout le côté gauche des blocs / toggles / lignes est lumineux,
+	V9.36 — ONGLETS HOME / RÉGLAGES EN OPTION · EFFETS COUPÉS PAR DÉFAUT
+		• CreateWindow({ Home = true }) / CreateWindow({ Settings = true }) (ou win:CreateHomeTab() / win:CreateSettingsTab() plus tard) : les deux onglets ne sont plus
+		  créés automatiquement. Sans eux : aucun téléchargement GitHub (ThemeManager / SaveManager), aucune vérification de mise à jour en tâche de fond
+		  (sauf si UpdateURL est donné).
+		• Moins de lag : étoiles (StarCount), neige (SnowCount), décor sous la fenêtre (DecorStrip) et bulle de commentaires (DecorBubble) sont coupés par défaut.
+		  Pour les remettre : Library.StarCount = 20 · Library.SnowCount = 40 · Library.DecorStrip = true · Library.DecorBubble = true.
+		V9.35 — CONTOUR « VERRE » : le fondu du contour blanc est maintenant horizontal (Library.GlassEdgeRotation = 0) : tout le côté gauche des blocs / toggles / lignes est lumineux,
 		  coins arrondis compris, puis s'estompe vers la droite. Avant (diagonale à 40°) le bas du côté gauche s'éteignait avant le coin sur les éléments hauts. Library.GlassEdgeRotation = 40 pour l'ancien rendu.
 
 	V9.34 — RÉGLAGES EN UN SEUL SOUS-ONGLET : tous les blocs de « Réglages » sont réunis dans l'unique sous-onglet « Paramètres ». Thèmes (préréglages, couleurs, police, thèmes perso,
@@ -619,16 +625,17 @@ local Library = {
 	BlockedKeys       = { Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D, Enum.KeyCode.Space },
 	RecentColors      = {},    -- couleurs récentes du color picker (hexadécimal), sauvegardées avec les réglages
 	RecentColorMax    = 8,
+	SmoothFold        = true,  -- true = repli / dépli des blocs animé · false = instantané
 	ResizeMode        = "Contour", -- "Contour" (rapide : contour pendant le geste) | "Direct" (ancien : suit en direct, lent)
 	NoCanvasGroup     = true,  -- true = fenêtre en simple Frame (beaucoup plus fluide) ; false = fondu d'ouverture mais plus lourd
-	StarCount         = 20,    -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 pour désactiver)
-	DecorStrip        = true,  -- petits personnages sur un sol de neige sous la fenêtre
+	StarCount         = 0,     -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 = désactivé · 20 = ancien réglage)
+	DecorStrip        = false, -- (coupé par défaut, coûteux) petits personnages sur un sol de neige sous la fenêtre
 	DecorTheme        = "Hiver", -- "Hiver" (neige) | "Été" (plage, soleil)
 	DecorStyle        = "Pixel", -- "Pixel" (pixel art) | "Dessin" (formes lisses, cartoon)
 	DecorScale        = 1,     -- taille des personnages (0.5 - 2)
 	DecorGap          = 57,    -- px entre le bas de la fenêtre et le sol de neige (si DecorBottom = false) — fixe, plus de slider
 	DecorBottom       = true,  -- true : le décor est collé tout en bas de l'écran, pleine largeur, avec de la neige qui remonte sur les côtés
-	DecorBubble       = true,  -- bulle de petits commentaires en bas, écrits lettre par lettre en fondu
+	DecorBubble       = false, -- (coupé par défaut) bulle de petits commentaires en bas, écrits lettre par lettre en fondu
 	DecorBubbleDelay  = 20,    -- secondes (environ) entre deux commentaires
 	DecorBubbleGap    = 24,    -- px entre le bas de la fenêtre et la bulle (elle est centrée juste sous la fenêtre)
 	DecorBubbleThemed = true,  -- la bulle prend les couleurs du thème (Or, Sakura, Clair...) au lieu du fond sombre fixe
@@ -649,7 +656,7 @@ local Library = {
 		winter = { { "tree", "Sapin" }, { "snowman", "Bonhomme de neige" }, { "snowpile", "Pile de boules de neige" }, { "snowpile2", "Petite pile de boules de neige" }, { "campfire", "Feu de camp" }, { "santa", "Père Noël" }, { "gift", "Cadeau rouge" }, { "gift2", "Cadeau bleu" }, { "reindeer", "Renne" }, { "chest", "Coffre au trésor" }, { "igloo", "Igloo" }, { "fox", "Renard" }, { "gingerbread", "Pain d'épices" }, { "bell", "Cloche" }, { "mug", "Chocolat chaud" }, { "polarbear", "Ours polaire" }, { "elf", "Lutin" }, { "candycane", "Sucre d'orge" }, { "stocking", "Chaussette" }, { "wreath", "Couronne" }, { "owl", "Chouette" }, { "star", "Étoile" }, { "lamp", "Réverbère" } },
 		summer = { { "palm", "Palmier" }, { "parasol", "Parasol" }, { "castle", "Château de sable" }, { "ball", "Ballon" }, { "icecream", "Glace" }, { "surf", "Planche de surf" }, { "buoy", "Bouée" }, { "cocktail", "Cocktail" }, { "seagull", "Mouette" }, { "bucket", "Seau" }, { "sunhat", "Chapeau de paille" }, { "starfish", "Étoile de mer" } },
 	},
-	SnowCount         = 40,    -- flocons qui tombent sur l'écran (0 pour désactiver)
+	SnowCount         = 0,     -- flocons qui tombent sur l'écran (0 = désactivé · 40 = ancien réglage)
 	SnowSquares       = 40,    -- petits carrés de tailles variées (2 à 8 px) qui tombent avec la neige (0 pour désactiver)
 	SnowSpeed         = 1,     -- vitesse de la neige
 	SnowOnWindow      = true,  -- true = la neige passe aussi devant la fenêtre
@@ -1979,7 +1986,7 @@ end -- fin de la portée réduite
 -- (inertie). Le saut natif est annulé avant l'affichage ; les autres modes (barre de défilement, tactile, code) restent natifs.
 -- Library.SmoothScroll = false pour couper · Library.SmoothScrollSpeed (raideur, 16) · Library.SmoothScrollGain (distance, 1).
 -- ============================================================================
-Library.SmoothScroll      = true
+Library.SmoothScroll      = false   -- défilement natif (smooth coupé) · true = défilement fluide à ressort
 Library.SmoothScrollSpeed = 16
 Library.SmoothScrollGain  = 1
 do -- (portée réduite : limite de 200 locals)
@@ -2821,7 +2828,7 @@ local function bindSink()
 	Library._wheelSink = true
 	pcall(function()
 		CAS:BindActionAtPriority("UiLibWheelSink", function()
-			if overWindow() then return SINK end
+			if Library.SmoothScroll ~= false and overWindow() then return SINK end
 			return PASS
 		end, false, 2000, Enum.UserInputType.MouseWheel)
 	end)
@@ -2895,7 +2902,7 @@ local function resolve()
 end
 
 track(UIS.InputChanged:Connect(function(i)
-	if touchOnly or i.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+	if touchOnly or Library.SmoothScroll == false or i.UserInputType ~= Enum.UserInputType.MouseWheel then return end
 	wz += i.Position.Z
 	if not queued then
 		queued = true
@@ -2905,6 +2912,7 @@ end))
 
 function Library:SetSmoothScroll(on)
 	Library.SmoothScroll = on ~= false
+	if Library.SmoothScroll then bindSink() end
 	table.clear(active)
 	for sf in pairs(frames) do
 		pcall(function() sf.ScrollingEnabled = not Library.SmoothScroll end)
@@ -2927,7 +2935,7 @@ function Library._regScroll(sf)
 		st.last, st.pos, st.target, st.vel = y, y, y, 0
 		active[sf] = nil
 	end)
-	bindSink()
+	if Library.SmoothScroll ~= false then bindSink() end
 end
 
 -- BARRE DE DÉFILEMENT : s'élargit au survol (plus facile à viser) et se saisit à la souris : clic sur le curseur de la barre =
@@ -19736,8 +19744,13 @@ function Tab:CreateBlock(o)
 		collapsed = c
 		foldGen += 1
 		Library.Flags[flagKey] = c
-		tween(arrow, { Rotation = c and 0 or 90 }, 0.3)
-		tween(headLine, { BackgroundTransparency = c and 1 or 0 }, 0.3)   -- replié : le trait sous l'en-tête s'efface (il doublait le contour du bas)
+		if Library.SmoothFold then
+			tween(arrow, { Rotation = c and 0 or 90 }, 0.3)
+			tween(headLine, { BackgroundTransparency = c and 1 or 0 }, 0.3)
+		else
+			arrow.Rotation = c and 0 or 90
+			headLine.BackgroundTransparency = c and 1 or 0   -- replié : le trait sous l'en-tête disparaît (il doublait le contour du bas)
+		end
 		Library._busyUntil = os.clock() + 0.45
 		stopFold()
 		-- on part de la hauteur RÉELLEMENT affichée ; la cible est relue à chaque image (le texte à retour à la ligne,
@@ -19746,7 +19759,7 @@ function Tab:CreateBlock(o)
 		clip.Visible = true
 		clip.AutomaticSize = AN
 		clip.Size = UDim2.new(1, 0, 0, snapH(startH))
-		local dur = Library.Animations and (0.36 / math.max(Library.AnimSpeed or 1, 0.05)) or 0
+		local dur = (Library.SmoothFold and Library.Animations) and (0.36 / math.max(Library.AnimSpeed or 1, 0.05)) or 0
 		local function finish()
 			stopFold()
 			if c then
@@ -24400,7 +24413,7 @@ if not spotOk then warn("[Ui-Lib] Barre de recherche indisponible : " .. tostrin
 function Library:CreateWindow(cfg)
 	cfg = cfg or {}
 	if cfg.RemoteManagers ~= nil then Library.UseRemoteManagers = cfg.RemoteManagers and true or false end
-	Library:_prefetchManagers()   -- ThemeManager / SaveManager arrivent pendant que la fenêtre se construit
+	if cfg.Settings == true then Library:_prefetchManagers() end   -- ThemeManager / SaveManager : téléchargés seulement si l'onglet Réglages est demandé
 	if cfg.Theme then
 		for k, v in pairs(cfg.Theme) do T[k] = v end
 	end
@@ -24967,7 +24980,7 @@ function Library:CreateWindow(cfg)
 		ec.sidePad = new("UIPadding", {}, sidebar)
 	end
 
-	-- Déplacement de la fenêtre (lissé) + double-clic = réduire / restaurer
+	-- Déplacement de la fenêtre (direct) + double-clic = réduire / restaurer
 	local lastClick = 0
 	ec.beginDrag = function(i)
 		if not isPress(i) then return end
@@ -24982,8 +24995,10 @@ function Library:CreateWindow(cfg)
 		local start = Vector2.new(i.Position.X, i.Position.Y)
 		local origin = tgtPos or curPos
 		tgtPos = nil
+		-- direct (comme Obsidian) : la fenêtre colle au curseur à chaque mouvement, sans ressort ni rattrapage
 		startDrag(function(p)
-			tgtPos = clampCenter(origin + (Vector2.new(p.X, p.Y) - start))
+			curPos = clampCenter(origin + (Vector2.new(p.X, p.Y) - start))
+			setMainPos()
 		end, nil, i.Position, saveWinLater)
 	end
 	dragZone.InputBegan:Connect(ec.beginDrag)
@@ -28342,11 +28357,11 @@ function Library:CreateWindow(cfg)
 	Library:SetGradient()
 	if cfg.UpdateURL then Library.UpdateURL = tostring(cfg.UpdateURL) end
 	if cfg.UpdateInterval then Library.UpdateInterval = tonumber(cfg.UpdateInterval) or 300 end
-	if cfg.Home ~= false then
+	if cfg.Home == true then   -- désactivé par défaut : CreateWindow({ Home = true }) ou win:CreateHomeTab()
 		local okh, errh = pcall(function() win:CreateHomeTab(cfg.HomeName or "Home", cfg.HomeIcon, cfg) end)
 		if not okh then warn("[Ui-Lib] Onglet Home : " .. tostring(errh)) end
 	end
-	if cfg.Settings ~= false then
+	if cfg.Settings == true then   -- désactivé par défaut : CreateWindow({ Settings = true }) ou win:CreateSettingsTab()
 		win._noSelect = true
 		local ok, err = pcall(function() win:CreateSettingsTab(cfg.SettingsName or "Réglages", cfg.SettingsIcon, true) end)
 		win._noSelect = nil
@@ -28369,7 +28384,7 @@ function Library:CreateWindow(cfg)
 	Library._fullyLoaded = false
 	task.delay(0.9, function() Library._fullyLoaded = true end)   -- tout est construit : le bonhomme de Home peut sauter
 	Library:_startSettingsWatcher(win)
-	Library:StartUpdateWatcher()
+	if cfg.Home == true or cfg.UpdateURL then Library:StartUpdateWatcher() end   -- aucune requête réseau en tâche de fond si Home n'est pas demandé
 	if cfg.AutoLoad ~= false then
 		task.delay(tonumber(cfg.AutoLoadDelay) or 1.2, function()
 			if Library.Window == win then Library:AutoLoad() end
