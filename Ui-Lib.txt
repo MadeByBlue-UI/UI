@@ -24343,4 +24343,43 @@ Library._ctx = {
 	unself = unself
 }
 
+-- ============================================================================
+-- AJOUT : Block:CreateButtonRow  — plusieurs boutons sur une même ligne
+--   blk:CreateButtonRow({
+--       { Name = "Rejoin Server", Callback = f1 },
+--       { Name = "Server Hop",    Callback = f2 },
+--   }, { Gap = 6, Height = 32 })        -- options facultatives
+--   Chaque entrée accepte les mêmes options que CreateButton (Callback, Confirm, Cooldown, Keybind, Tooltip...).
+--   Les boutons se partagent la largeur à parts égales (1, 2, 3... boutons par ligne). Retourne la liste des items.
+-- ============================================================================
+do
+	function Block:CreateButtonRow(list, opts)
+		if type(list) ~= "table" or #list == 0 then return {} end
+		opts = type(opts) == "table" and opts or {}
+		local n = #list
+		local gap = tonumber(opts.Gap) or 6
+		local h = tonumber(opts.Height) or 32
+		local row = Instance.new("Frame")
+		row.Name = "ButtonRow"
+		row.BackgroundTransparency = 1
+		row.BorderSizePixel = 0
+		row.Size = UDim2.new(1, 0, 0, h)
+		row.Parent = self.Body
+		local items = {}
+		for i, o in ipairs(list) do
+			local copy = {}
+			for k, v in pairs(o) do copy[k] = v end
+			local it = self:CreateButton(copy)
+			local b = it and it.Instance
+			if b then
+				b.Parent = row
+				b.Size = UDim2.new(1 / n, -gap * (n - 1) / n, 1, 0)
+				b.Position = UDim2.new((i - 1) / n, gap * (i - 1) / n, 0, 0)
+			end
+			items[i] = it
+		end
+		return items
+	end
+end
+
 return Library
