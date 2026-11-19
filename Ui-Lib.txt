@@ -19687,8 +19687,22 @@ function win:RefreshDecor() end
 				{ "bouge contenu parqué", {}, true, { content } },
 				{ "bouge contenu+menu parqués", {}, true, { content, sidebar } },
 				{ "bouge contenu+menu+fond parqués", {}, true, { content, sidebar, space } },
+				{ "bouge TOUT parqué (tout l'intérieur de la fenêtre)", {}, true, { main } },
 			}
 			local out = {}
+			-- comptage des instances dans la fenêtre : c'est probablement ça qui coûte quand la fenêtre bouge
+			do
+				local byClass, total, auto = {}, 0, 0
+				for _, d in ipairs(main:GetDescendants()) do
+					total += 1
+					byClass[d.ClassName] = (byClass[d.ClassName] or 0) + 1
+					if d:IsA("GuiObject") and d.AutomaticSize ~= Enum.AutomaticSize.None then auto += 1 end
+				end
+				local function cnt(o) return o and #o:GetDescendants() or 0 end
+				out[#out + 1] = string.format("instances dans la fenêtre : %d (contenu %d · menu %d · fond %d)", total, cnt(content), cnt(sidebar), cnt(space))
+				out[#out + 1] = string.format("dont UIStroke %d · UICorner %d · UIGradient %d · UIListLayout %d · ScrollingFrame %d · AutomaticSize %d",
+					byClass.UIStroke or 0, byClass.UICorner or 0, byClass.UIGradient or 0, byClass.UIListLayout or 0, byClass.ScrollingFrame or 0, auto)
+			end
 			Library._resizing, Library._moving = true, true
 			for _, ph in ipairs(phases) do
 				hide(ph[2])
