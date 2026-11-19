@@ -34,6 +34,7 @@ local Stats        = game:GetService("Stats")
 local Lighting     = game:GetService("Lighting")
 
 local Library = {
+	Lite              = true,  -- [PERF] true = effets lourds coupés par défaut (comme Obsidian) · false = rendu complet "Quality"
 	Flags             = {},
 	Items             = {},
 	CornerObjects     = {},
@@ -130,20 +131,20 @@ local Library = {
 	StarsThroughWindow = false,      -- true = on voit aussi les étoiles à travers la fenêtre
 	HoleStars          = false,      -- true = étoiles aspirées par le trou noir (dans la fenêtre)
 	WinRound          = 1,         -- multiplicateur de rondeur de la fenêtre
-	Breathing         = true,      -- le contour « respire »
-	Ripple            = true,      -- onde au clic
+	Breathing         = false,      -- le contour « respire »
+	Ripple            = false,      -- onde au clic
 	SpinSpeed         = 1,
-	BgRate            = 30,        -- cadence du fond animé (Hz) ; Library:SetPerformanceMode(...) la règle
-	BgRateBusy        = 15,        -- cadence pendant un geste (glisser, redimensionner...)
-	PerformanceMode   = "Quality",
-	HoleVisible       = true,
+	BgRate            = 12,        -- cadence du fond animé (Hz) ; Library:SetPerformanceMode(...) la règle
+	BgRateBusy        = 8,         -- cadence pendant un geste (glisser, redimensionner...)
+	PerformanceMode   = "Performance",
+	HoleVisible       = false,
 	HolePos           = "Center",
 	HoleScale         = 1,
 	FontFamily        = "Gotham",
 	Defaults          = {},
 	TitleFont         = "Michroma",
 	TitleFonts        = { "Michroma", "Gotham Black", "Fredoka", "Oswald", "Bangers", "Jura", "Sci-Fi", "Arcade", "Normale" },
-	TitleShine        = true,
+	TitleShine        = false,
 	LayoutStyle       = "Classique",                 -- type d'interface : "Classique" | "Éclipse" | "Carré"
 	Compact           = false,                       -- (lecture seule) mode compact : devient vrai tout seul quand le menu est tiré assez étroit avec la barre verticale (Library.MenuW = largeur, Library.CompactBelow = seuil)
 	LayoutStyleOrder  = { "Classique", "Éclipse", "Carré" },
@@ -16872,7 +16873,7 @@ function Library:CreateWindow(cfg)
 	for _ = 1, 22 do addStar() end
 
 	-- Fond animé : "full" (tout), "light" (moitié d'étoiles), "off" (aucun fond, le plus fluide)
-	local bgMode = cfg.Background or "light"
+	local bgMode = cfg.Background or (Library.Lite and "off" or "light")
 	local starLim = #stars
 	local function applyBg()
 		space.Visible = bgMode ~= "off"
