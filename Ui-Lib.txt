@@ -1939,20 +1939,191 @@ local function spin(g, speed)
 	return g
 end
 
--- Sons de l'interface retirés (les appels uiSnd(...) restent partout dans la lib : ils ne font plus rien)
-local function uiSnd() end
-Library.UISound = false
-Library.UISoundPack = "Aucun"
+-- ============================================================================
+-- SONS DE L'INTERFACE (rétablis)
+--   Library:SetUISoundEnabled(bool)    · Library:SetUISoundVolume(0..1 ou 0..100) · Library:SetUISoundHover(bool)
+--   Library:SetUISoundReverb(bool)     · Library:SetUISoundPack(nom) -> bool       · Library:PlayUISound(type) · Library:PlayHiSound()
+--   Library.UISoundPackNames = liste des packs (pour un menu déroulant) · Library.UISoundPacks[nom][type] = { id, vol, speed }
+--   Library:AddUISoundPack(nom, { click = "rbxassetid://123", hover = {id = 123, vol = 0.3, speed = 1.4}, ... })
+--   Types : click hover on off open close pick tab focus fold notify (tabhover / spotopen / palopen / winopen... reprennent les précédents)
+--   Par défaut les packs utilisent les sons INTÉGRÉS au client Roblox (rbxasset://sounds/...) : ils marchent partout, sans réseau.
+-- ============================================================================
+Library.UISound = true
+Library.UISoundVolume = 0.5
+Library.UISoundHover = false
+Library.NotifSound = true      -- son des notifications (indépendant des sons d'interface)
+Library.NotifVolume = 0.5
+Library.UISoundReverb = false
+Library.UISoundPack = "Classique"
 Library.UISoundPacks = {}
 Library.UISoundPackNames = {}
-function Library:PlayUISound() end
-function Library:PlayHiSound() end
-function Library:SetUISoundEnabled() end
-function Library:SetUISoundVolume() end
-function Library:SetUISoundHover() end
-function Library:SetUISoundReverb() end
-function Library:SetUISoundPack() return false end
-function Library._destroyUISound() end
+
+local uiSnd
+do
+	local SoundService = game:GetService("SoundService")
+	local folder
+	local cache, lastPlay = {}, {}
+	local ALIAS = { tabhover = "hover", spotopen = "open", palopen = "open", spotclose = "close", palclose = "close",
+		winopen = "open", winclose = "close", expand = "open", collapse = "close" }
+	local THROTTLE = { hover = 0.07, tabhover = 0.07, focus = 0.05 }
+
+	local function arg(a, b) if a == Library then return b end return a end
+	local function def(id, vol, speed) return { id = id, vol = vol or 1, speed = speed or 1 } end
+	local BTN, SW, SNAP, PING, FAST = "rbxasset://sounds/button.wav", "rbxasset://sounds/switch.wav", "rbxasset://sounds/snap.mp3",
+		"rbxasset://sounds/electronicpingshort.wav", "rbxasset://sounds/clickfast.wav"
+
+	local function addPack(name, tbl)
+		if type(name) ~= "string" or type(tbl) ~= "table" then return false end
+		if not Library.UISoundPacks[name] then Library.UISoundPackNames[#Library.UISoundPackNames + 1] = name end
+		Library.UISoundPacks[name] = tbl
+		return true
+	end
+	addPack("Aucun", {})
+	addPack("Classique", { click = def(SW, 0.6, 1.1), hover = def(FAST, 0.10, 1.7), on = def(SW, 0.7, 1.3), off = def(SW, 0.7, 0.8),
+		open = def(BTN, 0.5, 1.1), close = def(BTN, 0.5, 0.85), pick = def(PING, 0.4, 1.3), tab = def(SNAP, 0.5, 1.2),
+		focus = def(FAST, 0.3, 1.3), fold = def(SNAP, 0.4, 0.9), notify = def(PING, 0.6, 1) })
+	addPack("Doux", { click = def(BTN, 0.35, 1.3), hover = def(FAST, 0.05, 2), on = def(BTN, 0.4, 1.5), off = def(BTN, 0.4, 1.0),
+		open = def(BTN, 0.3, 1.2), close = def(BTN, 0.3, 0.95), pick = def(PING, 0.25, 1.6), tab = def(BTN, 0.3, 1.4),
+		focus = def(FAST, 0.2, 1.5), fold = def(BTN, 0.25, 1.1), notify = def(PING, 0.4, 1.2) })
+	addPack("Net", { click = def(FAST, 0.7, 1), hover = def(FAST, 0.08, 2), on = def(SNAP, 0.6, 1.4), off = def(SNAP, 0.6, 0.9),
+		open = def(SW, 0.5, 1.4), close = def(SW, 0.5, 1.0), pick = def(FAST, 0.5, 1.4), tab = def(FAST, 0.5, 1.2),
+		focus = def(FAST, 0.3, 1.5), fold = def(SNAP, 0.4, 1.1), notify = def(PING, 0.6, 0.9) })
+	addPack("Cristal", { click = def(PING, 0.45, 1.5), hover = def(PING, 0.08, 2.2), on = def(PING, 0.5, 1.9), off = def(PING, 0.5, 1.2),
+		open = def(PING, 0.4, 1.6), close = def(PING, 0.4, 1.1), pick = def(PING, 0.4, 1.8), tab = def(PING, 0.35, 1.7),
+		focus = def(PING, 0.25, 2), fold = def(PING, 0.3, 1.3), notify = def(PING, 0.6, 1) })
+	Library.AddUISoundPack = function(a, b, c)
+		if a == Library then return addPack(b, c) end
+		return addPack(a, b)
+	end
+
+	local function srcOf(id)
+		if type(id) == "number" or (type(id) == "string" and string.match(id, "^%d+$")) then return "rbxassetid://" .. tostring(id) end
+		return tostring(id)
+	end
+	local function getFolder()
+		if folder and folder.Parent then return folder end
+		folder = Instance.new("Folder")
+		folder.Name = "UiLibSounds"
+		folder.Parent = SoundService
+		return folder
+	end
+	local function clear()
+		for k, s in pairs(cache) do if s then s:Destroy() end cache[k] = nil end
+	end
+	local function effectOn(s)
+		local fx = s:FindFirstChild("Reverb")
+		if Library.UISoundReverb then
+			if not fx then
+				fx = Instance.new("ReverbSoundEffect")
+				fx.Name = "Reverb"
+				fx.DecayTime, fx.Density, fx.Diffusion, fx.DryLevel, fx.WetLevel = 2.2, 0.85, 0.85, -2, -4
+				fx.Parent = s
+			end
+			fx.Enabled = true
+		elseif fx then
+			fx.Enabled = false
+		end
+	end
+	local function volOf(e, kind)
+		local base = kind == "notify" and Library.NotifVolume or Library.UISoundVolume
+		return math.clamp((e.vol or 1) * (base or 0.5), 0, 10)
+	end
+	local function sndFor(kind, e)
+		local s = cache[kind]
+		if s and s.Parent then return s end
+		s = Instance.new("Sound")
+		s.Name = kind
+		s.SoundId = srcOf(e.id)
+		s.Volume = volOf(e, kind)
+		s.PlaybackSpeed = e.speed or 1
+		s.Parent = getFolder()
+		effectOn(s)
+		cache[kind] = s
+		return s
+	end
+
+	local function play(kind)
+		if type(kind) ~= "string" then return end
+		local isNotif = kind == "notify"
+		if isNotif then
+			if not Library.NotifSound then return end
+		elseif not Library.UISound then
+			return
+		end
+		if (kind == "hover" or kind == "tabhover") and Library.UISoundHover == false then return end
+		local pack = Library.UISoundPacks[Library.UISoundPack]
+		local e = pack and (pack[kind] or pack[ALIAS[kind] or ""])
+		if isNotif and not e then e = Library.UISoundPacks.Classique and Library.UISoundPacks.Classique.notify end   -- pack « Aucun » : la notification garde son son
+		if not e or not e.id then return end
+		local now = os.clock()
+		if now - (lastPlay[kind] or 0) < (THROTTLE[kind] or 0.02) then return end
+		lastPlay[kind] = now
+		pcall(function()
+			local s = sndFor(kind, e)
+			s.Volume = volOf(e, kind)
+			s.TimePosition = 0
+			s:Play()
+		end)
+	end
+
+	function Library.PlayUISound(a, b) play(arg(a, b)) end
+	function Library.PlayHiSound() play("winopen") end
+
+	function Library.SetUISoundEnabled(a, b)
+		local v = arg(a, b)
+		Library.UISound = v and true or false
+		if Library.UISound then play("on") end
+	end
+	function Library.SetUISoundVolume(a, b)
+		local v = tonumber(arg(a, b)) or 0.5
+		if v > 1 then v = v / 100 end
+		Library.UISoundVolume = math.clamp(v, 0, 1)
+		for kind, s in pairs(cache) do
+			local pack = Library.UISoundPacks[Library.UISoundPack]
+			local e = pack and (pack[kind] or pack[ALIAS[kind] or ""])
+			if s and s.Parent and e then s.Volume = volOf(e, kind) end
+		end
+	end
+	function Library.GetSoundPresets()
+		local out = {}
+		for i, n in ipairs(Library.UISoundPackNames) do out[i] = n end
+		return out
+	end
+	function Library.SetNotifSoundEnabled(a, b) Library.NotifSound = arg(a, b) and true or false end
+	function Library.SetNotifVolume(a, b)
+		local v = tonumber(arg(a, b)) or 0.5
+		if v > 1 then v = v / 100 end
+		Library.NotifVolume = math.clamp(v, 0, 1)
+		local s = cache.notify
+		if s and s.Parent then s:Destroy() cache.notify = nil end
+	end
+	function Library.SetNotifSound(a, b)   -- id personnalisé pour les notifications (nil = son du pack)
+		local id = arg(a, b)
+		local pk = Library.UISoundPacks.Classique
+		if pk and id ~= nil then pk.notify = def(id, 0.6, 1) end
+		local s = cache.notify
+		if s and s.Parent then s:Destroy() cache.notify = nil end
+	end
+	function Library.SetUISoundHover(a, b) Library.UISoundHover = arg(a, b) and true or false end
+	function Library.SetUISoundReverb(a, b)
+		Library.UISoundReverb = arg(a, b) and true or false
+		for _, s in pairs(cache) do if s and s.Parent then effectOn(s) end end
+	end
+	function Library.SetUISoundPack(a, b)
+		local name = arg(a, b)
+		if not Library.UISoundPacks[name] then return false end
+		Library.UISoundPack = name
+		clear()
+		play("click")
+		return true
+	end
+	function Library._destroyUISound()
+		clear()
+		if folder then folder:Destroy() folder = nil end
+	end
+
+	uiSnd = function(kind) play(kind) end
+end
 
 -- Effet de survol fluide sur une ligne
 local function hover(f, st, hit)
@@ -3368,6 +3539,7 @@ function Library:Notify(o)
 		Content = tostring(o.Content or ""), Type = kind }
 	while #hist > 50 do table.remove(hist, 1) end
 	if Library.NotifMuted and not o.Force and kind ~= "Error" then return noopHandle() end
+	if kind ~= "Loading" and o.Sound ~= false then uiSnd("notify") end
 
 	-- doublon : on empile (x2, x3...) au lieu d'ajouter une carte
 	local stackable = (o.Stack ~= false) and o.Progress == nil and not o.Loading
