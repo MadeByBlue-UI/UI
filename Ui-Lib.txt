@@ -18076,7 +18076,9 @@ function Library:CreateWindow(cfg)
 	-- (le contenu) sont donc rangés dans un ScreenGui désactivé, qui n'est ni dessiné ni recalculé, puis remis en place au relâchement.
 	-- V9.40 : nombre d'instances du contenu MIS EN CACHE. Avant : #content:GetDescendants() à chaque appui (déplacement de la fenêtre,
 	-- barre du menu), ce qui parcourait toutes les instances d'un coup = micro-gel au moment où on maintient. Maintenant le compte est
-	-- refait en tâche de fond (hors geste, 0,6 s après le dernier changement) et l'appui ne fait que lire un nombre.
+	-- refait en tâche de fond (hors geste, 1,5 s après un changement de page) et l'appui ne fait que lire un nombre.
+	-- ⚠ On écoute ChildAdded / ChildRemoved (une fois par PAGE rangée ou remise) et surtout pas DescendantAdded / DescendantRemoving :
+	--   ceux-ci se déclenchent pour CHAQUE instance de la page à chaque changement d'onglet (rangement / remise) = gros freeze.
 	do
 		local count, queued = 0, false
 		local function recount()
@@ -18088,10 +18090,10 @@ function Library:CreateWindow(cfg)
 		local function dirty()
 			if queued then return end
 			queued = true
-			task.delay(0.6, recount)
+			task.delay(1.5, recount)
 		end
-		content.DescendantAdded:Connect(dirty)
-		content.DescendantRemoving:Connect(dirty)
+		content.ChildAdded:Connect(dirty)
+		content.ChildRemoved:Connect(dirty)
 		dirty()
 		-- vrai si le contenu affiché est assez lourd pour être rangé pendant un geste (sans aucun parcours à l'appui)
 		ec.isHeavy = function()
