@@ -6601,7 +6601,18 @@ function Block:CreateSlider(o)
 
 	-- exact = true (saisie au clavier / item:Set) : aucune accroche sur le pas, précision libre (jusqu'à 6 décimales).
 	-- exact = false (glisser la poignée) : accroche sur Step / Rounding comme avant.
+	-- Library.SliderOverflow (réglable à chaud) / o.AllowOverflow : une valeur TAPÉE (ou item:Set) peut dépasser Min / Max ;
+	-- la poignée, elle, reste bloquée au bord. Glisser la poignée reste toujours limité à Min..Max.
+	local function overflowOn()
+		if o.AllowOverflow ~= nil then return o.AllowOverflow and true or false end
+		return Library.SliderOverflow ~= false
+	end
 	local function snap(v, exact)
+		if v ~= v then return min end                                    -- NaN
+		if exact and overflowOn() then
+			v = math.clamp(v, -1e12, 1e12)                                  -- évite inf / valeurs absurdes
+			return math.floor(v * 1e6 + 0.5) / 1e6
+		end
 		v = math.clamp(v, min, max)
 		if exact then
 			v = math.floor(v * 1e6 + 0.5) / 1e6
@@ -6674,7 +6685,7 @@ function Block:CreateSlider(o)
 		if v == value and not silent then return end
 		value = v
 		local span = max - min
-		local ratio = span == 0 and 0 or (v - min) / span
+		local ratio = span == 0 and 0 or math.clamp((v - min) / span, 0, 1)   -- la poignée reste dans la barre même hors limites
 		if instant then
 			Library._springStop(fill)
 			Library._springStop(knob, "Position")
@@ -6947,6 +6958,8 @@ end
 --   (bloc isolé dans un do ... end : la librairie est proche de la limite de 200 variables locales)
 -- ============================================================================
 Library.SliderMenu = true
+-- Saisie hors limites dans la case des sliders (CreateSlider). false = tout est ramené dans Min..Max. Par slider : AllowOverflow = true/false.
+Library.SliderOverflow = true
 do
 	local CARD_W, CARD_H = 164, 102
 	local pop   -- fenêtre partagée : créée au premier clic droit
@@ -17322,15 +17335,15 @@ function Library:CreateWindow(cfg)
 		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, 21), Size = UDim2.fromOffset(240, 30),
 		BackgroundColor3 = T.Text, BackgroundTransparency = 0.9, Text = "", PlaceholderText = "Rechercher",
 		PlaceholderColor3 = Color3.fromRGB(150, 150, 158), TextColor3 = T.Text, TextSize = 13, Font = F_MED,
-		ClearTextOnFocus = false, TextXAlignment = LEFT, BorderSizePixel = 0,
+		ClearTextOnFocus = false, TextXAlignment = CENTER, BorderSizePixel = 0,
 	}, main)
 	roundOf(search)
 	local sst = glassEdge(search, 0.3)
-	new("UIPadding", { PaddingLeft = UDim.new(0, 36), PaddingRight = UDim.new(0, 14) }, search)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 36), PaddingRight = UDim.new(0, 36) }, search)   -- marges égales : le texte est centré dans la pilule
 	Library._attachTextFade(search)
 	-- loupe dessinée (le padding décale les enfants : on la recale à gauche)
 	local sIcon = new("Frame", { Name = "SearchIcon", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, -24, 0.5, 0), Size = UDim2.fromOffset(16, 16) }, search)
+		Position = UDim2.new(0, -24, 0.5, 0), Size = UDim2.fromOffset(15, 15) }, search)
 	local ring = new("Frame", { BackgroundTransparency = 1, Size = UDim2.fromOffset(10, 10), BorderSizePixel = 0 }, sIcon)
 	do
 		local rc = Instance.new("UICorner")
@@ -18218,7 +18231,7 @@ function Library:CreateWindow(cfg)
 		Library._sqRefreshAll(win)
 	end
 
-	-- barre de recherche : à droite du titre, centrée dans la fenêtre (ou dans l'espace libre s'il est trop étroit), large
+	-- barre de recherche : à DROITE de l'en-tête (puce « Modifiés » collée aux boutons de la fenêtre, la barre juste à sa gauche)
 	ec.placeSearch = function()
 		local ls = Library.LayoutStyle
 		if ls == "Éclipse" then return end
@@ -18232,17 +18245,14 @@ function Library:CreateWindow(cfg)
 		local h = sqm and 24 or 30
 		local gap = 8
 		local avail = W - left - right
-		local w = math.floor(math.clamp(avail - h - gap, 90, 400))
+		local w = math.floor(math.clamp(avail - h - gap, 90, 300))
 		local cy = sqm and 14 or 21
-		local cx = W / 2
-		if cx - w / 2 < left or cx + w / 2 + gap + h > W - right then
-			cx = math.max(left + (avail - (w + gap + h)) / 2 + w / 2, left + w / 2)
-		end
-		search.AnchorPoint = Vector2.new(0.5, 0.5)
-		search.Position = UDim2.fromOffset(math.floor(cx + 0.5), cy)
+		local chipX = W - right - h
+		search.AnchorPoint = Vector2.new(1, 0.5)
+		search.Position = UDim2.fromOffset(math.floor(chipX - gap + 0.5), cy)
 		search.Size = UDim2.fromOffset(w, h)
 		modChip.AnchorPoint = Vector2.new(0, 0.5)
-		modChip.Position = UDim2.fromOffset(math.floor(cx + w / 2 + gap + 0.5), cy)
+		modChip.Position = UDim2.fromOffset(math.floor(chipX + 0.5), cy)
 		modChip.Size = UDim2.fromOffset(h, h)
 	end
 	for _, sig in ipairs({ main:GetPropertyChangedSignal("Size"), title:GetPropertyChangedSignal("TextBounds"),
