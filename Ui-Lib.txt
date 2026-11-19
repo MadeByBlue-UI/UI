@@ -1,3 +1,4 @@
+-- [PATCH perf2] consoles par lots + masquées sans coût · pollers allégés · fond animé gaté · registres purgés · SetPerformanceMode / PerfReport / PerfWatch.
 -- [PATCH perf] CornerObjects purgé automatiquement · graphiques allégés (COLS 120->40, 60->30 Hz).
 --[[
 	Ui-Lib Simple — V9.37 « léger »  (noir & blanc)
@@ -129,9 +130,12 @@ local Library = {
 	StarsThroughWindow = false,      -- true = on voit aussi les étoiles à travers la fenêtre
 	HoleStars          = false,      -- true = étoiles aspirées par le trou noir (dans la fenêtre)
 	WinRound          = 1,         -- multiplicateur de rondeur de la fenêtre
-	Breathing         = true,      -- le contour « respire »
+	Breathing         = false,     -- le contour « respire » (perf : coupé par défaut ; Library:SetOption("Breathing", true) pour le remettre)
 	Ripple            = true,      -- onde au clic
 	SpinSpeed         = 1,
+	BgRate            = 20,        -- cadence du fond animé (Hz) ; Library:SetPerformanceMode(...) la règle
+	BgRateBusy        = 10,        -- cadence pendant un geste (glisser, redimensionner...)
+	PerformanceMode   = "Balanced",
 	HoleVisible       = true,
 	HolePos           = "Center",
 	HoleScale         = 1,
@@ -344,7 +348,7 @@ do
 		if v then
 			if p and p:IsA("ScreenGui") then v = p.Enabled else v = p ~= nil end
 		end
-		shownCache[inst] = { t = now, v = v }
+		if c then c.t, c.v = now, v else shownCache[inst] = { t = now, v = v } end   -- perf : on réutilise la table
 		return v
 	end
 
@@ -455,6 +459,15 @@ do
 
 	function Ticker.wake()
 		if not hb and #tasks > 0 then start() end
+	end
+
+	-- diagnostic : nombre de tâches vivantes, connexion Heartbeat active ?, coroutines en attente
+	function Ticker.stats()
+		local alive = 0
+		for i = 1, #tasks do
+			if tasks[i].alive then alive += 1 end
+		end
+		return alive, hb ~= nil, #waiters
 	end
 
 	function Ticker.connect(fn, opts)
@@ -4411,8 +4424,13 @@ do
 
 	local function push(text, kind, when)
 		local e = { Time = when or os.time(), Text = tostring(text), Kind = kind }
-		C.Lines[#C.Lines + 1] = e
-		while #C.Lines > C.Max do table.remove(C.Lines, 1) end
+		local L = C.Lines
+		local n = #L + 1
+		L[n] = e
+		if n > C.Max + 64 then   -- coupe par lots (un seul table.move) au lieu d'un table.remove(L, 1) à chaque message
+			table.move(L, n - C.Max + 1, n, 1)
+			for i = C.Max + 1, n do L[i] = nil end
+		end
 		for k, fn in pairs(C.Listeners) do
 			local ok = pcall(fn, e)
 			if not ok then C.Listeners[k] = nil end
@@ -4450,7 +4468,9 @@ do
 	end
 	function Library:GetConsoleText()
 		local out = {}
-		for _, e in ipairs(C.Lines) do
+		local L = C.Lines
+		for i = math.max(1, #L - C.Max + 1), #L do
+			local e = L[i]
 			out[#out + 1] = os.date("%H:%M:%S", e.Time) .. " [" .. e.Kind .. "] " .. e.Text
 		end
 		return table.concat(out, "\n")
@@ -4504,6 +4524,7 @@ do
 		new("UIPadding", { PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6), PaddingLeft = UDim.new(0, 8),
 			PaddingRight = UDim.new(0, 8) }, view)
 		local rows, seq = {}, 0
+		local pendRows, flushQ, stale, staleH = {}, false, false, nil   -- perf : lignes groupées, rien n'est créé tant que la vue est masquée
 
 		local function addRow(e)
 			seq += 1
@@ -4513,8 +4534,14 @@ do
 				TextTruncate = Enum.TextTruncate.None, LayoutOrder = seq }, view)
 			l:SetAttribute("FontRole", nil)   -- police à chasse fixe : on ne la touche pas
 			l:SetAttribute("NoAccent", true)
-			rows[#rows + 1] = l
-			while #rows > VIEW_MAX do table.remove(rows, 1):Destroy() end
+			local nr = #rows + 1
+			rows[nr] = l
+			if nr > VIEW_MAX + 32 then   -- coupe par lots (pas un table.remove(rows, 1) à chaque ligne)
+				local drop = nr - VIEW_MAX
+				for i = 1, drop do rows[i]:Destroy() end
+				table.move(rows, drop + 1, nr, 1)
+				for i = VIEW_MAX + 1, nr do rows[i] = nil end
+			end
 		end
 		local function toBottom()
 			task.defer(function()
@@ -4524,6 +4551,8 @@ do
 			end)
 		end
 		local function rebuild()
+			stale = false
+			table.clear(pendRows)
 			for _, r in ipairs(rows) do r:Destroy() end
 			table.clear(rows)
 			local shown = {}
@@ -4535,13 +4564,44 @@ do
 		end
 		tab._consoleRebuild = rebuild
 
+		-- vue masquée : on ne crée aucun label, on marque « périmée » ; elle est reconstruite d'un coup à l'affichage
+		local function markStale()
+			stale = true
+			table.clear(pendRows)
+			if not staleH then
+				staleH = track(Ticker.connect(function()
+					if not view.Parent then staleH:Disconnect() return end   -- onglet détruit
+					if stale and Library._guiShown(view) then rebuild() end
+				end, { rate = 4, gate = function()
+					local w = Library.Window
+					return stale and w ~= nil and w.Open ~= false
+				end }))
+			end
+			Ticker.wake()
+		end
+		local function flushRows()
+			flushQ = false
+			if not view.Parent then return end
+			local n = #pendRows
+			if n == 0 then return end
+			if C.Paused then table.clear(pendRows) return end   -- le rebuild à la reprise remettra tout
+			if not Library._guiShown(view) then markStale() return end
+			for i = math.max(1, n - VIEW_MAX + 1), n do addRow(pendRows[i]) end
+			table.clear(pendRows)
+			toBottom()
+		end
+
 		C.Listeners[tab] = function(e)
 			if not view.Parent then error("gone") end   -- onglet détruit : le listener se retire tout seul
 			if e == nil then
 				rebuild()
 			elseif not C.Paused and matches(e) then
-				addRow(e)
-				toBottom()
+				if stale then return end   -- masqué : tout sera reconstruit à l'affichage
+				pendRows[#pendRows + 1] = e
+				if not flushQ then
+					flushQ = true
+					task.delay(0.1, flushRows)
+				end
 			end
 		end
 
@@ -4560,9 +4620,10 @@ do
 		-- V9.41 : le listener met déjà la vue à jour en direct, même onglet masqué : inutile de tout reconstruire à chaque sélection (gel)
 		tab.OnSelect = function()
 			if C.Paused then return end   -- en pause, l'affichage reste figé
+			if stale then rebuild() return end
 			toBottom()
 		end
-		rebuild()
+		markStale()   -- construction paresseuse : les labels sont créés au premier affichage de l'onglet
 		return tab
 	end
 end
@@ -4886,7 +4947,7 @@ end
 -- Transition des couleurs : UNE seule boucle fait glisser toutes les instances concernées vers leur nouvelle couleur
 -- (au lieu de milliers de tweens). Si une nouvelle couleur arrive en cours de route (ex. glisser dans le color picker),
 -- on repart de la couleur affichée et on vise la nouvelle cible.
-local colorAnim, colorAnimMap, colorAnimConn = {}, {}, nil
+local colorAnim, colorAnimMap, colorAnimConn = {}, setmetatable({}, { __mode = "k" }), nil
 local COLOR_ANIM_TIME = 0.4
 local function colorAnimStep()
 	local now = os.clock()
@@ -5865,7 +5926,7 @@ function Block:CreateButton(o)
 			registered = true
 			Library.KeybindEntries[#Library.KeybindEntries + 1] = { Name = tostring(o.Name or "Button") .. " (touche)",
 				Tab = self.Tab, Block = self, Frame = b, Item = keyItem, BadgeX = -(subOff + 80) }
-			if Library._onKeybindAdded then pcall(Library._onKeybindAdded) end
+			if Library._onKeybindAdded then Library:_kbAdded() end
 		end
 
 		-- un seul écouteur clavier par bouton, créé seulement quand une touche est définie
@@ -6559,7 +6620,7 @@ function Block:CreateToggle(o)
 			registered = true
 			Library.KeybindEntries[#Library.KeybindEntries + 1] = { Name = tostring(o.Name or "Toggle") .. " (touche)",
 				Tab = self.Tab, Block = self, Frame = f, Item = keyItem, BadgeX = -124 }
-			if Library._onKeybindAdded then pcall(Library._onKeybindAdded) end
+			if Library._onKeybindAdded then Library:_kbAdded() end
 		end
 
 		-- un seul écouteur clavier par toggle, créé seulement quand une touche est définie
@@ -10105,7 +10166,7 @@ for _, kind in ipairs(WRAP_KINDS) do
 			if kind == "Keybind" and not self._noFav then
 				Library.KeybindEntries[#Library.KeybindEntries + 1] = { Name = tostring(opts.Name or "Keybind"),
 					Tab = self.Tab, Block = self, Frame = e.Frame, Item = item }
-				if Library._onKeybindAdded then pcall(Library._onKeybindAdded) end
+				if Library._onKeybindAdded then Library:_kbAdded() end
 				Library:RefreshKeybindConflicts()
 				if Library._hudRefresh then Library._hudRefresh() end   -- la touche peut compléter une ligne du HUD
 			end
@@ -10113,6 +10174,7 @@ for _, kind in ipairs(WRAP_KINDS) do
 			if kind == "Toggle" and not self._noFav and opts.HUD ~= false and not (self.Tab and self.Tab._isSettings) then
 				Library.ToggleEntries[#Library.ToggleEntries + 1] = { Name = tostring(opts.Name or "Toggle"), Item = item,
 					Frame = e.Frame, Tab = self.Tab, Block = self, HudKey = opts.HudKey }
+				Library:_noteEntry()
 				if Library._hudRefresh then Library._hudRefresh() end
 			end
 			-- palette de commandes (Ctrl+K) : { Palette = false } pour exclure un élément
@@ -10188,16 +10250,26 @@ function Library:_trackModified(kind, item, frame, opts, blk)
 		Opts = opts, TabName = blk and blk.Tab and blk.Tab.Name or "", BlockName = blk and blk.Name or "",
 		IsSettings = (blk and blk.Tab and blk.Tab._isSettings == true) or false, NoUndo = opts.Undo == false }
 	en.Get = function()
-		local ok, v = pcall(function() return item.Get() end)
-		local sg = ok and modSig(v) or "?"
+		local ok, v = pcall(item.Get)   -- plus de closure à chaque appel
+		local k, al
 		if type(item.GetKey) == "function" then   -- toggle avec touche liée
-			local ok2, k = pcall(item.GetKey)
-			sg = sg .. "|" .. tostring(ok2 and k or "")
+			local ok2, kk = pcall(item.GetKey)
+			k = ok2 and kk or ""
 		end
 		if type(item.GetAlpha) == "function" then
-			local okA, al = pcall(item.GetAlpha)
-			sg = sg .. "|a" .. string.format("%.3f", okA and tonumber(al) or 1)
+			local okA, a = pcall(item.GetAlpha)
+			al = okA and tonumber(a) or 1
 		end
+		-- perf : la signature (formatage de chaîne) n'est recalculée que si la valeur brute a changé
+		local tv = typeof(v)
+		local cacheable = ok and tv ~= "table" and typeof(k) ~= "table"
+		if cacheable and en._sg ~= nil and en._rv == v and en._rk == k and en._ra == al and en._rt == tv then
+			return en._sg
+		end
+		local sg = ok and modSig(v) or "?"
+		if k ~= nil then sg = sg .. "|" .. tostring(k) end
+		if al ~= nil then sg = sg .. "|a" .. string.format("%.3f", al) end
+		if cacheable then en._rv, en._rk, en._ra, en._rt, en._sg = v, k, al, tv, sg else en._sg = nil end
 		return sg
 	end
 	en.Base = en.Get()
@@ -10258,7 +10330,7 @@ function Library:_startModWatcher()
 	Library._modToken = token
 	task.spawn(function()
 		while Library._modToken == token do
-			task.wait(0.3)
+			task.wait(0.3 + math.min(#Library.ModEntries * 0.0006, 0.5))   -- plus il y a d'éléments, plus on espace les scans
 			local w = Library.Window
 			if w and w.Open ~= false and #Library.ModEntries > 0 and not Library._listening then
 				pcall(Library._refreshModified, Library)
@@ -10355,7 +10427,15 @@ do
 		return now - (Library._ctxAt or 0) < 1.0
 	end
 
+	local wasCtx = true
 	local function step()
+		-- fenêtre fermée : aucun scan (avant, la boucle parcourait tous les éléments même fermée)
+		if not context() then wasCtx = false return end
+		if not wasCtx then
+			-- réouverture : les changements faits entre-temps sont resynchronisés en silence (pas dans « Annuler »)
+			wasCtx = true
+			Library._undoGrace = math.max(Library._undoGrace or 0, os.clock() + 0.4)
+		end
 		local changes = {}
 		for _, en in ipairs(Library.ModEntries) do
 			if en.Frame and en.Frame.Parent and en.Item and not en.NoUndo then
@@ -10401,7 +10481,7 @@ do
 	Library._undoToken = token
 	task.spawn(function()
 		while Library._undoToken == token do
-			task.wait(0.3)
+			task.wait(0.3 + math.min(#Library.ModEntries * 0.0006, 0.5))
 			if not Library._listening then pcall(step) end
 		end
 	end)
@@ -10548,7 +10628,7 @@ function Library:GetKeybindConflicts()
 	return out
 end
 
-function Library:RefreshKeybindConflicts()
+function Library:_refreshKeybindConflictsNow()
 	local conf = Library:GetKeybindConflicts()
 	local info = {}
 	if Library.KeybindConflictWarn ~= false then
@@ -10582,7 +10662,51 @@ function Library:RefreshKeybindConflicts()
 			end
 		end
 	end
+	Library._lastKbConf = conf
 	return conf
+end
+
+-- perf : appelé à chaque création de keybind (quadratique sur un gros script) -> regroupé en UN seul passage différé.
+-- Library:RefreshKeybindConflicts(true) = immédiat. Renvoie le dernier résultat connu.
+function Library:RefreshKeybindConflicts(now)
+	if now == true then
+		Library._kbRefQueued = false
+		return Library:_refreshKeybindConflictsNow()
+	end
+	if not Library._kbRefQueued then
+		Library._kbRefQueued = true
+		task.defer(function()
+			if not Library._kbRefQueued then return end
+			Library._kbRefQueued = false
+			pcall(Library._refreshKeybindConflictsNow, Library)
+		end)
+	end
+	return Library._lastKbConf or {}
+end
+
+-- idem pour _onKeybindAdded (défini par le module Paramètres) : un seul appel différé pour N keybinds créés d'affilée
+function Library:_kbAdded()
+	Library:_noteEntry()
+	if not Library._onKeybindAdded or Library._kbAddQueued then return end
+	Library._kbAddQueued = true
+	task.defer(function()
+		Library._kbAddQueued = false
+		local fn = Library._onKeybindAdded
+		if fn then pcall(fn) end
+	end)
+end
+
+-- purge des éléments détruits dans KeybindEntries / ToggleEntries (compactage tous les 200 ajouts)
+function Library:_noteEntry()
+	local n = (Library._entryAdds or 0) + 1
+	if n < 200 then Library._entryAdds = n return end
+	Library._entryAdds = 0
+	for _, list in ipairs({ Library.KeybindEntries, Library.ToggleEntries }) do
+		for i = #list, 1, -1 do
+			local f = list[i].Frame
+			if f and not f.Parent then table.remove(list, i) end
+		end
+	end
 end
 
 -- notification quand la touche qu'on vient de choisir est déjà prise (pas au chargement d'une config)
@@ -11654,6 +11778,8 @@ do -- (portée réduite : limite de 200 locals)
 		local lines, nextId = {}, 0
 		local active, allOn = {}, true
 		local dirty, flushing = false, false
+		local pend, flushQueued, stale, staleH = {}, false, false, nil   -- perf : labels créés par lots, jamais si la console est masquée
+		local viewMax = 150
 
 		local function pass(L)
 			if L.l == "cmd" or allOn then return true end
@@ -11690,6 +11816,8 @@ do -- (portée réduite : limite de 200 locals)
 			foot.Text = n .. (n > 1 and " lignes" or " ligne") .. (doSave and "  ·  sauvegardé" or "")
 		end
 		local function rebuild()
+			stale = false
+			table.clear(pend)
 			for _, L in ipairs(lines) do
 				if L._lbl then L._lbl:Destroy() L._lbl = nil end
 			end
@@ -11721,6 +11849,47 @@ do -- (portée réduite : limite de 200 locals)
 			end
 		end
 
+		-- coupe `lines` par blocs (un seul table.move) au lieu d'un table.remove(lines, 1) par ligne
+		local function trimLines()
+			local n = #lines
+			local drop = n - maxLines
+			if drop <= 0 then return end
+			for i = 1, drop do
+				local old = lines[i]
+				old._dead = true
+				if old._lbl then old._lbl:Destroy() old._lbl = nil end
+			end
+			table.move(lines, drop + 1, n, 1)
+			for i = maxLines + 1, n do lines[i] = nil end
+		end
+		-- crée les labels en attente (au plus viewMax d'un coup) ; console masquée : aucun label, rebuild à l'affichage
+		local function flushPending()
+			flushQueued = false
+			if not sf.Parent then table.clear(pend) return end
+			local n = #pend
+			if n == 0 then return end
+			if not Library._guiShown(sf) then
+				table.clear(pend)
+				stale = true
+				Ticker.wake()
+				return
+			end
+			local atBottom = isBottom()   -- une seule lecture de layout par lot
+			for i = math.max(1, n - viewMax + 1), n do
+				local L = pend[i]
+				if not L._dead and not L._lbl then L._lbl = mkLine(L) end
+			end
+			table.clear(pend)
+			if atBottom then scrollBottom() else newPill.Visible = true end
+		end
+		staleH = track(Ticker.connect(function()
+			if not sf.Parent then staleH:Disconnect() return end
+			if stale and Library._guiShown(sf) then rebuild() end
+		end, { rate = 5, gate = function()
+			local w = Library.Window
+			return stale and w ~= nil and w.Open ~= false
+		end }))
+
 		local function addLine(level, msg, opts)
 			opts = type(opts) == "table" and opts or {}
 			level = tostring(level or "log")
@@ -11729,14 +11898,13 @@ do -- (portée réduite : limite de 200 locals)
 			local L = { id = nextId, t = os.time(), l = level, m = tostring(msg == nil and "" or msg), tag = opts.Tag, p = opts.Plain,
 				c = typeof(opts.Color) == "Color3" and opts.Color:ToHex() or nil }
 			lines[#lines + 1] = L
-			if #lines > maxLines then
-				local old = table.remove(lines, 1)
-				if old._lbl then old._lbl:Destroy() end
-			end
-			if pass(L) then
-				local atBottom = isBottom()
-				L._lbl = mkLine(L)
-				if atBottom then scrollBottom() else newPill.Visible = true end
+			if #lines > maxLines + 32 then trimLines() end
+			if pass(L) and not stale then
+				pend[#pend + 1] = L
+				if not flushQueued then
+					flushQueued = true
+					task.delay(0.08, flushPending)
+				end
 			end
 			markDirty()
 			updateFooter()
@@ -11902,7 +12070,9 @@ do -- (portée réduite : limite de 200 locals)
 			addLine(level, m, opts)
 		end
 		item.Clear = function()
+			table.clear(pend)
 			for _, L in ipairs(lines) do
+				L._dead = true
 				if L._lbl then L._lbl:Destroy() end
 			end
 			table.clear(lines)
@@ -11956,11 +12126,13 @@ do -- (portée réduite : limite de 200 locals)
 		Library.Consoles[#Library.Consoles + 1] = item
 		holder.Destroying:Connect(function()
 			flush()
+			if staleH then staleH:Disconnect() end
 			local k = table.find(Library.Consoles, item)
 			if k then table.remove(Library.Consoles, k) end
 		end)
 
-		rebuild()
+		stale = true   -- construction paresseuse : les labels sont créés quand la console est affichée
+		Ticker.wake()
 		return item
 	end
 end
@@ -19740,15 +19912,32 @@ function win:RefreshDecor() end
 		if txt ~= fpsLabel.Text then fpsLabel.Text = txt end
 	end, { rate = 2, gate = function() return statsOn end }))
 
-	-- fond animé : cadence gérée par le Ticker (30 Hz, 15 Hz pendant un geste)
+	-- fond animé : cadence gérée par le Ticker (Library.BgRate = 20 Hz, Library.BgRateBusy = 10 Hz pendant un geste)
 	track(Ticker.connect(function(step, now)
 		step = math.min(step, 0.1)
 
-		for _, sp in ipairs(spinners) do
-			sp.a = ((sp.a or 0) + step * sp.speed * (Library.SpinSpeed or 1)) % 360
-			sp.g.Rotation = sp.a
+		-- perf : un dégradé n'est tourné que si son cadre est affiché (trou noir masqué, fenêtre repliée...) ; les détruits sont retirés
+		for i = #spinners, 1, -1 do
+			local sp = spinners[i]
+			local g = sp.g
+			if not g.Parent then
+				if sp.seen then table.remove(spinners, i) end
+			else
+				sp.seen = true
+				local host = sp.host
+				if not (host and host.Parent) then
+					host = g.Parent
+					while host and not host:IsA("GuiObject") do host = host.Parent end
+					sp.host = host
+				end
+				if not host or Ticker.shown(host, now) then
+					sp.a = ((sp.a or 0) + step * sp.speed * (Library.SpinSpeed or 1)) % 360
+					g.Rotation = sp.a
+				end
+			end
 		end
-		hst.Transparency = Library.Breathing and math.clamp(Sty.Edge + 0.04 + 0.16 * math.sin(now * 1.7), 0, 1) or Sty.Edge
+		local tr = Library.Breathing and math.clamp(Sty.Edge + 0.04 + 0.16 * math.sin(now * 1.7), 0, 1) or Sty.Edge
+		if math.abs(hst.Transparency - tr) > 0.002 then hst.Transparency = tr end   -- pas de réécriture inutile
 		local w, h = main.Size.X.Offset, main.Size.Y.Offset
 		if collapsed then return end
 		local cx, cy = holeCenter(w, h)
@@ -19772,7 +19961,7 @@ function win:RefreshDecor() end
 	end, {
 		rate = function()
 			local busy = activeDrag ~= nil or os.clock() < (Library._busyUntil or 0)
-			return busy and 15 or 30
+			return busy and (Library.BgRateBusy or 10) or (Library.BgRate or 20)
 		end,
 		gate = function() return main.Visible and bgMode ~= "off" and not Library._resizing end,
 		deco = true,
@@ -24012,6 +24201,8 @@ function Library:Destroy()
 	Library._settingsReady = false
 	Library._settingsToken = (Library._settingsToken or 0) + 1
 	Library._updToken = (Library._updToken or 0) + 1
+	Library._perfToken = (Library._perfToken or 0) + 1
+	Library._kbRefQueued, Library._kbAddQueued = false, false
 	Library._updRefresh = nil
 	for _, c in ipairs(Conns) do pcall(function() c:Disconnect() end) end
 	table.clear(Conns)
@@ -24392,6 +24583,112 @@ do
 		end
 		return items
 	end
+end
+
+
+-- ============================================================================
+-- PERFORMANCE
+--   Library:SetPerformanceMode("Quality" | "Balanced" | "Performance" | "Ultra")   (défaut : Balanced)
+--     Quality     : tout activé (fond 30 Hz, contour qui respire, reflet du titre)
+--     Balanced    : fond 20 Hz (10 Hz pendant un geste), contour fixe        <- réglage par défaut
+--     Performance : + trou noir masqué, reflet du titre coupé, style Standard (plus de verre)
+--     Ultra       : + fond animé coupé, animations désactivées
+--   Library:PerfReport()      -> imprime et renvoie un tableau (mémoire Lua, instances, connexions, tâches du Ticker, registres)
+--   Library:PerfWatch(30)     -> le même rapport toutes les 30 s ; Library:PerfWatch(false) l'arrête.
+--   Laisse PerfWatch tourner 10 minutes : la valeur qui grossit sans cesse est la vraie cause de la baisse de FPS.
+-- ============================================================================
+function Library:SetPerformanceMode(mode)
+	mode = tostring(mode or "Balanced")
+	local P = {
+		Quality     = { Breathing = true,  TitleShine = true,  HoleVisible = true,  rate = 30, busy = 15, anim = true },
+		Balanced    = { Breathing = false, TitleShine = true,  HoleVisible = true,  rate = 20, busy = 10, anim = true },
+		Performance = { Breathing = false, TitleShine = false, HoleVisible = false, rate = 12, busy = 8,  anim = true, flat = true },
+		Ultra       = { Breathing = false, TitleShine = false, HoleVisible = false, rate = 8,  busy = 6,  anim = false, flat = true, bgOff = true },
+	}
+	local p = P[mode]
+	if not p then return false end
+	Library.PerformanceMode = mode
+	Library.BgRate, Library.BgRateBusy = p.rate, p.busy
+	for _, name in ipairs({ "Breathing", "TitleShine", "HoleVisible" }) do
+		if Library[name] ~= p[name] then pcall(Library.SetOption, Library, name, p[name]) end
+	end
+	if p.flat and Sty.Glass then pcall(Library.SetStyle, Library, "Standard") end
+	if p.anim == false then
+		if Library.Animations ~= false then
+			Library._perfAnimOff = true
+			pcall(Library.SetAnimations, Library, false)
+		end
+	elseif Library._perfAnimOff then
+		Library._perfAnimOff = nil
+		pcall(Library.SetAnimations, Library, true)
+	end
+	local w = Library.Window
+	if p.bgOff then
+		if w and w.GetBackground and w:GetBackground() ~= "off" then
+			Library._perfPrevBg = w:GetBackground()
+			pcall(Library.SetBackground, Library, "off")
+		end
+	elseif Library._perfPrevBg then
+		pcall(Library.SetBackground, Library, Library._perfPrevBg)
+		Library._perfPrevBg = nil
+	end
+	Ticker.wake()
+	return true
+end
+function Library:GetPerformanceMode() return Library.PerformanceMode end
+
+function Library:PerfReport(silent)
+	local function count(t)
+		local n = 0
+		for _ in pairs(t) do n += 1 end
+		return n
+	end
+	local w = Library.Window
+	local inst = 0
+	if w and w.Gui then pcall(function() inst = #w.Gui:GetDescendants() end) end
+	local alive, hbOn, waiting = Ticker.stats()
+	local r = {
+		LuaKB = math.floor(collectgarbage("count")),
+		Instances = inst,
+		Conns = #Conns,
+		TickerTasks = alive,
+		TickerHeartbeat = hbOn,
+		TickerWaiters = waiting,
+		Fps = math.floor(Ticker.Fps + 0.5),
+		Spinners = #spinners,
+		Styled = #styled,
+		ModEntries = #Library.ModEntries,
+		KeybindEntries = #Library.KeybindEntries,
+		ToggleEntries = #Library.ToggleEntries,
+		FavEntries = count(Library.FavEntries),
+		CmdEntries = count(Library.CmdEntries),
+		CornerObjects = #Library.CornerObjects,
+		UndoStack = #Library.UndoStack,
+		ConsoleLines = #Library.Console.Lines,
+		Consoles = #Library.Consoles,
+		Mode = Library.PerformanceMode,
+	}
+	if silent ~= true then
+		print(string.format(
+			"[Ui-Lib perf] mem=%dKB inst=%d conns=%d ticker=%d(hb=%s) fps=%d spin=%d styled=%d mod=%d kb=%d tgl=%d fav=%d cmd=%d corner=%d undo=%d conLines=%d consoles=%d mode=%s",
+			r.LuaKB, r.Instances, r.Conns, r.TickerTasks, tostring(r.TickerHeartbeat), r.Fps, r.Spinners, r.Styled, r.ModEntries,
+			r.KeybindEntries, r.ToggleEntries, r.FavEntries, r.CmdEntries, r.CornerObjects, r.UndoStack, r.ConsoleLines, r.Consoles,
+			tostring(r.Mode)))
+	end
+	return r
+end
+
+function Library:PerfWatch(interval)
+	Library._perfToken = (Library._perfToken or 0) + 1
+	local token = Library._perfToken
+	if interval == false or interval == 0 then return end
+	interval = math.max(tonumber(interval) or 30, 5)
+	task.spawn(function()
+		while Library._perfToken == token do
+			pcall(Library.PerfReport, Library)
+			task.wait(interval)
+		end
+	end)
 end
 
 return Library
