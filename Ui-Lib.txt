@@ -43,6 +43,9 @@ local Library = {
 	RecentColors      = {},    -- couleurs récentes du color picker (hexadécimal), sauvegardées avec les réglages
 	RecentColorMax    = 8,
 	SmoothFold        = true,  -- true = repli / dépli des blocs animé · false = instantané
+	MenuSmooth        = 30,    -- lissage de la barre de largeur du menu (plus haut = suit plus vite · 0 = sans lissage)
+	MoveSmooth        = 30,    -- lissage du déplacement de la fenêtre (plus haut = suit plus vite · 0 = suit le curseur sans lissage)
+	MoveParkThreshold = 3000,  -- pendant un déplacement, le contenu affiché n'est rangé que s'il contient plus de ce nombre d'instances
 	ParkInactivePages = true,  -- true = les pages des onglets non affichés sont rangées dans un ScreenGui désactivé (déplacement fluide) ; false = ancien comportement
 	MoveMode          = "Léger",   -- déplacement de la fenêtre : "Léger" (contenu rangé pendant le geste) | "Direct" (tout en direct, lent) | "Contour" (un contour suit le curseur)
 	ResizeMode        = "Contour", -- "Contour" (rapide : contour pendant le geste) | "Direct" (ancien : suit en direct, lent)
@@ -2929,7 +2932,6 @@ do
 -- choisis « Personnalisé » et donne un ID (123456), un rbxassetid://..., ou un fichier du workspace (mon_son.mp3).
 -- Sons des notifications retirés
 Library.SoundPresetNames = {}
-Library.NotifSound = false
 Library.NotifSounds = {}
 Library.NotifBlackHole = false
 Library.NotifOverflow  = "Pill"    -- "Pill" = pastille +N au-delà du max | "Close" = ferme les plus anciennes
@@ -2937,10 +2939,7 @@ Library._silentSound   = 0
 local NS = { Prio = { Loading = 0, Info = 1, Success = 2, Warning = 3, Error = 4 }, LastPrio = 0 }
 local function playNotifSound() end
 function Library:PlayNotifSound() end
-function Library:GetSoundPresets() return {} end
-function Library:SetNotifSound() return false end
-function Library:SetNotifSoundEnabled() end
-function Library:SetNotifVolume() end
+-- (GetSoundPresets / SetNotifSound / SetNotifSoundEnabled / SetNotifVolume : les vraies versions sont définies plus haut, dans « SONS DE L'INTERFACE »)
 function Library:SetNotifSoundLimit() end
 function Library:SetNotifSoundGap() end
 
@@ -13420,6 +13419,26 @@ function Library:_dragBlock(blk, startPos, immediate)
 	-- ---- changement d'onglet en tenant le bloc : 2 s au-dessus d'un onglet / d'une pastille de sous-onglet ----
 	local hoverT, hoverSince = nil, 0
 	local retargetAfter = 0          -- après un changement de page, on attend un instant que la mise en page soit prête
+	-- V9.39 : la page d'arrivée peut sortir de son rangement (ParkInactivePages) : on attend que ses colonnes aient une vraie taille
+	-- et qu'elles ne bougent plus (3 images d'affilée), au lieu d'un délai fixe de 0,2 s (trop court pour une page lourde).
+	local pendingReady, readyDeadline, readySig, readyN = false, 0, nil, 0
+	local function layoutReady()
+		local first
+		for _, col in ipairs(cols) do
+			if Library._guiShown(col) then
+				first = first or col
+				if col.AbsoluteSize.X <= 4 then readySig, readyN = nil, 0 return false end
+			end
+		end
+		if not first then readySig, readyN = nil, 0 return false end
+		local ap, as = first.AbsolutePosition, first.AbsoluteSize
+		if readySig and readySig[1] == ap and readySig[2] == as then readyN += 1 else readyN = 0 end
+		readySig = { ap, as }
+		return readyN >= 2
+	end
+	local function checkReady()
+		if pendingReady and os.clock() >= retargetAfter and (layoutReady() or os.clock() > readyDeadline) then pendingReady = false end
+	end
 
 	local function hoverTarget(P)
 		local function inside(gui)
@@ -13455,6 +13474,11 @@ function Library:_dragBlock(blk, startPos, immediate)
 	local function switchTo(t)
 		local dest = Library._hostOf(t)
 		if not dest or dest == host or not dest.Cols or #dest.Cols == 0 then return end
+		do   -- page d'arrivée rangée : on la remet dans la fenêtre immédiatement (avant Select)
+			local top = t.SubName and t.Parent or t
+			local pg = top and top.Page
+			if pg and win.Content and pg.Parent ~= win.Content then pg.Parent = win.Content end
+		end
 		pcall(function() t:Select() end)   -- la page s'affiche ; le bloc reste « en main »
 		-- l'emplacement de l'ancienne page disparaît, ses colonnes retrouvent leur état normal
 		for s in pairs(slots) do
@@ -13469,6 +13493,7 @@ function Library:_dragBlock(blk, startPos, immediate)
 		curCol, curAt = nil, nil
 		prepare()
 		retargetAfter = os.clock() + 0.2
+		pendingReady, readyDeadline, readySig, readyN = true, os.clock() + 2, nil, 0
 		uiSnd("tab")
 	end
 
@@ -13498,16 +13523,21 @@ function Library:_dragBlock(blk, startPos, immediate)
 		local P = Library._pointerPos(last)
 		if not released then
 			tabHover(P)
-			local col = (os.clock() >= retargetAfter) and retarget(P) or nil
+			checkReady()
+			local col = (not pendingReady and os.clock() >= retargetAfter) and retarget(P) or nil
 			if col then autoScroll(col, P, dt) end
 		elseif host ~= tab and not (placeholder and placeholder.Parent) then
 			-- lâché juste après un changement d'onglet, avant que l'emplacement soit créé : on le crée maintenant,
 			-- sinon le bloc retournerait dans l'onglet d'origine (caché) au lieu d'atterrir ici
-			retargetAfter = 0
-			retarget(P)
+			checkReady()
+			if not pendingReady then
+				retargetAfter = 0
+				retarget(P)
+			end
 		end
 		follow(dt, P)
 
+		if released and host ~= tab and pendingReady then return end   -- on attend la mise en page de la page d'arrivée avant de poser le bloc
 		if released then
 			-- fini quand la copie est posée, l'emplacement entièrement ouvert et plus aucun ancien emplacement en train de se fermer
 			local el = os.clock() - relT
@@ -14455,7 +14485,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 			local my = gen
 			task.delay(delay, function()
 				if my ~= gen or Library.ParkInactivePages == false or page.Visible or not page.Parent then return end
-				if Library._moving or Library._resizing then parkLater(1) return end   -- pas pendant un geste
+				if Library._moving or Library._resizing or Library._blockDragging then parkLater(1) return end   -- pas pendant un geste
 				if page.Parent == win.Content then page.Parent = store() end
 			end)
 		end
@@ -18088,17 +18118,37 @@ function Library:CreateWindow(cfg)
 			new("UICorner", { CornerRadius = UDim.new(0, 14) }, outline)
 			outStroke = new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 1.5, Transparency = 0.25 }, outline)
 		elseif Library.MoveMode ~= "Direct" and not collapsed then
-			parked = ec.park({ content })
+			-- V9.39 : les pages inactives sont déjà rangées en permanence (ParkInactivePages) ; les blocs de la page affichée restent donc
+			-- visibles pendant le geste, sauf si elle est encore très lourde (plus de MoveParkThreshold instances).
+			local heavy = true
+			if Library.ParkInactivePages ~= false then
+				heavy = #content:GetDescendants() > (tonumber(Library.MoveParkThreshold) or 3000)
+			end
+			if heavy then parked = ec.park({ content }) end
 		end
+		local goal, lastT = origin, os.clock()
 		local function step()
 			local cur = isTouch and touchPos or UIS:GetMouseLocation()
 			local np = clampCenter(origin + (cur - start))
+			goal = np
 			if outline then
 				final = np
 				outline.Position = UDim2.fromOffset(math.floor(np.X + 0.5), math.floor(np.Y + 0.5))
-			elseif np ~= curPos then
-				curPos = np
-				setMainPos()
+			else
+				-- lissage : la fenêtre rattrape le curseur en douceur (Library.MoveSmooth, 0 = sans lissage ; tactile : direct)
+				local now = os.clock()
+				local dt = math.clamp(now - lastT, 0, 0.1)
+				lastT = now
+				local k = tonumber(Library.MoveSmooth) or 30
+				local nxt = np
+				if not isTouch and k > 0 then
+					local d = np - curPos
+					if d.Magnitude > 0.4 then nxt = curPos + d * (1 - math.exp(-dt * k)) end
+				end
+				if nxt ~= curPos then
+					curPos = nxt
+					setMainPos()
+				end
 			end
 		end
 		-- pendant le déplacement : fond animé et mises en page de texte en pause (Library._resizing)
@@ -18125,6 +18175,9 @@ function Library:CreateWindow(cfg)
 				task.delay(0.25, function() o:Destroy() end)
 			end
 			if parked then ec.unpark(parked) end
+			if not outline and not isTouch and (tonumber(Library.MoveSmooth) or 30) > 0 and (goal - curPos).Magnitude > 0.4 then
+				tgtPos = goal   -- la boucle de position finit le glissement en douceur
+			end
 			saveWinLater()
 		end)
 	end
@@ -18342,36 +18395,58 @@ function Library:CreateWindow(cfg)
 		ec.menuHit.MouseEnter:Connect(function() tween(glow, { BackgroundTransparency = 0.55 }, 0.15) end)
 		ec.menuHit.MouseLeave:Connect(function() if not dragging then tween(glow, { BackgroundTransparency = 1 }, 0.2) end end)
 		ec.menuHit.InputBegan:Connect(function(i)
-			if not isPress(i) or collapsed or Library.LockPosition or Library.LayoutStyle ~= "Classique" then return end
+			if not isPress(i) or collapsed or Library.LockPosition or Library.LayoutStyle ~= "Classique" or ec.menuBusy then return end
+			ec.menuBusy = true
 			dragging = true
 			local startX = i.Position.X
 			local startW = ec.menuW or 116
-			local lastW, lastApply, pending = nil, 0, false
+			local targetW, curW, lastW = startW, startW, nil
+			local released, conn, parked = false, nil, nil
 			Library._resizing = true
 			tween(glow, { BackgroundTransparency = 0.25 }, 0.1)
-			local function applyNow()
-				pending = false
-				lastApply = os.clock()
-				if ec.apply then ec.apply() end
-			end
-			startDrag(function(p)
-				local w = math.clamp(math.floor(startW + (p.X - startX) / math.max(scaleBase, 0.01) + 0.5), 40, 240)
-				if w == lastW then return end
-				lastW = w
-				Library.MenuW = w
-				local dt = os.clock() - lastApply
-				if dt >= 0.05 then
-					applyNow()
-				elseif not pending then   -- au plus ~20 mises en page par seconde pendant le geste
-					pending = true
-					task.delay(0.05 - dt, function() if pending and dragging then applyNow() end end)
+			-- V9.39 : comme pour le déplacement de la fenêtre, le contenu n'est rangé pendant le geste que s'il est encore lourd
+			-- (les pages inactives sont déjà rangées en permanence) ; sinon il reste affiché et suit en direct.
+			if Library.MoveMode ~= "Direct" then
+				local heavy = true
+				if Library.ParkInactivePages ~= false then
+					heavy = #content:GetDescendants() > (tonumber(Library.MoveParkThreshold) or 3000)
 				end
+				if heavy then parked = ec.park({ content }) end
+			end
+			local function finish()
+				if conn then conn:Disconnect() conn = nil end
+				if parked then ec.unpark(parked) parked = nil end
+				Library._resizing = false
+				Library.MenuW = targetW
+				if ec.apply then ec.apply() end   -- mise en page finale, une seule fois, hors geste
+				ec.menuBusy = false
+				saveWinLater()
+			end
+			-- la largeur est appliquée À CHAQUE IMAGE et rattrape le curseur en douceur (Library.MenuSmooth, 0 = sans lissage).
+			-- Avant : au plus 20 mises en page par seconde, d'où le côté saccadé.
+			conn = RunService.RenderStepped:Connect(function(dt)
+				if not main.Parent then finish() return end
+				local k = tonumber(Library.MenuSmooth) or 30
+				local nw = targetW
+				if k > 0 then
+					nw = curW + (targetW - curW) * (1 - math.exp(-math.min(dt, 0.1) * k))
+					if math.abs(targetW - nw) < 0.5 then nw = targetW end
+				end
+				curW = nw
+				local w = math.floor(nw + 0.5)
+				if w ~= lastW then
+					lastW = w
+					Library.MenuW = w
+					if ec.apply then ec.apply() end
+				end
+				if released and curW == targetW then finish() end   -- relâché : on finit de glisser jusqu'à la largeur voulue
+			end)
+			startDrag(function(p)
+				targetW = math.clamp(math.floor(startW + (p.X - startX) / math.max(scaleBase, 0.01) + 0.5), 40, 240)
 			end, nil, i.Position, function()
 				dragging = false
-				Library._resizing = false
-				applyNow()
+				released = true
 				tween(glow, { BackgroundTransparency = 1 }, 0.25)
-				saveWinLater()
 			end)
 		end)
 	end
@@ -19703,7 +19778,7 @@ function win:RefreshDecor() end
 
 	-- V9.38 : DIAGNOSTIC du déplacement. win:BenchMove() / Library:BenchMove() / bouton « Test déplacement » de la barre du bas.
 	-- Déplace la fenêtre en cercle toute seule, en masquant tour à tour fond, reflet de verre, halo et contenu, et mesure les FPS
-	-- de chaque cas : on voit ce qui coûte. Library.BenchButton = false retire le bouton.
+	-- de chaque cas : on voit ce qui coûte. (plus de bouton : appeler win.BenchMove() à la main depuis la console).
 	win.BenchMove = function()
 		if ec.benching then return end
 		if not main.Visible or collapsed then
@@ -19790,10 +19865,6 @@ function win:RefreshDecor() end
 			for _, l in ipairs(out) do print("[Ui-Lib mesure] " .. l) end
 			Library:Notify({ Title = "Test déplacement", Content = table.concat(out, "\n"), Duration = 60 })
 		end)
-	end
-	if Library.BenchButton ~= false then
-		pcall(function() win:AddStatusButton({ Name = "Bench", Text = "Test déplacement", Tooltip = "Mesure les FPS pendant un déplacement (diagnostic)",
-			Callback = function() win.BenchMove() end }) end)
 	end
 
 	Library.Window = win
