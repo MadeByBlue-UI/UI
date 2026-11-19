@@ -43,6 +43,7 @@ local Library = {
 	RecentColors      = {},    -- couleurs récentes du color picker (hexadécimal), sauvegardées avec les réglages
 	RecentColorMax    = 8,
 	SmoothFold        = true,  -- true = repli / dépli des blocs animé · false = instantané
+	ParkInactivePages = true,  -- true = les pages des onglets non affichés sont rangées dans un ScreenGui désactivé (déplacement fluide) ; false = ancien comportement
 	MoveMode          = "Léger",   -- déplacement de la fenêtre : "Léger" (contenu rangé pendant le geste) | "Direct" (tout en direct, lent) | "Contour" (un contour suit le curseur)
 	ResizeMode        = "Contour", -- "Contour" (rapide : contour pendant le geste) | "Direct" (ancien : suit en direct, lent)
 	NoCanvasGroup     = true,  -- true = fenêtre en simple Frame (beaucoup plus fluide) ; false = fondu d'ouverture mais plus lourd
@@ -14433,6 +14434,42 @@ function Window:CreateTab(name, _, icon, parentTab)
 	tab:SetColumns(self.EffCols or (self.TwoCols and 2 or 1))
 	tab.TabIcon = tabIco
 
+	-- V9.39 : PAGES INACTIVES RANGÉES. Roblox recalcule la position de TOUS les objets sous la fenêtre quand elle bouge, même
+	-- masqués (mesuré : ~38 000 instances -> 43 fps en déplacement, 146 fps une fois le contenu rangé). Une page d'onglet qui n'est
+	-- pas affichée est donc rangée (après ses animations) dans un ScreenGui désactivé, et remise dans la fenêtre dès qu'elle
+	-- redevient visible. Library.ParkInactivePages = false pour couper.
+	do
+		local gen = 0
+		local function store()
+			local st = win._pageStore
+			if not (st and st.Parent) then
+				st = new("ScreenGui", { Name = "SolarisPages", ResetOnSpawn = false, Enabled = false })
+				mount(st)
+				win._pageStore = st
+				if win.Gui then win.Gui.Destroying:Connect(function() st:Destroy() end) end
+			end
+			return st
+		end
+		local function parkLater(delay)
+			gen += 1
+			local my = gen
+			task.delay(delay, function()
+				if my ~= gen or Library.ParkInactivePages == false or page.Visible or not page.Parent then return end
+				if Library._moving or Library._resizing then parkLater(1) return end   -- pas pendant un geste
+				if page.Parent == win.Content then page.Parent = store() end
+			end)
+		end
+		page:GetPropertyChangedSignal("Visible"):Connect(function()
+			gen += 1
+			if page.Visible then
+				if page.Parent ~= win.Content and win.Content and win.Content.Parent then page.Parent = win.Content end
+			else
+				parkLater(0.8)
+			end
+		end)
+		parkLater(3)
+	end
+
 	function tab:Select()
 		for _, t in ipairs(win.Tabs) do
 			if t ~= tab then
@@ -17740,16 +17777,28 @@ function Library:CreateWindow(cfg)
 		attachTip(msgBtn, "Clique pour passer au message suivant")
 		local function relayout()
 			local rw = box.AbsoluteSize.X / Library._uiScale(box)
+			local barW = bar.AbsoluteSize.X / Library._uiScale(bar)
 			local S = ec.status
-			-- pendant une question : « Oui » juste à gauche du texte, « Non » juste à droite (largeurs S.yw / S.nw, 0 = caché)
-			local l = 132 + ((S.yw or 0) > 0 and (S.yw + 8) or 0)
-			local r = rw + 14 + ((S.nw or 0) > 0 and (S.nw + 8) or 0)
-			msg.Position = UDim2.new(0, l, 0, 0)
-			msg.Size = UDim2.new(1, -(l + r), 1, 0)
-			if S.yes then S.yes.Position = UDim2.new(0, 132, 0.5, 0) end
-			if S.no then S.no.Position = UDim2.new(1, -(rw + 12), 0.5, 0) end
+			local yw, nw = S.yw or 0, S.nw or 0
+			local leftEdge, rightEdge = 132, barW - (rw + 14)   -- zone libre de la barre (entre les FPS et les boutons de droite)
+			if (yw > 0 or nw > 0) and S.q and rightEdge > leftEdge then
+				-- pendant une question : « Oui » juste AVANT le texte, « Non » juste APRÈS, le tout centré dans la zone libre
+				local gap = 8
+				local gy, gn = yw > 0 and (yw + gap) or 0, nw > 0 and (nw + gap) or 0
+				local avail = math.max(40, rightEdge - leftEdge - gy - gn)
+				local tw = math.min(math.ceil(measureText(S.q, 12, F_BOLD).X) + 6, avail)
+				local gx = (leftEdge + rightEdge) / 2 - (gy + tw + gn) / 2
+				msg.Position = UDim2.new(0, gx + gy, 0, 0)
+				msg.Size = UDim2.new(0, tw, 1, 0)
+				if S.yes then S.yes.Position = UDim2.new(0, gx, 0.5, 0) end
+				if S.no then S.no.Position = UDim2.new(0, gx + gy + tw + gap, 0.5, 0) end
+			else
+				msg.Position = UDim2.new(0, leftEdge, 0, 0)
+				msg.Size = UDim2.new(1, -(leftEdge + rw + 14), 1, 0)
+			end
 		end
 		track(box:GetPropertyChangedSignal("AbsoluteSize"):Connect(relayout))
+		track(bar:GetPropertyChangedSignal("AbsoluteSize"):Connect(relayout))
 		relayout()
 
 		local plr = game:GetService("Players").LocalPlayer
@@ -17777,7 +17826,7 @@ function Library:CreateWindow(cfg)
 			-- Libellés personnalisables par question : { Q = "...", YesLabel = "Oui, ça va", NoLabel = "Non, pas trop", Yes = ..., No = ... }
 			local function mkReply(side)
 				local isNo = side == "no"
-				local b = new("TextButton", { Name = "StatusReply_" .. side, AnchorPoint = Vector2.new(isNo and 1 or 0, 0.5),
+				local b = new("TextButton", { Name = "StatusReply_" .. side, AnchorPoint = Vector2.new(0, 0.5),
 					Position = isNo and UDim2.new(1, -12, 0.5, 0) or UDim2.new(0, 132, 0.5, 0), Size = UDim2.fromOffset(38, 20),
 					BackgroundColor3 = T.Accent, BackgroundTransparency = 0.88, Text = "", AutoButtonColor = false, BorderSizePixel = 0,
 					Visible = false }, bar)
@@ -17800,7 +17849,7 @@ function Library:CreateWindow(cfg)
 			local yesNode, noNode
 			local function hideReplies()
 				yesBtn.Visible, noBtn.Visible = false, false
-				ec.status.yw, ec.status.nw = 0, 0
+				ec.status.yw, ec.status.nw, ec.status.q = 0, 0, nil
 				relayout()
 			end
 			local showNode
@@ -17811,6 +17860,7 @@ function Library:CreateWindow(cfg)
 				if type(node) == "table" then
 					st.tempUntil = os.clock() + 40          -- la question reste affichée jusqu'à une réponse
 					put(node.Q)
+					ec.status.q = fmt(node.Q)
 					yesNode, noNode = node.Yes, node.No
 					setReply(yesBtn, yesLbl, node.YesLabel or "Oui", "yw")
 					setReply(noBtn, noLbl, node.NoLabel or "Non", "nw")
