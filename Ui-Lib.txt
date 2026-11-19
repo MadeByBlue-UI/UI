@@ -43,6 +43,7 @@ local Library = {
 	RecentColors      = {},    -- couleurs récentes du color picker (hexadécimal), sauvegardées avec les réglages
 	RecentColorMax    = 8,
 	SmoothFold        = true,  -- true = repli / dépli des blocs animé · false = instantané
+	MoveMode          = "Léger",   -- déplacement de la fenêtre : "Léger" (contenu masqué pendant le geste) | "Contour" | "Direct" (tout en direct, plus lourd)
 	ResizeMode        = "Contour", -- "Contour" (rapide : contour pendant le geste) | "Direct" (ancien : suit en direct, lent)
 	NoCanvasGroup     = true,  -- true = fenêtre en simple Frame (beaucoup plus fluide) ; false = fondu d'ouverture mais plus lourd
 	StarCount         = 0,     -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 = désactivé · 20 = ancien réglage)
@@ -1314,26 +1315,27 @@ Library.StatusMessages = { "Salut {name} !", "{key} pour ouvrir / fermer l'inter
 	"Astuce : reste appuyé 1,5 s sur le titre d'un bloc pour le déplacer", "Pense à boire un peu d'eau, {name}",
 	"Une petite pause de temps en temps, ça fait du bien", "Tu gères très bien, {name}", "Bienvenue {name}, bonne session !",
 	"Astuce : tiens un bloc 2 s au-dessus d'un onglet pour l'y déposer", "Ctrl+T : recherche rapide dans tous les réglages" }
--- Petites questions de la barre d'état (une toutes les 4 messages) : { Q = question, Yes = réponse, No = réponse }
+-- Petites questions de la barre d'état (une toutes les 4 messages) : { Q = question, YesLabel = "Oui, ça va", NoLabel = "Non, pas trop", Yes = réponse, No = réponse }
+--   (YesLabel / NoLabel = texte des boutons : « Oui » s'affiche à gauche du message, « Non » à droite · absents = « Oui » / « Non »)
 --   une réponse = un texte · une liste de textes (au hasard) · ou une nouvelle { Q, Yes, No } (ex. « T'es sûr ? »)
 function Library._sureNode(compliments, relieved)   -- (champ de Library : pas de nouvelle variable locale, limite de 200)
-	return { Q = "T'es sûr ?", Yes = compliments, No = relieved }
+	return { Q = "T'es sûr ?", YesLabel = "Oui, j'en suis sûr", NoLabel = "Non, finalement ça va", Yes = compliments, No = relieved }
 end
 Library.StatusChats = {
-	{ Q = "Comment vas-tu {name} ?",
+	{ Q = "Comment vas-tu {name} ?", YesLabel = "Oui, ça va", NoLabel = "Non, pas très bien",
 		Yes = { "Tant mieux, ça fait plaisir !", "Super, continue comme ça !" },
 		No = Library._sureNode({ "Courage {name}, t'es plus fort que tu ne le crois.", "Franchement, t'as un super goût : ce menu en est la preuve.",
 			"Tu gères mieux que tu ne le penses, {name}.", "Une belle personne comme toi mérite une meilleure journée." },
 			"Ah, ça va mieux alors ? Tant mieux !") },
-	{ Q = "Tu as bien dormi ?",
+	{ Q = "Tu as bien dormi ?", YesLabel = "Oui, très bien", NoLabel = "Non, mal dormi",
 		Yes = "Parfait, tu es en pleine forme alors !",
 		No = Library._sureNode({ "Tu tiens quand même le coup, bravo {name} !", "Même fatigué tu restes au top." },
 			"Ah, c'est déjà mieux alors !") },
-	{ Q = "Tu t'amuses bien ?",
+	{ Q = "Tu t'amuses bien ?", YesLabel = "Oui, beaucoup", NoLabel = "Non, pas trop",
 		Yes = { "Génial, c'est le but !", "Super, profite bien !" },
 		No = Library._sureNode({ "Dommage... mais tu as de l'allure, {name}.", "Essaie un autre onglet, tu y trouveras sûrement ton bonheur." },
 			"Ah ok, tant mieux alors !") },
-	{ Q = "Tu t'es hydraté aujourd'hui ?",
+	{ Q = "Tu t'es hydraté aujourd'hui ?", YesLabel = "Oui, j'ai bu", NoLabel = "Non, pas encore",
 		Yes = "Bravo, continue comme ça !",
 		No = Library._sureNode("Va vite boire un verre d'eau, je t'attends.", "Ah ouf, tu es bien organisé !") },
 }
@@ -17590,11 +17592,11 @@ function Library:CreateWindow(cfg)
 		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, 21), Size = UDim2.fromOffset(240, 30),
 		BackgroundColor3 = T.Text, BackgroundTransparency = 0.9, Text = "", PlaceholderText = "Rechercher",
 		PlaceholderColor3 = Color3.fromRGB(150, 150, 158), TextColor3 = T.Text, TextSize = 13, Font = F_MED,
-		ClearTextOnFocus = false, TextXAlignment = CENTER, BorderSizePixel = 0,
+		ClearTextOnFocus = false, TextXAlignment = LEFT, BorderSizePixel = 0,
 	}, main)
 	roundOf(search)
 	local sst = glassEdge(search, 0.3)
-	new("UIPadding", { PaddingLeft = UDim.new(0, 36), PaddingRight = UDim.new(0, 36) }, search)   -- marges égales : le texte est centré dans la pilule
+	new("UIPadding", { PaddingLeft = UDim.new(0, 36), PaddingRight = UDim.new(0, 36) }, search)   -- le texte démarre à gauche, après la loupe
 	Library._attachTextFade(search)
 	-- loupe dessinée (le padding décale les enfants : on la recale à gauche)
 	local sIcon = new("Frame", { Name = "SearchIcon", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0, 0.5),
@@ -17618,11 +17620,11 @@ function Library:CreateWindow(cfg)
 	local searchHint = search.PlaceholderText
 	-- trois petits points qui sautent un à un, au centre de la barre, à la place du mot « Rechercher » (tant qu'on n'a rien écrit)
 	local dotsBox = new("Frame", { Name = "TypingDots", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.fromOffset(40, 16), Visible = false, Active = false }, search)
+		Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.fromOffset(28, 12), Visible = false, Active = false }, search)   -- points au centre, petits
 	local dots = {}
 	for n = 1, 3 do
 		local d = new("Frame", { BackgroundColor3 = T.Text, BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(0.5, (n - 2) * 12, 0.5, 0), Size = UDim2.fromOffset(6, 6) }, dotsBox)
+			Position = UDim2.new(0.5, (n - 2) * 8, 0.5, 0), Size = UDim2.fromOffset(4, 4) }, dotsBox)
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, d)
 		dots[n] = d
 	end
@@ -17632,8 +17634,8 @@ function Library:CreateWindow(cfg)
 	track(Ticker.connect(function(_, now)
 		for n = 1, 3 do
 			local ph = (now * 1.8 - (n - 1) * 0.2) % 1        -- chaque point part un peu après le précédent
-			local up = ph < 0.4 and math.sin(ph / 0.4 * math.pi) * 5 or 0
-			dots[n].Position = UDim2.new(0.5, (n - 2) * 12, 0.5, -up)
+			local up = ph < 0.4 and math.sin(ph / 0.4 * math.pi) * 3 or 0
+			dots[n].Position = UDim2.new(0.5, (n - 2) * 8, 0.5, -up)
 		end
 	end, { gate = function() return dotsBox.Visible end }))
 	search.Focused:Connect(function()
@@ -17738,8 +17740,14 @@ function Library:CreateWindow(cfg)
 		attachTip(msgBtn, "Clique pour passer au message suivant")
 		local function relayout()
 			local rw = box.AbsoluteSize.X / Library._uiScale(box)
-			msg.Position = UDim2.new(0, 132, 0, 0)
-			msg.Size = UDim2.new(1, -(132 + rw + 14), 1, 0)
+			local S = ec.status
+			-- pendant une question : « Oui » juste à gauche du texte, « Non » juste à droite (largeurs S.yw / S.nw, 0 = caché)
+			local l = 132 + ((S.yw or 0) > 0 and (S.yw + 8) or 0)
+			local r = rw + 14 + ((S.nw or 0) > 0 and (S.nw + 8) or 0)
+			msg.Position = UDim2.new(0, l, 0, 0)
+			msg.Size = UDim2.new(1, -(l + r), 1, 0)
+			if S.yes then S.yes.Position = UDim2.new(0, 132, 0.5, 0) end
+			if S.no then S.no.Position = UDim2.new(1, -(rw + 12), 0.5, 0) end
 		end
 		track(box:GetPropertyChangedSignal("AbsoluteSize"):Connect(relayout))
 		relayout()
@@ -17765,20 +17773,36 @@ function Library:CreateWindow(cfg)
 		-- (dans une fonction à part : ses variables ne comptent pas dans la limite de 200 locales de CreateWindow)
 		local chat = (function()
 			-- ---- petites questions « Oui / Non » dans la barre (Library.StatusChats ; Library.StatusChat = false les coupe) ----
-			-- Les deux boutons n'apparaissent QUE pendant une question, à droite de la barre.
-			local function mkReply(text, order)
-				local b = new("TextButton", { Name = "StatusReply_" .. text, Size = UDim2.fromOffset(38, 20), BackgroundColor3 = T.Accent,
-					BackgroundTransparency = 0.88, Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = order,
-					Visible = false }, box)
+			-- « Oui » apparaît à GAUCHE du texte, « Non » à DROITE, seulement pendant une question.
+			-- Libellés personnalisables par question : { Q = "...", YesLabel = "Oui, ça va", NoLabel = "Non, pas trop", Yes = ..., No = ... }
+			local function mkReply(side)
+				local isNo = side == "no"
+				local b = new("TextButton", { Name = "StatusReply_" .. side, AnchorPoint = Vector2.new(isNo and 1 or 0, 0.5),
+					Position = isNo and UDim2.new(1, -12, 0.5, 0) or UDim2.new(0, 132, 0.5, 0), Size = UDim2.fromOffset(38, 20),
+					BackgroundColor3 = T.Accent, BackgroundTransparency = 0.88, Text = "", AutoButtonColor = false, BorderSizePixel = 0,
+					Visible = false }, bar)
 				corner(b, 6)
-				label(b, text, 11, { Size = UDim2.fromScale(1, 1), TextXAlignment = CENTER, Font = F_BOLD })
+				local l = label(b, "", 11, { Size = UDim2.fromScale(1, 1), TextXAlignment = CENTER, Font = F_BOLD })
 				b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0.7 }, 0.2) end)
 				b.MouseLeave:Connect(function() tween(b, { BackgroundTransparency = 0.88 }, 0.25) end)
-				return b
+				ec.status[isNo and "no" or "yes"] = b
+				return b, l
 			end
-			local yesBtn, noBtn = mkReply("Oui", 90), mkReply("Non", 91)
+			local function setReply(b, l, text, key)
+				text = fmt(text)
+				l.Text = text
+				local w = math.max(38, math.ceil(measureText(text, 11, F_BOLD).X) + 18)
+				b.Size = UDim2.fromOffset(w, 20)
+				ec.status[key] = w
+			end
+			local yesBtn, yesLbl = mkReply("yes")
+			local noBtn, noLbl = mkReply("no")
 			local yesNode, noNode
-			local function hideReplies() yesBtn.Visible, noBtn.Visible = false, false end
+			local function hideReplies()
+				yesBtn.Visible, noBtn.Visible = false, false
+				ec.status.yw, ec.status.nw = 0, 0
+				relayout()
+			end
 			local showNode
 			-- nœud : texte seul (réponse finale, affichée ~6 s) · liste de textes (un au hasard) · { Q = question, Yes = nœud, No = nœud }
 			showNode = function(node)
@@ -17788,7 +17812,10 @@ function Library:CreateWindow(cfg)
 					st.tempUntil = os.clock() + 40          -- la question reste affichée jusqu'à une réponse
 					put(node.Q)
 					yesNode, noNode = node.Yes, node.No
+					setReply(yesBtn, yesLbl, node.YesLabel or "Oui", "yw")
+					setReply(noBtn, noLbl, node.NoLabel or "Non", "nw")
 					yesBtn.Visible, noBtn.Visible = true, true
+					relayout()
 				else
 					hideReplies()
 					st.tempUntil = os.clock() + 6
@@ -17966,23 +17993,45 @@ function Library:CreateWindow(cfg)
 	local lastClick = 0
 	ec.beginDrag = function(i)
 		if not isPress(i) then return end
-		-- (double-clic « réduire / restaurer » retiré)
 		if Library.LockPosition then return end   -- position verrouillée : pas de déplacement
 		local isTouch = i.UserInputType == Enum.UserInputType.Touch
 		local start = isTouch and Vector2.new(i.Position.X, i.Position.Y) or UIS:GetMouseLocation()
 		local origin = tgtPos or curPos
 		tgtPos = nil
-		-- V9.38 : la position est appliquée UNE FOIS PAR IMAGE (RenderStepped) avec la position réelle de la souris,
-		-- au lieu d'être appliquée à chaque événement InputChanged (livrés en rafale / en retard = saccades).
-		local touchPos = start
+		-- V9.38 : Library.MoveMode
+		--   "Léger"   (défaut) : pendant le geste, le contenu (blocs / éléments : l'essentiel de l'arbre) est masqué ; la fenêtre,
+		--                         le menu, la barre du haut et celle du bas suivent le curseur. Le contenu revient au relâchement.
+		--   "Contour" : la vraie fenêtre ne bouge pas, seul un contour léger suit le curseur (comme au redimensionnement).
+		--   "Direct"  : toute la fenêtre bouge en direct (le plus coûteux).
+		-- Dans tous les cas la position est appliquée UNE FOIS PAR IMAGE (RenderStepped) avec la vraie position de la souris.
+		local mode = Library.MoveMode
+		if mode ~= "Direct" and mode ~= "Contour" then mode = "Light" end
+		local touchPos, final = start, origin
+		local outline, outStroke
+		local hid = false
+		if mode == "Contour" then
+			outline = new("Frame", { Name = "MoveOutline", AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromOffset(math.floor(origin.X + 0.5), math.floor(origin.Y + 0.5)),
+				Size = UDim2.fromOffset(main.Size.X.Offset * scaleBase, main.Size.Y.Offset * scaleBase),
+				BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.93, BorderSizePixel = 0, ZIndex = 900, Active = false }, gui)
+			new("UICorner", { CornerRadius = UDim.new(0, 14) }, outline)
+			outStroke = new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 1.5, Transparency = 0.25 }, outline)
+		elseif mode == "Light" and content.Visible and not collapsed then
+			hid = true
+			content.Visible = false
+		end
 		local function step()
 			local cur = isTouch and touchPos or UIS:GetMouseLocation()
 			local np = clampCenter(origin + (cur - start))
-			if np ~= curPos then
+			if outline then
+				final = np
+				outline.Position = UDim2.fromOffset(math.floor(np.X + 0.5), math.floor(np.Y + 0.5))
+			elseif np ~= curPos then
 				curPos = np
 				setMainPos()
 			end
 		end
+		-- pendant le déplacement : fond animé et mises en page de texte en pause (Library._resizing)
 		Library._resizing = true
 		local conn
 		if not isTouch then conn = RunService.RenderStepped:Connect(step) end
@@ -17995,6 +18044,15 @@ function Library:CreateWindow(cfg)
 			if conn then conn:Disconnect() end
 			step()
 			Library._resizing = false
+			if outline then
+				curPos = final
+				setMainPos()
+				local o, os_ = outline, outStroke
+				tween(o, { BackgroundTransparency = 1 }, 0.2)
+				tween(os_, { Transparency = 1 }, 0.2)
+				task.delay(0.25, function() o:Destroy() end)
+			end
+			if hid then content.Visible = true end
 			saveWinLater()
 		end)
 	end
@@ -18990,10 +19048,10 @@ function Library:CreateWindow(cfg)
 			local base = ec.logoBase
 			if base then
 				if big then
-					local sz = tonumber(Library.CompactLogoSize) or 34
+					local sz = tonumber(Library.CompactLogoSize) or 31
 					ec.logo.AnchorPoint = Vector2.new(0.5, 0.5)
 					ec.logo.Size = UDim2.fromOffset(sz, sz)
-					ec.logo.Position = UDim2.fromOffset(8 + (ec.menuW or 40) / 2, 31)   -- x = milieu de la colonne d'icônes
+					ec.logo.Position = UDim2.fromOffset(8 + (ec.menuW or 40) / 2, 29.5)   -- x = milieu de la colonne d'icônes
 				else
 					ec.logo.AnchorPoint = Vector2.new(0, 0)
 					ec.logo.Size = base.Size
