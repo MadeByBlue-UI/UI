@@ -18074,6 +18074,31 @@ function Library:CreateWindow(cfg)
 	-- V9.38 : « parking ». Roblox met à jour la position de TOUS les éléments sous la fenêtre à chaque déplacement, même masqués
 	-- (mesuré : 131 fps immobile -> ~34 fps en déplacement, quoi qu'on masque). Pendant le geste, les enfants de certains cadres
 	-- (le contenu) sont donc rangés dans un ScreenGui désactivé, qui n'est ni dessiné ni recalculé, puis remis en place au relâchement.
+	-- V9.40 : nombre d'instances du contenu MIS EN CACHE. Avant : #content:GetDescendants() à chaque appui (déplacement de la fenêtre,
+	-- barre du menu), ce qui parcourait toutes les instances d'un coup = micro-gel au moment où on maintient. Maintenant le compte est
+	-- refait en tâche de fond (hors geste, 0,6 s après le dernier changement) et l'appui ne fait que lire un nombre.
+	do
+		local count, queued = 0, false
+		local function recount()
+			if not content.Parent then queued = false return end
+			if Library._moving or Library._resizing then task.delay(0.5, recount) return end   -- jamais pendant un geste
+			queued = false
+			count = #content:GetDescendants()
+		end
+		local function dirty()
+			if queued then return end
+			queued = true
+			task.delay(0.6, recount)
+		end
+		content.DescendantAdded:Connect(dirty)
+		content.DescendantRemoving:Connect(dirty)
+		dirty()
+		-- vrai si le contenu affiché est assez lourd pour être rangé pendant un geste (sans aucun parcours à l'appui)
+		ec.isHeavy = function()
+			if Library.ParkInactivePages == false then return true end
+			return count > (tonumber(Library.MoveParkThreshold) or 3000)
+		end
+	end
 	ec.park = function(list)
 		local pg = ec.parkGui
 		if not (pg and pg.Parent) then
@@ -18120,11 +18145,7 @@ function Library:CreateWindow(cfg)
 		elseif Library.MoveMode ~= "Direct" and not collapsed then
 			-- V9.39 : les pages inactives sont déjà rangées en permanence (ParkInactivePages) ; les blocs de la page affichée restent donc
 			-- visibles pendant le geste, sauf si elle est encore très lourde (plus de MoveParkThreshold instances).
-			local heavy = true
-			if Library.ParkInactivePages ~= false then
-				heavy = #content:GetDescendants() > (tonumber(Library.MoveParkThreshold) or 3000)
-			end
-			if heavy then parked = ec.park({ content }) end
+			if ec.isHeavy() then parked = ec.park({ content }) end
 		end
 		local goal, lastT = origin, os.clock()
 		local function step()
@@ -18407,11 +18428,7 @@ function Library:CreateWindow(cfg)
 			-- V9.39 : comme pour le déplacement de la fenêtre, le contenu n'est rangé pendant le geste que s'il est encore lourd
 			-- (les pages inactives sont déjà rangées en permanence) ; sinon il reste affiché et suit en direct.
 			if Library.MoveMode ~= "Direct" then
-				local heavy = true
-				if Library.ParkInactivePages ~= false then
-					heavy = #content:GetDescendants() > (tonumber(Library.MoveParkThreshold) or 3000)
-				end
-				if heavy then parked = ec.park({ content }) end
+				if ec.isHeavy() then parked = ec.park({ content }) end
 			end
 			local function finish()
 				if conn then conn:Disconnect() conn = nil end
