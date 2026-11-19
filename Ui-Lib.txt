@@ -5306,7 +5306,7 @@ function Library:ApplyTheme(t)
 		{ "Animations", "ui.anim", nil, function(v) Library:SetAnimations(v) end },
 		{ "AnimSpeed", "ui.animspeed", function(v) return tostring(v) .. "x" end, function(v) Library:SetAnimSpeed(v) end },
 		{ "WindowAnim", "ui.winanim", nil, function(v) Library:SetWindowAnim(v) end },
-		{ "LockPosition", "ui.lockpos", nil, function(v) Library:SetLockPosition(v) end },
+		-- (LockPosition n'est plus restauré depuis un thème / une config : le verrouillage ne s'active plus tout seul au lancement)
 		{ "MiniBarVisible", "ui.minibar", nil, function(v) Library:SetMiniBarVisible(v) end },
 		{ "ToggleStyle", "ui.togglestyle", nil, function(v) Library:SetToggleStyle(v) end },
 		{ "NotifPos", "ui.notifpos", function(v) return N.NotifPos[v] or v end, function(v) Library:SetNotifPosition(v) end },
@@ -17383,15 +17383,52 @@ function Library:CreateWindow(cfg)
 	new("UIStroke", { Color = T.ElementAccent, Thickness = 1.6, ApplyStrokeMode = BORDER }, ring)
 	new("Frame", { BackgroundColor3 = T.ElementAccent, BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromOffset(12.5, 12.5), Size = UDim2.fromOffset(6, 1.6), Rotation = 45 }, sIcon)
+	do   -- (portée réduite : limite de 200 variables locales)
+	-- icône « keyboard » (liste Lucide, par son nom) à droite de la barre : visible seulement quand on écrit dedans
+	local kbIcon = new("ImageLabel", { Name = "KeyboardIcon", BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, 24, 0.5, 0), Size = UDim2.fromOffset(18, 18), ImageColor3 = T.Text, ImageTransparency = 1,
+		ScaleType = Enum.ScaleType.Fit, Visible = false }, search)   -- (le padding décale les enfants : +24 = 12 px du bord droit de la pilule)
+	pcall(function() Library.ApplyIcon(kbIcon, "keyboard") end)
+	local searchHint = search.PlaceholderText
+	-- trois petits points qui sautent un à un, au centre de la barre, à la place du mot « Rechercher » (tant qu'on n'a rien écrit)
+	local dotsBox = new("Frame", { Name = "TypingDots", BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.fromOffset(40, 16), Visible = false, Active = false }, search)
+	local dots = {}
+	for n = 1, 3 do
+		local d = new("Frame", { BackgroundColor3 = T.Text, BorderSizePixel = 0, AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, (n - 2) * 12, 0.5, 0), Size = UDim2.fromOffset(6, 6) }, dotsBox)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, d)
+		dots[n] = d
+	end
+	local function dotsWanted() return search:IsFocused() and search.Text == "" end
+	local function dotsRefresh() dotsBox.Visible = dotsWanted() end
+	search:GetPropertyChangedSignal("Text"):Connect(dotsRefresh)
+	track(Ticker.connect(function(_, now)
+		for n = 1, 3 do
+			local ph = (now * 1.8 - (n - 1) * 0.2) % 1        -- chaque point part un peu après le précédent
+			local up = ph < 0.4 and math.sin(ph / 0.4 * math.pi) * 5 or 0
+			dots[n].Position = UDim2.new(0.5, (n - 2) * 12, 0.5, -up)
+		end
+	end, { gate = function() return dotsBox.Visible end }))
 	search.Focused:Connect(function()
 		uiSnd("focus")
+		search.PlaceholderText = ""   -- le mot « Rechercher » s'efface dès qu'on clique pour écrire
+		dotsRefresh()
+		Ticker.wake()
+		kbIcon.Visible = true
+		tween(kbIcon, { ImageTransparency = 0 }, 0.2)
 		tween(sst, { Transparency = 0.05 }, 0.2)
 		tween(search, { BackgroundTransparency = 0.8 }, 0.2)
 	end)
 	search.FocusLost:Connect(function()
+		search.PlaceholderText = searchHint
+		dotsBox.Visible = false
+		local tw = tween(kbIcon, { ImageTransparency = 1 }, 0.2)
+		if tw then tw.Completed:Connect(function() if not search:IsFocused() then kbIcon.Visible = false end end) else kbIcon.Visible = false end
 		tween(sst, { Transparency = 0.3 }, 0.3)
 		tween(search, { BackgroundTransparency = 0.9 }, 0.3)
 	end)
+	end
 
 	-- puce « Modifiés » : n'affiche que les éléments qui ne sont plus à leur valeur par défaut (le nombre est affiché)
 	local modChip = new("TextButton", { Name = "ModChip", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0.5, 130, 0, 21),
@@ -17648,13 +17685,7 @@ function Library:CreateWindow(cfg)
 	local lastClick = 0
 	ec.beginDrag = function(i)
 		if not isPress(i) then return end
-		local now = os.clock()
-		if now - lastClick < 0.32 then
-			lastClick = 0
-			if setMinimized then setMinimized(not collapsed) end
-			return
-		end
-		lastClick = now
+		-- (double-clic « réduire / restaurer » retiré)
 		if Library.LockPosition then return end   -- position verrouillée : pas de déplacement
 		local start = Vector2.new(i.Position.X, i.Position.Y)
 		local origin = tgtPos or curPos
@@ -17673,8 +17704,8 @@ function Library:CreateWindow(cfg)
 	end
 	dragZone.InputBegan:Connect(ec.beginDrag)
 	-- poignée de déplacement (type Classique) : simple repère en haut à droite, on peut y attraper la fenêtre
-	ec.grip = new("ImageLabel", { Name = "DragGrip", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
-		Size = UDim2.fromOffset(Library.IconSize, Library.IconSize), BackgroundTransparency = 1, Image = "rbxassetid://132159706410213",
+	ec.grip = new("ImageLabel", { Name = "DragGrip", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -26, 0.5, 0),   -- -26 = décalé de 12 px vers la gauche (avant : -14)
+		Size = UDim2.fromOffset(30, 30), BackgroundTransparency = 1, Image = "rbxassetid://132159706410213",   -- logo du haut à droite : 30 px
 		ImageColor3 = T.Text, ImageTransparency = 0, ScaleType = Enum.ScaleType.Fit, Active = true, Visible = false }, titleBar)
 	ec.grip.InputBegan:Connect(ec.beginDrag)
 	-- logo bien visible : couleur normale (comme les autres icônes), sans grisé ni transparence ; léger éclat seulement au survol
@@ -18477,9 +18508,9 @@ function Library:CreateWindow(cfg)
 		else
 			-- Classique : [titre de la page + description] ......... [≡] [recherche] [poignée]
 			local hdrX = ec.pageX or 150
-			local right = 46                          -- poignée de déplacement (22 px + marges)
-			local h, cy = 30, 28
-			local w = math.floor(math.clamp(W - hdrX - 140 - right - h - gap * 2, 90, 240))   -- 140 px minimum gardés pour le titre de page
+			local right = 66                          -- poignée de déplacement (30 px + marges)
+			local h, cy = 33, 28                      -- barre de recherche et bouton « 3 barres » : +3 px
+			local w = math.floor(math.clamp(W - hdrX - 140 - right - h - gap * 2, 90, 243))   -- 140 px minimum gardés pour le titre de page
 			search.AnchorPoint = Vector2.new(1, 0.5)
 			search.Position = UDim2.fromOffset(math.floor(W - right + 0.5), cy)
 			search.Size = UDim2.fromOffset(w, h)
