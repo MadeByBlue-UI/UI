@@ -43,7 +43,7 @@ local Library = {
 	RecentColors      = {},    -- couleurs récentes du color picker (hexadécimal), sauvegardées avec les réglages
 	RecentColorMax    = 8,
 	SmoothFold        = true,  -- true = repli / dépli des blocs animé · false = instantané
-	MoveMode          = "Léger",   -- déplacement de la fenêtre : "Léger" (contenu masqué pendant le geste) | "Contour" | "Direct" (tout en direct, plus lourd)
+	MoveMode          = "Direct",  -- déplacement de la fenêtre : "Direct" (en direct) | "Contour" (un contour suit le curseur, la fenêtre saute au relâchement)
 	ResizeMode        = "Contour", -- "Contour" (rapide : contour pendant le geste) | "Direct" (ancien : suit en direct, lent)
 	NoCanvasGroup     = true,  -- true = fenêtre en simple Frame (beaucoup plus fluide) ; false = fondu d'ouverture mais plus lourd
 	StarCount         = 0,     -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 = désactivé · 20 = ancien réglage)
@@ -17998,27 +17998,17 @@ function Library:CreateWindow(cfg)
 		local start = isTouch and Vector2.new(i.Position.X, i.Position.Y) or UIS:GetMouseLocation()
 		local origin = tgtPos or curPos
 		tgtPos = nil
-		-- V9.38 : Library.MoveMode
-		--   "Léger"   (défaut) : pendant le geste, le contenu (blocs / éléments : l'essentiel de l'arbre) est masqué ; la fenêtre,
-		--                         le menu, la barre du haut et celle du bas suivent le curseur. Le contenu revient au relâchement.
-		--   "Contour" : la vraie fenêtre ne bouge pas, seul un contour léger suit le curseur (comme au redimensionnement).
-		--   "Direct"  : toute la fenêtre bouge en direct (le plus coûteux).
-		-- Dans tous les cas la position est appliquée UNE FOIS PAR IMAGE (RenderStepped) avec la vraie position de la souris.
-		local mode = Library.MoveMode
-		if mode ~= "Direct" and mode ~= "Contour" then mode = "Light" end
+		-- V9.38 : Library.MoveMode = "Direct" (défaut : la fenêtre suit le curseur) | "Contour" (seul un contour suit, la fenêtre saute au relâchement)
+		-- La position est appliquée UNE FOIS PAR IMAGE (RenderStepped) avec la vraie position de la souris.
 		local touchPos, final = start, origin
 		local outline, outStroke
-		local hid = false
-		if mode == "Contour" then
+		if Library.MoveMode == "Contour" then
 			outline = new("Frame", { Name = "MoveOutline", AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromOffset(math.floor(origin.X + 0.5), math.floor(origin.Y + 0.5)),
 				Size = UDim2.fromOffset(main.Size.X.Offset * scaleBase, main.Size.Y.Offset * scaleBase),
 				BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.93, BorderSizePixel = 0, ZIndex = 900, Active = false }, gui)
 			new("UICorner", { CornerRadius = UDim.new(0, 14) }, outline)
 			outStroke = new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 1.5, Transparency = 0.25 }, outline)
-		elseif mode == "Light" and content.Visible and not collapsed then
-			hid = true
-			content.Visible = false
 		end
 		local function step()
 			local cur = isTouch and touchPos or UIS:GetMouseLocation()
@@ -18033,6 +18023,7 @@ function Library:CreateWindow(cfg)
 		end
 		-- pendant le déplacement : fond animé et mises en page de texte en pause (Library._resizing)
 		Library._resizing = true
+		Library._moving = true
 		local conn
 		if not isTouch then conn = RunService.RenderStepped:Connect(step) end
 		startDrag(function(p)
@@ -18044,6 +18035,7 @@ function Library:CreateWindow(cfg)
 			if conn then conn:Disconnect() end
 			step()
 			Library._resizing = false
+			Library._moving = false
 			if outline then
 				curPos = final
 				setMainPos()
@@ -18052,7 +18044,6 @@ function Library:CreateWindow(cfg)
 				tween(os_, { Transparency = 1 }, 0.2)
 				task.delay(0.25, function() o:Destroy() end)
 			end
-			if hid then content.Visible = true end
 			saveWinLater()
 		end)
 	end
@@ -18744,9 +18735,13 @@ function Library:CreateWindow(cfg)
 		end
 
 		local function place(instant)
-			if not selTab then selPill.Visible = false return end
+			if not selTab then selPill.Visible = false ec.selLast = nil return end
 			local pos, size = target(selTab)
-			if not pos then selPill.Visible = false Library._springStop(selPill) return end
+			if not pos then selPill.Visible = false ec.selLast = nil Library._springStop(selPill) return end
+			-- V9.38 : cible inchangée (ex. la fenêtre est simplement déplacée) : rien à faire, surtout pas relancer un ressort
+			local L = ec.selLast
+			if not instant and L and selPill.Visible and L[1] == pos and L[2] == size then return end
+			ec.selLast = { pos, size }
 			local first = not selPill.Visible
 			if first then selBorn = os.clock() end
 			selPill.Visible = true
@@ -18760,7 +18755,7 @@ function Library:CreateWindow(cfg)
 		end
 
 		local function queue()
-			if selQueued then return end
+			if selQueued or Library._moving then return end   -- (pendant le déplacement de la fenêtre, la pastille ne bouge pas par rapport au menu)
 			selQueued = true
 			task.defer(function() selQueued = false place(false) end)
 		end
