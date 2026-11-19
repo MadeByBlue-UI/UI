@@ -14593,7 +14593,7 @@ end
 -- Transition d'onglet (Paramètres > Animations & performances > « Transition des onglets »)
 --   Glisser (défaut) : la page glisse de 16 px · Fondu : la page sort doucement du voile · Zoom : la page grossit depuis son centre
 Library.TabTransitions = { "Glisser", "Fondu", "Zoom" }
-Library.TabTransition = "Glisser"
+Library.TabTransition = "Fondu"   -- [PERF] "Glisser"/"Zoom" animent la page entière : Roblox recalcule la position de TOUS ses descendants à chaque image pendant 0,5 s = chute de FPS au changement d'onglet
 function Library:SetTabTransition(n)
 	for _, v in ipairs(Library.TabTransitions) do
 		if v == n then
@@ -14747,6 +14747,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 		-- transition : la page sort de l'ombre (glisser / fondu / zoom, au choix dans les Paramètres)
 		if win.Current ~= tab and win.Veil then
 			local mode = Library.TabTransition
+			if Library.Lite and mode ~= "Fondu" then mode = "Fondu" end   -- [PERF] même si une config sauvegardée réclame Glisser / Zoom (Library.Lite = false pour les rétablir)
 			local zoom = page:FindFirstChild("TabZoom")
 			page.AnchorPoint = Vector2.new(0, 0)
 			page.Position = UDim2.new(0, 0, 0, 0)
