@@ -134,8 +134,8 @@ local Library = {
 	Breathing         = false,      -- le contour « respire »
 	Ripple            = false,      -- onde au clic
 	SpinSpeed         = 1,
-	BgRate            = 12,        -- cadence du fond animé (Hz) ; Library:SetPerformanceMode(...) la règle
-	BgRateBusy        = 8,         -- cadence pendant un geste (glisser, redimensionner...)
+	BgRate            = 60,        -- cadence du fond animé (Hz) ; Library:SetPerformanceMode(...) la règle
+	BgRateBusy        = 60,        -- cadence pendant un geste (glisser, redimensionner...)
 	PerformanceMode   = "Performance",
 	HoleVisible       = false,
 	HolePos           = "Center",
@@ -497,10 +497,10 @@ function Library._lazy(fn)
 	return function(...)
 		if not Library._resizing then return fn(...) end
 		local now = os.clock()
-		if now - last >= 0.05 then last = now return fn(...) end
+		if now - last >= 1 / 60 then last = now return fn(...) end   -- 60 Hz (avant : 20)
 		if pending then return end
 		pending = true
-		task.delay(0.05 - (now - last), function()
+		task.delay(1 / 60 - (now - last), function()
 			pending, last = false, os.clock()
 			fn()
 		end)
@@ -11506,7 +11506,7 @@ function Block:CreateTimer(o)
 	-- rafraîchissement de l'affichage (dort tant que la ligne n'est pas visible)
 	track(Ticker.connect(function()
 		if running then render() end
-	end, { rate = 20, gate = f }))
+	end, { rate = 60, gate = f }))
 
 	render()
 	store()
@@ -13043,7 +13043,7 @@ function Block:CreateGraph(o)
 
 	local conn = Ticker.connect(function(dt)
 		render(math.min(dt, 0.25))
-	end, { rate = 30, gate = plot })   -- [PATCH perf] 60 -> 30 Hz · dort tant que le graphique n'est pas affiché
+	end, { rate = 60, gate = plot })   -- 60 Hz (rétabli) · dort tant que le graphique n'est pas affiché
 	track(conn)
 	plot.Destroying:Connect(function() pcall(function() conn:Disconnect() end) end)
 
@@ -17068,7 +17068,7 @@ function Library:CreateWindow(cfg)
 			local up = ph < 0.4 and math.sin(ph / 0.4 * math.pi) * 3 or 0
 			dots[n].Position = UDim2.new(0.5, (n - 2) * 8, 0.5, -up)
 		end
-	end, { rate = 30, gate = function() return dotsBox.Visible end }))
+	end, { rate = 60, gate = function() return dotsBox.Visible end }))
 	search.Focused:Connect(function()
 		uiSnd("focus")
 		search.PlaceholderText = ""   -- le mot « Rechercher » s'efface dès qu'on clique pour écrire
@@ -19016,7 +19016,7 @@ function win:RefreshDecor() end
 		end
 		if sizeDirty then
 			local now = os.clock()
-			local rate = math.clamp(tonumber(Library.ResizeRate) or 30, 10, 120)
+			local rate = math.clamp(tonumber(Library.ResizeRate) or 60, 10, 240)
 			if not Library._resizing or now - applyT >= 1 / rate then
 				applyT = now
 				sizeDirty = false
@@ -23209,10 +23209,10 @@ end
 function Library:SetPerformanceMode(mode)
 	mode = tostring(mode or "Balanced")
 	local P = {
-		Quality     = { Breathing = true,  TitleShine = true,  HoleVisible = true,  rate = 30, busy = 15, anim = true },
-		Balanced    = { Breathing = false, TitleShine = true,  HoleVisible = true,  rate = 20, busy = 10, anim = true },
-		Performance = { Breathing = false, TitleShine = false, HoleVisible = false, rate = 12, busy = 8,  anim = true, flat = true },
-		Ultra       = { Breathing = false, TitleShine = false, HoleVisible = false, rate = 8,  busy = 6,  anim = false, flat = true, bgOff = true },
+		Quality     = { Breathing = true,  TitleShine = true,  HoleVisible = true,  rate = 60, busy = 60, anim = true },
+		Balanced    = { Breathing = false, TitleShine = true,  HoleVisible = true,  rate = 60, busy = 60, anim = true },
+		Performance = { Breathing = false, TitleShine = false, HoleVisible = false, rate = 60, busy = 60, anim = true, flat = true },
+		Ultra       = { Breathing = false, TitleShine = false, HoleVisible = false, rate = 60, busy = 60, anim = false, flat = true, bgOff = true },
 	}
 	local p = P[mode]
 	if not p then return false end
