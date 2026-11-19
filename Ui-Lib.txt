@@ -135,7 +135,7 @@ local Library = {
 	TitleFonts        = { "Michroma", "Gotham Black", "Fredoka", "Oswald", "Bangers", "Jura", "Sci-Fi", "Arcade", "Normale" },
 	TitleShine        = true,
 	LayoutStyle       = "Classique",                 -- type d'interface : "Classique" | "Éclipse" | "Carré"
-	Compact           = false,                       -- mode compact (V9.18) : menu réduit aux icônes (type Classique)
+	Compact           = false,                       -- (lecture seule) mode compact : devient vrai tout seul quand le menu est tiré assez étroit avec la barre verticale (Library.MenuW = largeur, Library.CompactBelow = seuil)
 	LayoutStyleOrder  = { "Classique", "Éclipse", "Carré" },
 	SquareMode        = false,                       -- vrai quand le type « Carré » est appliqué (coins à 0, police monospace)
 	Square            = { Mono = true, TitleOnBorder = true },
@@ -14152,7 +14152,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 	local fullName = parentTab and (tostring(parentTab.Name) .. " / " .. tostring(name or "Tab")) or name
 	local btn = new("TextButton", {
 		Size = UDim2.new(1, 0, 0, parentTab and 30 or 34), BackgroundColor3 = T.Accent, BackgroundTransparency = 1,
-		Text = "", AutoButtonColor = false, BorderSizePixel = 0, ClipsDescendants = true,
+		Text = "", AutoButtonColor = false, BorderSizePixel = 0, ClipsDescendants = false,   -- false : l'icône qui grossit au survol peut dépasser du bouton sans être coupée
 		-- ordre pair = onglet, ordre impair juste après = son conteneur d'enfants
 		LayoutOrder = parentTab and ((#parentTab.Children + 1) * 2) or ((#self.Tabs + 1) * 2),
 	}, parentTab and parentTab:_childHolder() or self.Sidebar)
@@ -16963,7 +16963,7 @@ function Library:CreateWindow(cfg)
 	if cfg.Shape then Library.Shape = (cfg.Shape == "Vague") and "Arrondie" or cfg.Shape end
 	if cfg.Style and STYLES[cfg.Style] then Library:SetStyle(cfg.Style) end
 	if cfg.LayoutStyle and Library.LayoutStyleInfo[cfg.LayoutStyle] then Library.LayoutStyle = cfg.LayoutStyle end
-	if cfg.Compact ~= nil then Library.Compact = cfg.Compact == true end
+	if cfg.Compact ~= nil then Library.Compact = cfg.Compact == true Library.MenuW = (cfg.Compact == true) and 40 or nil end
 	if type(cfg.Eclipse) == "table" then
 		for k, v in pairs(cfg.Eclipse) do
 			if Library.Eclipse[k] ~= nil then Library.Eclipse[k] = v end
@@ -17015,6 +17015,7 @@ function Library:CreateWindow(cfg)
 		pcall(function()
 			if isfile and readfile and isfile(layoutFile) then
 				local d = HttpService:JSONDecode(readfile(layoutFile))
+				if type(d) == "table" and tonumber(d.mw) then Library.MenuW = math.clamp(math.floor(d.mw), 40, 240) end   -- largeur du menu mémorisée
 				if type(d) == "table" and tonumber(d.w) and tonumber(d.h) then
 					W = math.clamp(math.floor(d.w), minW, math.max(minW, vp.X - 16))
 					H = math.clamp(math.floor(d.h), minH, math.max(minH, vp.Y - 16))
@@ -17117,7 +17118,7 @@ function Library:CreateWindow(cfg)
 		end
 		Library.Flags["__window"] = {
 			cx = p.X / v.X, cy = p.Y / v.Y,
-			w = sz.X, h = sz.Y,
+			w = sz.X, h = sz.Y, mw = Library.MenuW,
 		}
 		if remember and persistReady and writefile then
 			pcall(function()
@@ -17552,11 +17553,7 @@ function Library:CreateWindow(cfg)
 			function h:Destroy() b:Destroy() end
 			return h
 		end
-		win:AddStatusButton({ Name = "Settings", Icon = "cog", Tooltip = "Ouvrir les réglages", Order = 10, Callback = function()
-			for _, tb in ipairs(win.Tabs) do
-				if tb._isSettings then pcall(function() tb:Select() end) break end
-			end
-		end })
+		-- (bouton « Settings » de la barre d'état retiré)
 	end
 
 	-- ------------------------------------------------------------------
@@ -17663,19 +17660,26 @@ function Library:CreateWindow(cfg)
 		local origin = tgtPos or curPos
 		tgtPos = nil
 		-- direct (comme Obsidian) : la fenêtre colle au curseur à chaque mouvement, sans ressort ni rattrapage
+		-- pendant le déplacement : fond animé et mises en page de texte en pause (Library._resizing), sinon la fenêtre
+		-- « traîne » (les dégradés qui tournent coûtent cher à redessiner à chaque image)
+		Library._resizing = true
 		startDrag(function(p)
 			curPos = clampCenter(origin + (Vector2.new(p.X, p.Y) - start))
 			setMainPos()
-		end, nil, i.Position, saveWinLater)
+		end, nil, i.Position, function()
+			Library._resizing = false
+			saveWinLater()
+		end)
 	end
 	dragZone.InputBegan:Connect(ec.beginDrag)
 	-- poignée de déplacement (type Classique) : simple repère en haut à droite, on peut y attraper la fenêtre
 	ec.grip = new("ImageLabel", { Name = "DragGrip", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
 		Size = UDim2.fromOffset(Library.IconSize, Library.IconSize), BackgroundTransparency = 1, Image = "rbxassetid://132159706410213",
-		ImageColor3 = T.ElementAccent, ImageTransparency = 0.45, ScaleType = Enum.ScaleType.Fit, Active = true, Visible = false }, titleBar)
+		ImageColor3 = T.Text, ImageTransparency = 0, ScaleType = Enum.ScaleType.Fit, Active = true, Visible = false }, titleBar)
 	ec.grip.InputBegan:Connect(ec.beginDrag)
-	ec.grip.MouseEnter:Connect(function() tween(ec.grip, { ImageTransparency = 0.1 }, 0.2) end)
-	ec.grip.MouseLeave:Connect(function() tween(ec.grip, { ImageTransparency = 0.45 }, 0.25) end)
+	-- logo bien visible : couleur normale (comme les autres icônes), sans grisé ni transparence ; léger éclat seulement au survol
+	ec.grip.MouseEnter:Connect(function() tween(ec.grip, { ImageColor3 = T.Accent }, 0.2) end)
+	ec.grip.MouseLeave:Connect(function() tween(ec.grip, { ImageColor3 = T.Text }, 0.25) end)
 
 	-- ------------------------------------------------------------------
 	-- Bordure « horizon des événements » + poignées de redimensionnement (bords et coins)
@@ -17866,7 +17870,56 @@ function Library:CreateWindow(cfg)
 	-- ------------------------------------------------------------------
 	-- Réduire (barre de titre seule) / recentrer / mise en page sauvegardée
 	-- ------------------------------------------------------------------
-	local parts = { search, sidebar, vline, content, footer }
+	-- ------------------------------------------------------------------
+	-- Poignée du menu (type Classique) : tirer la barre verticale entre le menu et le contenu élargit / rétrécit le menu
+	-- (titre INVINCIBLE compris). Si le menu devient trop étroit, le mode compact s'active TOUT SEUL (icônes + logo).
+	-- Library.MenuW = largeur voulue (nil = défaut) · Library.CompactBelow = seuil du mode compact (84 px)
+	-- ------------------------------------------------------------------
+	do
+		ec.menuHit = new("TextButton", { Name = "MenuResize", BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
+			ZIndex = 72, Active = true, Visible = false }, main)
+		local glow = new("Frame", { Name = "Glow", AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 0),
+			Size = UDim2.new(0, 3, 1, 0), BackgroundColor3 = T.Accent, BackgroundTransparency = 1, BorderSizePixel = 0 }, ec.menuHit)
+		new("UICorner", { CornerRadius = UDim.new(1, 0) }, glow)
+		local dragging = false
+		ec.menuHit.MouseEnter:Connect(function() tween(glow, { BackgroundTransparency = 0.55 }, 0.15) end)
+		ec.menuHit.MouseLeave:Connect(function() if not dragging then tween(glow, { BackgroundTransparency = 1 }, 0.2) end end)
+		ec.menuHit.InputBegan:Connect(function(i)
+			if not isPress(i) or collapsed or Library.LockPosition or Library.LayoutStyle ~= "Classique" then return end
+			dragging = true
+			local startX = i.Position.X
+			local startW = ec.menuW or 116
+			local lastW, lastApply, pending = nil, 0, false
+			Library._resizing = true
+			tween(glow, { BackgroundTransparency = 0.25 }, 0.1)
+			local function applyNow()
+				pending = false
+				lastApply = os.clock()
+				if ec.apply then ec.apply() end
+			end
+			startDrag(function(p)
+				local w = math.clamp(math.floor(startW + (p.X - startX) / math.max(scaleBase, 0.01) + 0.5), 40, 240)
+				if w == lastW then return end
+				lastW = w
+				Library.MenuW = w
+				local dt = os.clock() - lastApply
+				if dt >= 0.05 then
+					applyNow()
+				elseif not pending then   -- au plus ~20 mises en page par seconde pendant le geste
+					pending = true
+					task.delay(0.05 - dt, function() if pending and dragging then applyNow() end end)
+				end
+			end, nil, i.Position, function()
+				dragging = false
+				Library._resizing = false
+				applyNow()
+				tween(glow, { BackgroundTransparency = 1 }, 0.25)
+				saveWinLater()
+			end)
+		end)
+	end
+
+	local parts = { search, sidebar, vline, ec.menuHit, content, footer }
 	-- voile de la couleur du fond posé sur le contenu : il s'opacifie pendant que la fenêtre rétrécit (le contenu « se fond »),
 	-- et s'efface en fondu pendant qu'elle se redéplie. (Champs dans « ec » : trop de variables locales dans cette fonction.)
 	ec.minGen = 0
@@ -18031,6 +18084,7 @@ function Library:CreateWindow(cfg)
 		local o = Library.Eclipse
 		local open = not collapsed
 		vline.Visible = open and not on and Library.LayoutStyle ~= "Carré"
+		if ec.menuHit then ec.menuHit.Visible = vline.Visible end
 		ec.side.Visible = open and on
 		ec.brand.Visible = on
 		ec.user.Visible = open and on and o.UserCard ~= false
@@ -18541,27 +18595,37 @@ function Library:CreateWindow(cfg)
 				end))
 			end
 		else
-			local cp = Library.Compact == true      -- mode compact : menu réduit à une colonne d'icônes
-			local d = cp and 0 or math.max(0, (tonumber(Library.TabIconSize) or Library.IconSize) - Library.IconSize)   -- largeur en plus pour les grandes icônes d'onglet
-			local sbw = cp and 40 or (116 + d)
-			SIDE_PAD = cp and 74 or (156 + d)
-			local hdrX = cp and 64 or (146 + d)                       -- x où commence le contenu : l'en-tête de page (titre + description) s'aligne dessus
+			-- largeur du menu = Library.MenuW (tirée à la souris avec la barre verticale) ; trop étroit => mode compact AUTOMATIQUE
+			local rawW = math.clamp(math.floor(tonumber(Library.MenuW) or (116 + math.max(0, (tonumber(Library.TabIconSize) or Library.IconSize) - Library.IconSize))), 40, 240)
+			local cp = rawW < (Library.CompactBelow or 84)
+			Library.Compact = cp
+			local d = cp and 0 or math.max(0, (tonumber(Library.TabIconSize) or Library.IconSize) - Library.IconSize)
+			local sbw = cp and 40 or math.max(rawW, 100 + d)
+			ec.menuW = sbw
+			local vx = cp and 54 or (sbw + 18)                        -- x de la barre verticale (poignée du menu)
+			SIDE_PAD = cp and 74 or (sbw + 40)
+			local hdrX = cp and 64 or (sbw + 30)                      -- x où commence le contenu : l'en-tête de page (titre + description) s'aligne dessus
 			ec.pageX = hdrX + 4
-			title.Size = UDim2.new(0, math.max(60, hdrX - tx - 6), 1, 0)   -- le nom de la fenêtre reste au-dessus du menu
+			title.Size = UDim2.new(0, math.max(60, hdrX - tx - 6), 1, 0)   -- le nom de la fenêtre reste au-dessus du menu (il s'agrandit avec lui)
 			ec.collapsedH = 58
 			-- le bas de la fenêtre est occupé par la barre d'état (42 px) : pied du menu, séparateur et contenu s'arrêtent au-dessus
 			footer.Position = UDim2.new(0, cp and 8 or 10, 1, -76)
 			footer.Size = UDim2.new(0, sbw, 0, 34)
 			sidebar.Position = UDim2.new(0, cp and 8 or 10, 0, 68)
 			sidebar.Size = UDim2.new(0, sbw, 1, -148)
-			vline.Position = UDim2.new(0, cp and 54 or (134 + d), 0, 68)
+			vline.Position = UDim2.new(0, vx, 0, 68)
 			vline.Size = UDim2.new(0, 1, 1, -110)
-			ec.sidePad.PaddingLeft, ec.sidePad.PaddingRight, ec.sidePad.PaddingTop = UDim.new(0, 0), UDim.new(0, 0), UDim.new(0, 0)
+			if ec.menuHit then
+				ec.menuHit.Position = UDim2.new(0, vx - 6, 0, 68)
+				ec.menuHit.Size = UDim2.new(0, 13, 1, -110)
+			end
+			ec.sidePad.PaddingLeft, ec.sidePad.PaddingRight, ec.sidePad.PaddingTop = UDim.new(0, 0), UDim.new(0, 0), UDim.new(0, 6)
+			ec.sidePad.PaddingBottom = UDim.new(0, 6)   -- place pour l'icône qui s'agrandit au survol (1er / dernier onglet)
 			titleBar.Position = UDim2.new(0, 0, 0, 0)
 			titleBar.Size = UDim2.new(1, 0, 0, 56)
 			ec.titleLine.Position = UDim2.new(0, 14, 0, 57)
 			ec.titleLine.Size = UDim2.new(1, -28, 0, 1)
-			content.Position = UDim2.new(0, cp and 64 or (146 + d), 0, 66)
+			content.Position = UDim2.new(0, hdrX, 0, 66)
 			content.Size = UDim2.new(1, -SIDE_PAD, 1, -108)
 			-- FPS / ms : en bas à gauche de la barre d'état ; « Annuler » à droite de cette barre
 			fpsLabel.Parent = ec.status.Bar
@@ -18574,6 +18638,7 @@ function Library:CreateWindow(cfg)
 			undoBtn.LayoutOrder = 100
 		end
 
+		if on or sq then ec.sidePad.PaddingBottom = UDim.new(0, 0) end
 		local sideLay = sidebar:FindFirstChildOfClass("UIListLayout")
 		if sq then
 			sideLay.FillDirection = Enum.FillDirection.Horizontal
@@ -23221,6 +23286,7 @@ end
 function Library.SetCompact(...)
 	local v = unself(Library, ...)
 	Library.Compact = v == true
+	Library.MenuW = (v == true) and 40 or nil   -- le mode compact dépend maintenant de la largeur du menu (barre verticale)
 	local w = Library.Window
 	if w and w.RefreshLayoutStyle then w:RefreshLayoutStyle() end
 	return Library.Compact
