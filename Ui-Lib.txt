@@ -45,9 +45,9 @@ local Library = {
 	SmoothFold        = true,  -- true = repli / dépli des blocs animé · false = instantané
 	MenuSmooth        = 30,    -- lissage de la barre de largeur du menu (plus haut = suit plus vite · 0 = sans lissage)
 	MoveSmooth        = 30,    -- lissage du déplacement de la fenêtre (plus haut = suit plus vite · 0 = suit le curseur sans lissage)
-	MoveParkThreshold = 3000,  -- pendant un déplacement, le contenu affiché n'est rangé que s'il contient plus de ce nombre d'instances
+	MoveParkThreshold = math.huge,  -- pendant un déplacement le contenu reste AFFICHÉ (math.huge = jamais rangé) ; un nombre (ex. 3000) = rangé seulement s'il contient plus d'instances (gel à l'appui et au relâchement)
 	ParkInactivePages = true,  -- true = les pages des onglets non affichés sont rangées dans un ScreenGui désactivé (déplacement fluide) ; false = ancien comportement
-	MoveMode          = "Léger",   -- déplacement de la fenêtre : "Léger" (contenu rangé pendant le geste) | "Direct" (tout en direct, lent) | "Contour" (un contour suit le curseur)
+	MoveMode          = "Léger",   -- déplacement de la fenêtre : "Léger" (la fenêtre suit le curseur, contenu affiché sauf si plus de MoveParkThreshold instances) | "Direct" (tout en direct, lent) | "Contour" (un contour suit le curseur)
 	ResizeMode        = "Contour", -- "Contour" (rapide : contour pendant le geste) | "Direct" (ancien : suit en direct, lent)
 	NoCanvasGroup     = true,  -- true = fenêtre en simple Frame (beaucoup plus fluide) ; false = fondu d'ouverture mais plus lourd
 	StarCount         = 0,     -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 = désactivé · 20 = ancien réglage)
@@ -18085,6 +18085,7 @@ function Library:CreateWindow(cfg)
 			if not content.Parent then queued = false return end
 			if Library._moving or Library._resizing then task.delay(0.5, recount) return end   -- jamais pendant un geste
 			queued = false
+			if (tonumber(Library.MoveParkThreshold) or 3000) >= 1e9 then count = 0 return end   -- seuil infini (défaut) : le contenu n'est jamais rangé, donc inutile de compter
 			count = #content:GetDescendants()
 		end
 		local function dirty()
@@ -18098,7 +18099,9 @@ function Library:CreateWindow(cfg)
 		-- vrai si le contenu affiché est assez lourd pour être rangé pendant un geste (sans aucun parcours à l'appui)
 		ec.isHeavy = function()
 			if Library.ParkInactivePages == false then return true end
-			return count > (tonumber(Library.MoveParkThreshold) or 3000)
+			local lim = tonumber(Library.MoveParkThreshold) or 3000
+			if lim >= 1e9 then return false end   -- jamais : le contenu reste affiché pendant le geste
+			return count > lim
 		end
 	end
 	ec.park = function(list)
