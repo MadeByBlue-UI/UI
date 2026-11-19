@@ -45,9 +45,9 @@ local Library = {
 	SmoothFold        = true,  -- true = repli / dépli des blocs animé · false = instantané
 	MenuSmooth        = 30,    -- lissage de la barre de largeur du menu (plus haut = suit plus vite · 0 = sans lissage)
 	MoveSmooth        = 30,    -- lissage du déplacement de la fenêtre (plus haut = suit plus vite · 0 = suit le curseur sans lissage)
-	MoveParkThreshold = math.huge,  -- pendant un déplacement le contenu reste AFFICHÉ (math.huge = jamais rangé) ; un nombre (ex. 3000) = rangé seulement s'il contient plus d'instances (gel à l'appui et au relâchement)
+	MoveParkThreshold = 3000,  -- pendant un déplacement, le contenu affiché n'est rangé que s'il contient plus de ce nombre d'instances (math.huge = jamais rangé : reste affiché mais plus de lag)
 	ParkInactivePages = true,  -- true = les pages des onglets non affichés sont rangées dans un ScreenGui désactivé (déplacement fluide) ; false = ancien comportement
-	MoveMode          = "Léger",   -- déplacement de la fenêtre : "Léger" (la fenêtre suit le curseur, contenu affiché sauf si plus de MoveParkThreshold instances) | "Direct" (tout en direct, lent) | "Contour" (un contour suit le curseur)
+	MoveMode          = "Léger",   -- déplacement de la fenêtre : "Léger" (contenu rangé pendant le geste s'il dépasse MoveParkThreshold) | "Direct" (tout en direct, lent) | "Contour" (un contour suit le curseur)
 	ResizeMode        = "Contour", -- "Contour" (rapide : contour pendant le geste) | "Direct" (ancien : suit en direct, lent)
 	NoCanvasGroup     = true,  -- true = fenêtre en simple Frame (beaucoup plus fluide) ; false = fondu d'ouverture mais plus lourd
 	StarCount         = 0,     -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 = désactivé · 20 = ancien réglage)
@@ -14486,15 +14486,25 @@ function Window:CreateTab(name, _, icon, parentTab)
 			task.delay(delay, function()
 				if my ~= gen or Library.ParkInactivePages == false or page.Visible or not page.Parent then return end
 				if Library._moving or Library._resizing or Library._blockDragging then parkLater(1) return end   -- pas pendant un geste
+				if win._keepPage == page then return end   -- la dernière page quittée reste en place (voir plus bas)
 				if page.Parent == win.Content then page.Parent = store() end
 			end)
 		end
+		-- V9.40 : ranger / remettre une page = déplacer des milliers d'instances d'un coup = gel. Pour qu'un aller-retour entre deux onglets
+		-- (le cas le plus fréquent) ne coûte plus rien, la DERNIÈRE page quittée reste en place (non rangée) ; elle n'est rangée que lorsqu'on
+		-- en quitte une autre. Pendant un déplacement de fenêtre elle est rangée avec le contenu si l'ensemble est lourd (ec.park({ content })).
+		win._parkFns = win._parkFns or {}
+		win._parkFns[page] = parkLater
 		page:GetPropertyChangedSignal("Visible"):Connect(function()
 			gen += 1
 			if page.Visible then
+				if win._keepPage == page then win._keepPage = nil end
 				if page.Parent ~= win.Content and win.Content and win.Content.Parent then page.Parent = win.Content end
 			else
-				parkLater(0.8)
+				local prev = win._keepPage
+				win._keepPage = page
+				local fn = prev and prev ~= page and win._parkFns[prev]
+				if fn then fn(0.8) end   -- l'ancienne page gardée est rangée maintenant que celle-ci prend sa place
 			end
 		end)
 		parkLater(3)
@@ -18081,12 +18091,22 @@ function Library:CreateWindow(cfg)
 	--   ceux-ci se déclenchent pour CHAQUE instance de la page à chaque changement d'onglet (rangement / remise) = gros freeze.
 	do
 		local count, queued = 0, false
+		local perPage = setmetatable({}, { __mode = "k" })   -- page -> { nombre d'instances, instant du comptage } : chaque page n'est comptée qu'UNE fois (puis re-comptée après 30 s)
 		local function recount()
 			if not content.Parent then queued = false return end
 			if Library._moving or Library._resizing then task.delay(0.5, recount) return end   -- jamais pendant un geste
 			queued = false
-			if (tonumber(Library.MoveParkThreshold) or 3000) >= 1e9 then count = 0 return end   -- seuil infini (défaut) : le contenu n'est jamais rangé, donc inutile de compter
-			count = #content:GetDescendants()
+			if (tonumber(Library.MoveParkThreshold) or 3000) >= 1e9 then count = 0 return end   -- seuil infini : le contenu n'est jamais rangé, donc inutile de compter
+			local total, now = 0, os.clock()
+			for _, ch in ipairs(content:GetChildren()) do
+				local e = perPage[ch]
+				if not e or now - e[2] > 30 then
+					e = { #ch:GetDescendants() + 1, now }
+					perPage[ch] = e
+				end
+				total += e[1]
+			end
+			count = total
 		end
 		local function dirty()
 			if queued then return end
