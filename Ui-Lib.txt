@@ -1310,7 +1310,33 @@ Library.IconSize = 22                -- TAILLE FIXE de toutes les icônes de l'U
 --   Library.StatusMessages = { "texte", ... }   ({name} = ton pseudo, {key} = touche d'ouverture) · Library.StatusInterval = 9 (secondes) · Library.StatusRotate = false : un seul message fixe
 --   Library:SetStatusMessages({ ... })  ·  Library:StatusMessage("texte", 4)  (message temporaire, durée en s)  ·  Window:AddStatusButton({ Name, Icon, Text, Tooltip, Width, Order, Callback })
 Library.StatusMessages = { "Salut {name} !", "{key} pour ouvrir / fermer l'interface", "Clic droit sur un bouton : lui assigner une touche",
-	"Ctrl+Z : annuler le dernier réglage", "Clique sur ce message pour passer au suivant" }
+	"Ctrl+Z : annuler le dernier réglage", "Clique sur ce message pour passer au suivant",
+	"Astuce : reste appuyé 1,5 s sur le titre d'un bloc pour le déplacer", "Pense à boire un peu d'eau, {name}",
+	"Une petite pause de temps en temps, ça fait du bien", "Tu gères très bien, {name}", "Bienvenue {name}, bonne session !",
+	"Astuce : tiens un bloc 2 s au-dessus d'un onglet pour l'y déposer", "Ctrl+T : recherche rapide dans tous les réglages" }
+-- Petites questions de la barre d'état (une toutes les 4 messages) : { Q = question, Yes = réponse, No = réponse }
+--   une réponse = un texte · une liste de textes (au hasard) · ou une nouvelle { Q, Yes, No } (ex. « T'es sûr ? »)
+function Library._sureNode(compliments, relieved)   -- (champ de Library : pas de nouvelle variable locale, limite de 200)
+	return { Q = "T'es sûr ?", Yes = compliments, No = relieved }
+end
+Library.StatusChats = {
+	{ Q = "Comment vas-tu {name} ?",
+		Yes = { "Tant mieux, ça fait plaisir !", "Super, continue comme ça !" },
+		No = Library._sureNode({ "Courage {name}, t'es plus fort que tu ne le crois.", "Franchement, t'as un super goût : ce menu en est la preuve.",
+			"Tu gères mieux que tu ne le penses, {name}.", "Une belle personne comme toi mérite une meilleure journée." },
+			"Ah, ça va mieux alors ? Tant mieux !") },
+	{ Q = "Tu as bien dormi ?",
+		Yes = "Parfait, tu es en pleine forme alors !",
+		No = Library._sureNode({ "Tu tiens quand même le coup, bravo {name} !", "Même fatigué tu restes au top." },
+			"Ah, c'est déjà mieux alors !") },
+	{ Q = "Tu t'amuses bien ?",
+		Yes = { "Génial, c'est le but !", "Super, profite bien !" },
+		No = Library._sureNode({ "Dommage... mais tu as de l'allure, {name}.", "Essaie un autre onglet, tu y trouveras sûrement ton bonheur." },
+			"Ah ok, tant mieux alors !") },
+	{ Q = "Tu t'es hydraté aujourd'hui ?",
+		Yes = "Bravo, continue comme ça !",
+		No = Library._sureNode("Va vite boire un verre d'eau, je t'attends.", "Ah ouf, tu es bien organisé !") },
+}
 Library.StatusInterval = 9
 Library.StatusRotate = true
 function Library:SetStatusMessages(list)
@@ -1796,7 +1822,7 @@ function Library._regTopBtn(sf, page)
 	sf:GetPropertyChangedSignal("CanvasPosition"):Connect(refresh)
 	sf:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(refresh)
 	sf:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() place() refresh() end)
-	sf:GetPropertyChangedSignal("AbsolutePosition"):Connect(function() if shown then place() end end)
+	sf:GetPropertyChangedSignal("AbsolutePosition"):Connect(function() if shown and not Library._resizing then place() end end)
 	sf:GetPropertyChangedSignal("Visible"):Connect(refresh)
 
 	btn.MouseEnter:Connect(function()
@@ -8370,6 +8396,12 @@ function Library._attachTextFade(tb)
 	end
 
 	local function layoutCheck()
+		-- si un autre rendu de texte (module « Smooth Text » du script) est déjà posé sur ce champ, on s'efface :
+		-- deux calques de lettres l'un sur l'autre = texte « en gras » / texte sur du texte
+		if tb:FindFirstChild("SmoothText") then
+			ov.Visible = false
+			return
+		end
 		local sc = pxScale()
 		local aw, ah = ov.AbsoluteSize.X / sc, ov.AbsoluteSize.Y / sc
 		local tbx, tby = tb.TextBounds.X, tb.TextBounds.Y
@@ -10856,7 +10888,8 @@ function Library:RevealElement(e)
 	local w = Library.Window
 	if not (w and e and e.Tab and e.Block and e.Frame and e.Frame.Parent) then return false end
 	if w.Search and w.Search.Text ~= "" then w.Search.Text = "" end   -- un filtre actif pourrait cacher la ligne
-	if w.Current ~= e.Tab then e.Tab:Select() end
+	local ownTab = (type(e.Block) == "table" and e.Block.Tab) or e.Tab   -- l'onglet ACTUEL du bloc (il a pu être déplacé)
+	if w.Current ~= ownTab then ownTab:Select() end
 	local blk, frame = e.Block, e.Frame
 	local wasCollapsed = blk._isCollapsed and blk._isCollapsed()
 	if wasCollapsed then blk:SetCollapsed(false) end
@@ -12949,6 +12982,7 @@ end
 function Library:_reapplyLayouts()
 	local w = Library.Window
 	if not (w and w.Tabs) then return end
+	pcall(function() Library:_applyHomes() end)   -- blocs déposés dans un autre onglet : on les y remet (ou chez eux après une réinitialisation)
 	for _, t in ipairs(w.Tabs) do
 		t:_reapplyLayout()
 		for _, s in ipairs(t.SubTabs or {}) do s:_reapplyLayout() end
@@ -13006,7 +13040,112 @@ Library.BlockDragLift   = Library.BlockDragLift   or 1.03
 Library.BlockDragSlide  = Library.BlockDragSlide  or 0.22
 Library.BlockDragMaxH   = Library.BlockDragMaxH   or 300
 
-function Library:_dragBlock(blk, startPos)
+-- V9.38 — DÉPLACEMENT PAR MAINTIEN (plus de réglage « Move Blocks », plus de poignées ⠿ : rien ne change à l'écran) :
+--   • rester appuyé Library.BlockHoldTime secondes (1,5) sur l'en-tête d'un bloc, sans bouger, le décroche en douceur ;
+--   • tant qu'on le tient, on le place où on veut dans l'onglet (colonnes, ordre) ;
+--   • en le tenant plus de Library.BlockTabHoverTime secondes (2) au-dessus d'un onglet (menu de gauche) ou d'une pastille de
+--     sous-onglet, la page change SANS lâcher le bloc : on le dépose alors dans cet autre onglet (la place est mémorisée).
+--   Library.BlockHold = false coupe tout ça. Un simple clic sur l'en-tête replie / déplie toujours le bloc.
+Library.BlockHold         = Library.BlockHold ~= false
+Library.BlockHoldTime     = Library.BlockHoldTime or 1.5
+Library.BlockTabHoverTime = Library.BlockTabHoverTime or 2
+
+-- rester appuyé sur l'en-tête d'un bloc : au bout de BlockHoldTime (sans bouger) le bloc se décroche
+function Library:_holdToGrab(blk, input)
+	if Library.BlockHold == false or Library._blockDragging or blk._float then return end
+	local frame = blk.Frame
+	if not (frame and frame.Parent) then return end
+	local p0 = Library._pointerPos(input.Position)
+	local t0 = os.clock()
+	local hold = tonumber(Library.BlockHoldTime) or 1.5
+	local conn, endC
+	local function stop()
+		if conn then conn:Disconnect() conn = nil end
+		if endC then endC:Disconnect() endC = nil end
+	end
+	endC = UIS.InputEnded:Connect(function(i)
+		if isPress(i) then stop() end   -- relâché avant le délai : simple clic
+	end)
+	conn = RunService.Heartbeat:Connect(function()
+		if Library._blockDragging or not frame.Parent or not Library._guiShown(frame) then stop() return end
+		local sc = math.max(pxScale(), 0.05)
+		if (Library._pointerPos(nil) - p0).Magnitude > 9 * sc then stop() return end   -- ça bouge : défilement / glissement normal
+		if os.clock() - t0 >= hold then
+			stop()
+			Library:_dragBlock(blk, input.Position, true)
+		end
+	end)
+end
+
+-- onglet (ou sous-onglet) qui porte vraiment les blocs : un onglet avec sous-onglets affiche celui qui est sélectionné
+function Library._hostOf(t)
+	if not t then return nil end
+	if t.SubName then return t end
+	if t.SubTabs and #t.SubTabs > 0 then return t.CurrentSub or t.SubTabs[1] end
+	return t
+end
+
+function Library:_findHost(name)
+	local w = Library.Window
+	if not (w and w.Tabs) then return nil end
+	name = tostring(name)
+	for _, t in ipairs(w.Tabs) do
+		if tostring(t.Name) == name then return Library._hostOf(t) end
+		for _, s in ipairs(t.SubTabs or {}) do
+			if tostring(s.Name) == name then return s end
+		end
+	end
+	return nil
+end
+
+-- fait passer un bloc d'un onglet à un autre (listes, clé de disposition, mémoire dans « ui.blocklayout » / __home)
+-- Le bloc garde sa clé d'origine dans son onglet d'origine ; ailleurs il porte la clé « Onglet/Bloc » (unique dans la destination).
+function Library:_transferBlock(blk, dest)
+	local src = blk and blk.Tab
+	if not (src and dest) or src == dest or not dest.Blocks then return end
+	for i, b in ipairs(src.Blocks) do
+		if b == blk then table.remove(src.Blocks, i) break end
+	end
+	if not blk.HomeTab then
+		blk.HomeTab, blk.HomeKey = src, blk.Key
+		blk.HomeId = tostring(src.Name) .. "/" .. tostring(blk.Key)
+	end
+	dest.Blocks[#dest.Blocks + 1] = blk
+	blk.Tab = dest
+	local L = Library.BlockLayout
+	if dest == blk.HomeTab then
+		blk.Key = blk.HomeKey
+		if type(L.__home) == "table" then L.__home[blk.HomeId] = nil end
+	else
+		blk.Key = blk.HomeId
+		if type(L.__home) ~= "table" then L.__home = {} end
+		L.__home[blk.HomeId] = tostring(dest.Name)
+	end
+	blk.Index = #dest.Blocks
+	dest.Order = (dest.Order or 0) + 1
+	blk.DefOrder = dest.Order
+end
+
+-- remet chaque bloc dans l'onglet voulu par la disposition mémorisée (restauration des réglages / réinitialisation)
+function Library:_applyHomes()
+	local w = Library.Window
+	if not (w and w.Tabs) then return end
+	local homes = type(Library.BlockLayout.__home) == "table" and Library.BlockLayout.__home or {}
+	local all = {}
+	for _, t in ipairs(w.Tabs) do
+		for _, b in ipairs(t:_allBlocks()) do all[#all + 1] = b end
+	end
+	for _, b in ipairs(all) do
+		if not b._float and b.Tab then
+			local hid = b.HomeId or (tostring(b.Tab.Name) .. "/" .. tostring(b.Key))
+			local want = homes[hid]
+			local dest = (want and Library:_findHost(want)) or b.HomeTab
+			if dest and dest ~= b.Tab then Library:_transferBlock(b, dest) end
+		end
+	end
+end
+
+function Library:_dragBlock(blk, startPos, immediate)
 	local win, tab = Library.Window, blk.Tab
 	if not (win and win.Gui and tab) or Library._blockDragging then return end
 	Library._blockDragging = true
@@ -13016,7 +13155,8 @@ function Library:_dragBlock(blk, startPos)
 	local HYS = 7   -- hystérésis (px d'UI) avant de changer de place d'insertion
 
 	local frame = blk.Frame
-	local cols = tab.Cols
+	local host = tab             -- onglet qui reçoit le bloc en ce moment (change quand on survole un autre onglet)
+	local cols = host.Cols
 	local sc = math.max(pxScale(), 0.05)
 	local fAbs, fSize = frame.AbsolutePosition, frame.AbsoluteSize
 	local slotH = math.max(fSize.Y / sc, 34)   -- hauteur du bloc en unités d'UI
@@ -13035,7 +13175,7 @@ function Library:_dragBlock(blk, startPos)
 
 	local function sortedBlocks(col, skip, onlyVisible)
 		local list = {}
-		for _, b in ipairs(tab.Blocks) do
+		for _, b in ipairs(host.Blocks) do
 			if b ~= skip and not b._float and b.Frame.Parent == col and (not onlyVisible or b.Frame.Visible) then
 				list[#list + 1] = b
 			end
@@ -13274,17 +13414,94 @@ function Library:_dragBlock(blk, startPos)
 		end
 	end
 
+	-- ---- changement d'onglet en tenant le bloc : 2 s au-dessus d'un onglet / d'une pastille de sous-onglet ----
+	local hoverT, hoverSince = nil, 0
+	local retargetAfter = 0          -- après un changement de page, on attend un instant que la mise en page soit prête
+
+	local function hoverTarget(P)
+		local function inside(gui)
+			if not (gui and gui.Parent) or not Library._guiShown(gui) then return false end
+			local ap, as = gui.AbsolutePosition, gui.AbsoluteSize
+			return as.X > 2 and P.X >= ap.X and P.X <= ap.X + as.X and P.Y >= ap.Y and P.Y <= ap.Y + as.Y
+		end
+		for _, t in ipairs(win.Tabs) do
+			if inside(t.Button) then return t end
+		end
+		local cur = win.Current
+		if cur and cur.SubTabs then
+			for _, s in ipairs(cur.SubTabs) do
+				if inside(s.Pill) then return s end
+			end
+		end
+		return nil
+	end
+
+	-- léger éclairage de l'onglet survolé (aucun autre changement à l'écran)
+	local function hoverFx(t, on)
+		local gui = t.SubName and t.Pill or t.Button
+		if not (gui and gui.Parent) then return end
+		if on then
+			tween(gui, { BackgroundTransparency = 0.84 }, 0.15)
+		else
+			local isCur
+			if t.SubName then isCur = t.Parent and t.Parent.CurrentSub == t else isCur = win.Current == t end
+			if not isCur then tween(gui, { BackgroundTransparency = 1 }, 0.2) end
+		end
+	end
+
+	local function switchTo(t)
+		local dest = Library._hostOf(t)
+		if not dest or dest == host or not dest.Cols or #dest.Cols == 0 then return end
+		pcall(function() t:Select() end)   -- la page s'affiche ; le bloc reste « en main »
+		-- l'emplacement de l'ancienne page disparaît, ses colonnes retrouvent leur état normal
+		for s in pairs(slots) do
+			if s.Parent then s:Destroy() end
+		end
+		table.clear(slots)
+		table.clear(dying)
+		placeholder = nil
+		restoreCols()
+		host = dest
+		cols = dest.Cols
+		curCol, curAt = nil, nil
+		prepare()
+		retargetAfter = os.clock() + 0.2
+		uiSnd("tab")
+	end
+
+	local function tabHover(P)
+		local t = hoverTarget(P)
+		if t and Library._hostOf(t) == host then t = nil end   -- déjà sur cette page
+		local now = os.clock()
+		if t ~= hoverT then
+			if hoverT then hoverFx(hoverT, false) end
+			hoverT, hoverSince = t, now
+			if t then hoverFx(t, true) end
+		elseif t and now - hoverSince >= (tonumber(Library.BlockTabHoverTime) or 2) then
+			hoverFx(t, false)
+			hoverT = nil
+			switchTo(t)
+		end
+	end
+
 	local function frameStep(dt)
 		Library._busyUntil = os.clock() + 0.3
 		if not frame.Parent then finalize() return end
 		if not moved then
-			if released or (last - startPos).Magnitude <= 5 then return end
+			if released then return end
+			if not immediate and (last - startPos).Magnitude <= 5 then return end
 			create()
 		end
 		local P = Library._pointerPos(last)
 		if not released then
-			local col = retarget(P)
+			tabHover(P)
+			local col = (os.clock() >= retargetAfter) and retarget(P) or nil
 			if col then autoScroll(col, P, dt) end
+		elseif host ~= tab and not (placeholder and placeholder.Parent) then
+			-- lâché juste après un changement d'onglet, avant que l'emplacement soit créé : on le crée maintenant,
+			-- sinon le bloc retournerait dans l'onglet d'origine (caché) au lieu d'atterrir ici
+			retargetAfter = 0
+			retarget(P)
 		end
 		follow(dt, P)
 
@@ -13309,10 +13526,13 @@ function Library:_dragBlock(blk, startPos)
 		if finished then return end
 		finished = true
 		Library._blockDragging = false
+		Library._blockDragEndAt = os.clock()   -- (le clic qui suit le relâchement ne doit pas replier le bloc)
 		if conn then conn:Disconnect() conn = nil end
+		if hoverT then pcall(hoverFx, hoverT, false) hoverT = nil end
 		if not moved then return end
 		-- tout se fait dans la même image : le vrai bloc remplace la copie sans le moindre saut
 		if placeholder and placeholder.Parent and curCol and curCol.Parent and frame.Parent then
+			if host ~= tab then pcall(function() Library:_transferBlock(blk, host) end) end   -- déposé dans un autre onglet
 			frame.Parent = curCol
 			frame.LayoutOrder = placeholder.LayoutOrder
 			blk.Scroll = curCol
@@ -13324,7 +13544,8 @@ function Library:_dragBlock(blk, startPos)
 		table.clear(dying)
 		restoreCols()
 		if frame.Parent then frame.Visible = true end
-		pcall(function() tab:_commitLayout() end)
+		pcall(function() host:_commitLayout() end)
+		if host ~= tab then pcall(function() tab:_commitLayout() end) end   -- l'onglet d'origine se referme sur le trou laissé
 		if g.root then g.root:Destroy() end
 	end
 
@@ -13685,6 +13906,7 @@ function Tab:CreateBlock(o)
 	end
 	head.MouseButton1Click:Connect(function()
 		if Library.LayoutEdit then return end   -- en mode édition l'en-tête sert à déplacer le bloc
+		if Library._blockDragging or os.clock() - (Library._blockDragEndAt or 0) < 0.35 then return end   -- fin d'un déplacement : pas un clic
 		uiSnd("fold") setCollapsed(not collapsed)
 	end)
 	if o.Collapsed then
@@ -13731,7 +13953,9 @@ function Tab:CreateBlock(o)
 			arrow.Visible = not on
 		end
 		head.InputBegan:Connect(function(i)
-			if Library.LayoutEdit and isPress(i) then Library:_dragBlock(blk, i.Position) end
+			if not isPress(i) then return end
+			if Library.LayoutEdit then Library:_dragBlock(blk, i.Position) return end   -- (ancien mode édition, si un script l'active encore)
+			Library:_holdToGrab(blk, i)   -- rester appuyé 1,5 s : le bloc se décroche (aucun changement visible avant)
 		end)
 		if Library.LayoutEdit then blk._setEdit(true) end
 	end
@@ -17238,11 +17462,13 @@ function Library:CreateWindow(cfg)
 		ec.logo = new("ImageLabel", { BackgroundTransparency = 1, Image = cfg.CustomIcon, Size = UDim2.fromOffset(Library.IconSize, Library.IconSize),
 			Position = UDim2.new(0, 14, 0.5, -Library.IconSize / 2) }, titleBar)
 		tx = 44
+		ec.logoBase = { Size = ec.logo.Size, Position = ec.logo.Position }
 	else
 		-- petit trou noir en guise de logo
 		local logo = new("Frame", { Position = UDim2.new(0, 14, 0.5, -9), Size = UDim2.new(0, 18, 0, 18),
 			BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0 }, titleBar)
 		ec.logo = logo
+		ec.logoBase = { Size = logo.Size, Position = logo.Position }
 		new("UICorner", { CornerRadius = UDim.new(1, 0) }, logo)
 		local lst = new("UIStroke", { Color = T.Accent, Thickness = 2, Transparency = 0.05, ApplyStrokeMode = BORDER }, logo)
 		spin(new("UIGradient", { Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(70, 70, 75)),
@@ -17277,8 +17503,8 @@ function Library:CreateWindow(cfg)
 		rc:SetAttribute("KeepRound", true)
 		rc.Parent = foldBtn
 		for k = -1, 1 do
-			local bar = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, k * 5),
-				Size = UDim2.fromOffset(14, 2), BackgroundColor3 = T.Text, BorderSizePixel = 0 }, foldBtn)
+			local bar = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, k * 6),
+				Size = UDim2.fromOffset(17, 2), BackgroundColor3 = T.Text, BorderSizePixel = 0 }, foldBtn)
 			new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
 		end
 	end
@@ -17413,6 +17639,10 @@ function Library:CreateWindow(cfg)
 	search.Focused:Connect(function()
 		uiSnd("focus")
 		search.PlaceholderText = ""   -- le mot « Rechercher » s'efface dès qu'on clique pour écrire
+		-- le module « Smooth Text » garde sa propre copie du placeholder (label « Placeholder ») : on la vide aussi
+		-- (elle est remise à FocusLost, quand PlaceholderText = searchHint est relu par le module)
+		local smoothPh = search:FindFirstChild("Placeholder", true)
+		if smoothPh and smoothPh:IsA("TextLabel") then smoothPh.Text = "" end
 		dotsRefresh()
 		Ticker.wake()
 		kbIcon.Visible = true
@@ -17422,6 +17652,10 @@ function Library:CreateWindow(cfg)
 	end)
 	search.FocusLost:Connect(function()
 		search.PlaceholderText = searchHint
+		do   -- au cas où le module Smooth Text ne relit pas PlaceholderText : on remet le mot dans son label
+			local smoothPh = search:FindFirstChild("Placeholder", true)
+			if smoothPh and smoothPh:IsA("TextLabel") then smoothPh.Text = searchHint end
+		end
 		dotsBox.Visible = false
 		local tw = tween(kbIcon, { ImageTransparency = 1 }, 0.2)
 		if tw then tw.Completed:Connect(function() if not search:IsFocused() then kbIcon.Visible = false end end) else kbIcon.Visible = false end
@@ -17528,10 +17762,57 @@ function Library:CreateWindow(cfg)
 				tween(msg, { TextTransparency = 0.1 }, 0.25)
 			end)
 		end
+		-- (dans une fonction à part : ses variables ne comptent pas dans la limite de 200 locales de CreateWindow)
+		local chat = (function()
+			-- ---- petites questions « Oui / Non » dans la barre (Library.StatusChats ; Library.StatusChat = false les coupe) ----
+			-- Les deux boutons n'apparaissent QUE pendant une question, à droite de la barre.
+			local function mkReply(text, order)
+				local b = new("TextButton", { Name = "StatusReply_" .. text, Size = UDim2.fromOffset(38, 20), BackgroundColor3 = T.Accent,
+					BackgroundTransparency = 0.88, Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = order,
+					Visible = false }, box)
+				corner(b, 6)
+				label(b, text, 11, { Size = UDim2.fromScale(1, 1), TextXAlignment = CENTER, Font = F_BOLD })
+				b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0.7 }, 0.2) end)
+				b.MouseLeave:Connect(function() tween(b, { BackgroundTransparency = 0.88 }, 0.25) end)
+				return b
+			end
+			local yesBtn, noBtn = mkReply("Oui", 90), mkReply("Non", 91)
+			local yesNode, noNode
+			local function hideReplies() yesBtn.Visible, noBtn.Visible = false, false end
+			local showNode
+			-- nœud : texte seul (réponse finale, affichée ~6 s) · liste de textes (un au hasard) · { Q = question, Yes = nœud, No = nœud }
+			showNode = function(node)
+				if type(node) == "table" and node.Q == nil then node = node[math.random(math.max(#node, 1))] end
+				st.last = os.clock()
+				if type(node) == "table" then
+					st.tempUntil = os.clock() + 40          -- la question reste affichée jusqu'à une réponse
+					put(node.Q)
+					yesNode, noNode = node.Yes, node.No
+					yesBtn.Visible, noBtn.Visible = true, true
+				else
+					hideReplies()
+					st.tempUntil = os.clock() + 6
+					put(tostring(node or ""))
+				end
+			end
+			yesBtn.MouseButton1Click:Connect(function() uiSnd("click") hideReplies() showNode(yesNode) end)
+			noBtn.MouseButton1Click:Connect(function() uiSnd("click") hideReplies() showNode(noNode) end)
+
+		return { hide = hideReplies, show = showNode }
+		end)()
+
 		local function nextMsg()
 			local l = Library.StatusMessages
 			st.last = os.clock()
 			st.tempUntil = nil
+			chat.hide()
+			-- de temps en temps (1 message sur 4), une petite question à la place du message suivant
+			st.count = (st.count or 0) + 1
+			local chats = Library.StatusChats
+			if Library.StatusChat ~= false and type(chats) == "table" and #chats > 0 and st.count % 4 == 0 then
+				chat.show(chats[math.random(#chats)])
+				return
+			end
 			if type(l) ~= "table" or #l == 0 then put("") return end
 			if #l == 1 and st.idx == 1 and msg.Text ~= "" then return end   -- un seul message : pas de clignotement
 			st.idx = st.idx % #l + 1
@@ -17687,17 +17968,32 @@ function Library:CreateWindow(cfg)
 		if not isPress(i) then return end
 		-- (double-clic « réduire / restaurer » retiré)
 		if Library.LockPosition then return end   -- position verrouillée : pas de déplacement
-		local start = Vector2.new(i.Position.X, i.Position.Y)
+		local isTouch = i.UserInputType == Enum.UserInputType.Touch
+		local start = isTouch and Vector2.new(i.Position.X, i.Position.Y) or UIS:GetMouseLocation()
 		local origin = tgtPos or curPos
 		tgtPos = nil
-		-- direct (comme Obsidian) : la fenêtre colle au curseur à chaque mouvement, sans ressort ni rattrapage
-		-- pendant le déplacement : fond animé et mises en page de texte en pause (Library._resizing), sinon la fenêtre
-		-- « traîne » (les dégradés qui tournent coûtent cher à redessiner à chaque image)
+		-- V9.38 : la position est appliquée UNE FOIS PAR IMAGE (RenderStepped) avec la position réelle de la souris,
+		-- au lieu d'être appliquée à chaque événement InputChanged (livrés en rafale / en retard = saccades).
+		local touchPos = start
+		local function step()
+			local cur = isTouch and touchPos or UIS:GetMouseLocation()
+			local np = clampCenter(origin + (cur - start))
+			if np ~= curPos then
+				curPos = np
+				setMainPos()
+			end
+		end
 		Library._resizing = true
+		local conn
+		if not isTouch then conn = RunService.RenderStepped:Connect(step) end
 		startDrag(function(p)
-			curPos = clampCenter(origin + (Vector2.new(p.X, p.Y) - start))
-			setMainPos()
+			if isTouch then
+				touchPos = Vector2.new(p.X, p.Y)
+				step()
+			end
 		end, nil, i.Position, function()
+			if conn then conn:Disconnect() end
+			step()
 			Library._resizing = false
 			saveWinLater()
 		end)
@@ -17705,7 +18001,7 @@ function Library:CreateWindow(cfg)
 	dragZone.InputBegan:Connect(ec.beginDrag)
 	-- poignée de déplacement (type Classique) : simple repère en haut à droite, on peut y attraper la fenêtre
 	ec.grip = new("ImageLabel", { Name = "DragGrip", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -26, 0.5, 0),   -- -26 = décalé de 12 px vers la gauche (avant : -14)
-		Size = UDim2.fromOffset(30, 30), BackgroundTransparency = 1, Image = "rbxassetid://132159706410213",   -- logo du haut à droite : 30 px
+		Size = UDim2.fromOffset(38, 38), BackgroundTransparency = 1, Image = "rbxassetid://132159706410213",   -- logo du haut à droite : 38 px (avant : 30, +8)
 		ImageColor3 = T.Text, ImageTransparency = 0, ScaleType = Enum.ScaleType.Fit, Active = true, Visible = false }, titleBar)
 	ec.grip.InputBegan:Connect(ec.beginDrag)
 	-- logo bien visible : couleur normale (comme les autres icônes), sans grisé ni transparence ; léger éclat seulement au survol
@@ -18508,9 +18804,9 @@ function Library:CreateWindow(cfg)
 		else
 			-- Classique : [titre de la page + description] ......... [≡] [recherche] [poignée]
 			local hdrX = ec.pageX or 150
-			local right = 66                          -- poignée de déplacement (30 px + marges)
-			local h, cy = 33, 28                      -- barre de recherche et bouton « 3 barres » : +3 px
-			local w = math.floor(math.clamp(W - hdrX - 140 - right - h - gap * 2, 90, 243))   -- 140 px minimum gardés pour le titre de page
+			local right = 74                          -- poignée de déplacement (38 px + marges)
+			local h, cy = 38, 28                      -- barre de recherche et bouton « 3 barres » : 38 px de haut (avant : 33)
+			local w = math.floor(math.clamp(W - hdrX - 140 - right - h - gap * 2, 90, 300))   -- barre plus large : 300 px max (avant : 243) ; 140 px minimum gardés pour le titre de page
 			search.AnchorPoint = Vector2.new(1, 0.5)
 			search.Position = UDim2.fromOffset(math.floor(W - right + 0.5), cy)
 			search.Size = UDim2.fromOffset(w, h)
@@ -18687,7 +18983,24 @@ function Library:CreateWindow(cfg)
 		end
 		title.Visible = not on and not (Library.Compact == true and not sq)
 		title.TextXAlignment = Enum.TextXAlignment.Left
-		if ec.logo then ec.logo.Visible = not on and not sq end
+		if ec.logo then
+			ec.logo.Visible = not on and not sq
+			-- mode compact : le logo est BEAUCOUP plus gros, centré sur la colonne d'icônes et écarté du coin de la fenêtre
+			local big = Library.Compact == true and not on and not sq
+			local base = ec.logoBase
+			if base then
+				if big then
+					local sz = tonumber(Library.CompactLogoSize) or 34
+					ec.logo.AnchorPoint = Vector2.new(0.5, 0.5)
+					ec.logo.Size = UDim2.fromOffset(sz, sz)
+					ec.logo.Position = UDim2.fromOffset(8 + (ec.menuW or 40) / 2, 31)   -- x = milieu de la colonne d'icônes
+				else
+					ec.logo.AnchorPoint = Vector2.new(0, 0)
+					ec.logo.Size = base.Size
+					ec.logo.Position = base.Position
+				end
+			end
+		end
 		for _, t in ipairs(win.Tabs) do ec.styleTab(t) end
 		if win._selRefresh then win._selRefresh() end
 		for _, t in ipairs(win.Tabs) do   -- sous-menus dépliants : cachés dans la barre du haut, rétablis ensuite
