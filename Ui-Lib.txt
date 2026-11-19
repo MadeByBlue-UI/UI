@@ -1305,7 +1305,23 @@ end))
 -- ============================================================================
 Library.SmoothScrollStep  = 260      -- px par cran de molette (avant : 110) : défilement bien plus rapide
 Library.SmoothScrollSpeed = 30      -- raideur du ressort : plus haut = plus vif (avant : 26) ; reste fluide (amortissement critique)
-Library.IconSize = 22                -- TAILLE FIXE de toutes les icônes de l'UI (onglets, sous-onglets, blocs, réglages, listes) : 22 x 22 px
+Library.IconSize = 22                -- TAILLE FIXE de toutes les icônes de l'UI (sous-onglets, blocs, réglages, listes) : 22 x 22 px
+-- Barre d'état du bas (type Classique) : FPS / ms à gauche, petits messages au centre, boutons à droite.
+--   Library.StatusMessages = { "texte", ... }   ({name} = ton pseudo, {key} = touche d'ouverture) · Library.StatusInterval = 9 (secondes) · Library.StatusRotate = false : un seul message fixe
+--   Library:SetStatusMessages({ ... })  ·  Library:StatusMessage("texte", 4)  (message temporaire, durée en s)  ·  Window:AddStatusButton({ Name, Icon, Text, Tooltip, Width, Order, Callback })
+Library.StatusMessages = { "Salut {name} !", "{key} pour ouvrir / fermer l'interface", "Clic droit sur un bouton : lui assigner une touche",
+	"Ctrl+Z : annuler le dernier réglage", "Clique sur ce message pour passer au suivant" }
+Library.StatusInterval = 9
+Library.StatusRotate = true
+function Library:SetStatusMessages(list)
+	if type(list) == "table" then Library.StatusMessages = list end
+	if Library._status then Library._status.Reset() end
+end
+function Library:StatusMessage(text, duration)
+	if Library._status then Library._status.Temp(text, duration) end
+end
+Library.TabIconSize = 28             -- icônes des ONGLETS principaux (menu de gauche, Home compris) : plus grandes que les autres ; mets 22 pour revenir à l'ancienne taille.
+                                     -- Le menu s'élargit tout seul de (TabIconSize - 22) px pour garder la place du texte. Onglets enfants et type « Carré » : IconSize.
 
 -- V9.22 : apparence des Tabbox (valeurs par défaut de toutes les Tabbox ; chaque Tabbox peut avoir les siennes)
 --   Font = "Auto" (suit la police de l'UI) ou un nom de Library.FontFamilies · Stretch = lettres espacées comme le titre
@@ -14153,7 +14169,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 	local tabIco                      -- icône de l'onglet (pour l'effet de survol)
 	if type(icon) == "number" then icon = "rbxassetid://" .. tostring(icon) end
 	if icon and icon ~= "" then
-		local isz = Library.IconSize   -- toutes les icônes d'onglet : 22 x 22 px (Home compris)
+		local isz = parentTab and Library.IconSize or (tonumber(Library.TabIconSize) or Library.IconSize)   -- onglets principaux : TabIconSize (Home compris) ; onglets enfants : IconSize
 		if string.sub(icon, 1, 6) == "glyph:" then   -- icône dessinée par un caractère (ex. "glyph:⌂")
 			tabIco = label(btn, string.sub(icon, 7), isz + 1, { Font = Enum.Font.GothamBold, TextXAlignment = CENTER, TextTruncate = Enum.TextTruncate.None,
 				Size = UDim2.new(0, isz, 0, isz), Position = UDim2.new(0, x0, 0.5, -isz / 2) })
@@ -14189,6 +14205,7 @@ function Window:CreateTab(name, _, icon, parentTab)
 		_newColumn = newColumn, Win = win, ParentTab = parentTab, Depth = depth, Children = {}, Expanded = false,
 		IconId = (type(icon) == "string" and icon ~= "") and icon or nil }, Tab)   -- IconId : repris par la recherche (icône du tab)
 	tab:SetColumns(self.EffCols or (self.TwoCols and 2 or 1))
+	tab.TabIcon = tabIco
 
 	function tab:Select()
 		for _, t in ipairs(win.Tabs) do
@@ -17245,14 +17262,25 @@ function Library:CreateWindow(cfg)
 		Size = UDim2.new(0, 28, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.93,
 		Text = "-", TextColor3 = T.Text, TextSize = 16, Font = F_BOLD, AutoButtonColor = false }, titleBar)
 	corner(hideBtn, 7)
+	hideBtn.Visible = false   -- bouton « - » (masquer l'UI) retiré : la touche d'ouverture / fermeture reste disponible
 	hideBtn.MouseEnter:Connect(function() tween(hideBtn, { BackgroundTransparency = 0.8 }, 0.2) end)
 	hideBtn.MouseLeave:Connect(function() tween(hideBtn, { BackgroundTransparency = 0.93 }, 0.25) end)
 
 	-- bouton « tout replier / tout déplier » (onglet courant)
 	local foldBtn = new("TextButton", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -46, 0.5, 0),
 		Size = UDim2.new(0, 28, 0, 24), BackgroundColor3 = T.Accent, BackgroundTransparency = 0.93,
-		Text = "=", TextColor3 = T.Text, TextSize = 15, Font = F_BOLD, AutoButtonColor = false }, titleBar)
-	corner(foldBtn, 7)
+		Text = "", TextColor3 = T.Text, TextSize = 15, Font = F_BOLD, AutoButtonColor = false }, titleBar)
+	do   -- bouton rond avec 3 barres (≡), dessinées : ne dépend d'aucune police
+		local rc = Instance.new("UICorner")
+		rc.CornerRadius = UDim.new(0.5, 0)
+		rc:SetAttribute("KeepRound", true)
+		rc.Parent = foldBtn
+		for k = -1, 1 do
+			local bar = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, k * 5),
+				Size = UDim2.fromOffset(14, 2), BackgroundColor3 = T.Text, BorderSizePixel = 0 }, foldBtn)
+			new("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
+		end
+	end
 	foldBtn.MouseEnter:Connect(function() tween(foldBtn, { BackgroundTransparency = 0.8 }, 0.2) end)
 	foldBtn.MouseLeave:Connect(function() tween(foldBtn, { BackgroundTransparency = 0.93 }, 0.25) end)
 	attachTip(foldBtn, "Tout replier / tout déplier (onglet actuel)")
@@ -17367,7 +17395,7 @@ function Library:CreateWindow(cfg)
 	-- puce « Modifiés » : n'affiche que les éléments qui ne sont plus à leur valeur par défaut (le nombre est affiché)
 	local modChip = new("TextButton", { Name = "ModChip", AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0.5, 130, 0, 21),
 		Size = UDim2.fromOffset(30, 30), BackgroundColor3 = T.Text, BackgroundTransparency = 0.88, Text = "0", TextColor3 = T.Text,
-		TextSize = 12, Font = F_BOLD, AutoButtonColor = false, BorderSizePixel = 0 }, main)
+		TextSize = 12, Font = F_BOLD, AutoButtonColor = false, BorderSizePixel = 0, Visible = false }, main)   -- puce « Modifiés » retirée de l'interface
 	roundOf(modChip)
 	glassEdge(modChip, 0.4)
 	attachTip(modChip, "Filtre « Modifiés » : n'affiche que les éléments qui ne sont plus à leur valeur par défaut (le chiffre = leur nombre).")
@@ -17415,6 +17443,121 @@ function Library:CreateWindow(cfg)
 	end)
 	win.ModChip = modChip
 	Library:_paintModChip()
+
+	-- ------------------------------------------------------------------
+	-- Barre d'état du bas (type Classique) : FPS / ms à gauche, petits messages au centre, boutons à droite
+	-- ------------------------------------------------------------------
+	do
+		local bar = new("Frame", { Name = "StatusBar", Position = UDim2.new(0, 10, 1, -36), Size = UDim2.new(1, -20, 0, 26),
+			BackgroundColor3 = T.Second, BackgroundTransparency = 0.35, BorderSizePixel = 0, Visible = false }, main)
+		corner(bar, 10)
+		trackStyled(bar, stroke(bar, 0.9), "block")
+		local box = new("Frame", { Name = "Buttons", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0),
+			Size = UDim2.fromOffset(0, 20), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 1 }, bar)
+		new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), SortOrder = BYORDER,
+			VerticalAlignment = Enum.VerticalAlignment.Center, HorizontalAlignment = Enum.HorizontalAlignment.Right }, box)
+		ec.status = { Bar = bar, Box = box }
+
+		-- message du centre (cliquable : message suivant)
+		local msg = label(bar, "", 12, { Name = "StatusMessage", Font = F_BOLD, TextXAlignment = CENTER, TextTransparency = 1,
+			Position = UDim2.new(0, 132, 0, 0), Size = UDim2.new(1, -150, 1, 0) })
+		local msgBtn = new("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
+			BorderSizePixel = 0 }, msg)
+		attachTip(msgBtn, "Clique pour passer au message suivant")
+		local function relayout()
+			local rw = box.AbsoluteSize.X / Library._uiScale(box)
+			msg.Position = UDim2.new(0, 132, 0, 0)
+			msg.Size = UDim2.new(1, -(132 + rw + 14), 1, 0)
+		end
+		track(box:GetPropertyChangedSignal("AbsoluteSize"):Connect(relayout))
+		relayout()
+
+		local plr = game:GetService("Players").LocalPlayer
+		local function fmt(s)
+			s = tostring(s)
+			s = s:gsub("{name}", function() return plr and (plr.DisplayName or plr.Name) or "toi" end)
+			s = s:gsub("{key}", function() return tostring(Library._toggleKeyName or "La touche d'ouverture") end)
+			return s
+		end
+		local st = { idx = 0, last = os.clock(), tok = 0, tempUntil = nil }
+		local function put(text)
+			st.tok += 1
+			local my = st.tok
+			tween(msg, { TextTransparency = 1 }, 0.18)
+			task.delay(0.18, function()
+				if st.tok ~= my or not msg.Parent then return end
+				msg.Text = fmt(text)
+				tween(msg, { TextTransparency = 0.1 }, 0.25)
+			end)
+		end
+		local function nextMsg()
+			local l = Library.StatusMessages
+			st.last = os.clock()
+			st.tempUntil = nil
+			if type(l) ~= "table" or #l == 0 then put("") return end
+			if #l == 1 and st.idx == 1 and msg.Text ~= "" then return end   -- un seul message : pas de clignotement
+			st.idx = st.idx % #l + 1
+			put(l[st.idx])
+		end
+		msgBtn.MouseButton1Click:Connect(function() uiSnd("click") nextMsg() end)
+		Library._status = {
+			Next = nextMsg,
+			Reset = function() st.idx = 0 nextMsg() end,
+			Temp = function(text, dur)
+				st.last = os.clock()
+				st.tempUntil = os.clock() + (tonumber(dur) or 4)
+				put(text)
+			end,
+		}
+		track(Ticker.connect(function()
+			local now = os.clock()
+			if st.tempUntil then
+				if now >= st.tempUntil then nextMsg() end
+			elseif Library.StatusRotate ~= false and now - st.last >= (tonumber(Library.StatusInterval) or 9) then
+				nextMsg()
+			end
+		end, { rate = 1, gate = function() return bar.Visible end }))
+		nextMsg()
+
+		-- boutons de la barre : win:AddStatusButton({ Name, Icon = "cog", Text = "Annuler", Tooltip, Width, Order, Callback })
+		function win:AddStatusButton(c)
+			c = type(c) == "table" and c or { Name = tostring(c) }
+			local hasI, hasT = c.Icon ~= nil and c.Icon ~= "", c.Text ~= nil and tostring(c.Text) ~= ""
+			local w = tonumber(c.Width)
+			if not w then
+				w = hasT and (measureText(tostring(c.Text), 11, F_MED).X + 16 + (hasI and 18 or 0)) or 24
+			end
+			local b = new("TextButton", { Name = "Status_" .. tostring(c.Name or "Btn"), Size = UDim2.fromOffset(math.floor(w), 20),
+				BackgroundColor3 = T.Accent, BackgroundTransparency = 0.93, Text = "", AutoButtonColor = false, BorderSizePixel = 0,
+				LayoutOrder = tonumber(c.Order) or 10 }, box)
+			corner(b, 6)
+			local txt
+			if hasI then
+				local ico = new("ImageLabel", { BackgroundTransparency = 1, ImageColor3 = T.Text, ScaleType = Enum.ScaleType.Fit, Image = "",
+					Size = UDim2.fromOffset(14, 14), AnchorPoint = Vector2.new(hasT and 0 or 0.5, 0.5),
+					Position = hasT and UDim2.new(0, 6, 0.5, 0) or UDim2.new(0.5, 0, 0.5, 0) }, b)
+				if not Library.ApplyIcon(ico, c.Icon) then ico.Image = tostring(c.Icon) end
+			end
+			if hasT then
+				txt = label(b, tostring(c.Text), 11, { Position = UDim2.new(0, hasI and 24 or 0, 0, 0), Size = UDim2.new(1, hasI and -28 or 0, 1, 0),
+					TextXAlignment = hasI and LEFT or CENTER })
+			end
+			b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0.8 }, 0.2) end)
+			b.MouseLeave:Connect(function() tween(b, { BackgroundTransparency = 0.93 }, 0.25) end)
+			if c.Tooltip then attachTip(b, tostring(c.Tooltip)) end
+			b.MouseButton1Click:Connect(function() uiSnd("click") fire(c.Callback, win) end)
+			local h = { Button = b }
+			function h:SetText(s) if txt then txt.Text = tostring(s) end end
+			function h:SetVisible(v) b.Visible = v ~= false end
+			function h:Destroy() b:Destroy() end
+			return h
+		end
+		win:AddStatusButton({ Name = "Settings", Icon = "cog", Tooltip = "Ouvrir les réglages", Order = 10, Callback = function()
+			for _, tb in ipairs(win.Tabs) do
+				if tb._isSettings then pcall(function() tb:Select() end) break end
+			end
+		end })
+	end
 
 	-- ------------------------------------------------------------------
 	-- Éléments du type d'interface « Éclipse » (créés une fois, masqués tant que « Classique » est actif)
@@ -17526,6 +17669,13 @@ function Library:CreateWindow(cfg)
 		end, nil, i.Position, saveWinLater)
 	end
 	dragZone.InputBegan:Connect(ec.beginDrag)
+	-- poignée de déplacement (type Classique) : simple repère en haut à droite, on peut y attraper la fenêtre
+	ec.grip = new("ImageLabel", { Name = "DragGrip", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
+		Size = UDim2.fromOffset(Library.IconSize, Library.IconSize), BackgroundTransparency = 1, Image = "rbxassetid://132159706410213",
+		ImageColor3 = T.ElementAccent, ImageTransparency = 0.45, ScaleType = Enum.ScaleType.Fit, Active = true, Visible = false }, titleBar)
+	ec.grip.InputBegan:Connect(ec.beginDrag)
+	ec.grip.MouseEnter:Connect(function() tween(ec.grip, { ImageTransparency = 0.1 }, 0.2) end)
+	ec.grip.MouseLeave:Connect(function() tween(ec.grip, { ImageTransparency = 0.45 }, 0.25) end)
 
 	-- ------------------------------------------------------------------
 	-- Bordure « horizon des événements » + poignées de redimensionnement (bords et coins)
@@ -17885,7 +18035,10 @@ function Library:CreateWindow(cfg)
 		ec.brand.Visible = on
 		ec.user.Visible = open and on and o.UserCard ~= false
 		ec.bar.Visible = open and on and o.FooterBar ~= false
-		modChip.Visible = open
+		modChip.Visible = false   -- puce « Modifiés » retirée
+		if ec.grip then ec.grip.Visible = open and Library.LayoutStyle == "Classique" end   -- poignée de déplacement
+		fpsLabel.Visible = statsOn
+		if ec.status then ec.status.Bar.Visible = open and Library.LayoutStyle == "Classique" end   -- barre d'état du bas
 	end
 
 	-- textes (nom, version, slogan, statut)
@@ -17905,8 +18058,9 @@ function Library:CreateWindow(cfg)
 		tab = tab or win.Current
 		local on = Library.LayoutStyle == "Éclipse"
 		local o = Library.Eclipse
-		ec.pageTitle.Visible = on
-		if not on then
+		local show = on or Library.LayoutStyle == "Classique"   -- titre + description de l'onglet : Éclipse ET Classique
+		ec.pageTitle.Visible = show
+		if not show then
 			ec.pageSub.Visible = false
 			return
 		end
@@ -17915,7 +18069,8 @@ function Library:CreateWindow(cfg)
 		local showSub = o.Subtitle ~= false and sub ~= ""
 		ec.pageSub.Text = sub
 		ec.pageSub.Visible = showSub
-		ec.pageTitle.Position = UDim2.new(0, 4, 0, showSub and 7 or 15)
+		ec.pageTitle.Position = UDim2.new(0, ec.pageX or 4, 0, showSub and 7 or 15)
+		ec.pageSub.Position = UDim2.new(0, ec.pageX or 4, 0, 33)
 	end
 	win._ecPage = ec.page
 
@@ -17983,6 +18138,18 @@ function Library:CreateWindow(cfg)
 				txt.Size = sz
 				txt.TextXAlignment = orig.align
 				txt:SetAttribute("BaseX", nil)
+			end
+		end
+		-- taille de l'icône d'onglet : TabIconSize (IconSize dans la barre basse du type Carré et pour les onglets enfants)
+		do
+			local ti = tab.TabIcon
+			if ti and ti.Parent and ti:IsA("ImageLabel") then
+				local base = Library.IconSize
+				local isz = (isChild or sq) and base or math.max(base, tonumber(Library.TabIconSize) or base)
+				if ti.Size.X.Offset ~= isz then
+					ti.Size = UDim2.fromOffset(isz, isz)
+					ti.Position = UDim2.new(0, 12 + (tab.Depth or 0) * 10, 0.5, -isz / 2)
+				end
 			end
 		end
 		-- MODE COMPACT (V9.18, type Classique) : icône seule au centre ; sans icône, les initiales ; nom au survol
@@ -18237,23 +18404,39 @@ function Library:CreateWindow(cfg)
 		if ls == "Éclipse" then return end
 		local sqm = ls == "Carré"
 		local W = main.Size.X.Offset
-		local tbw = 0
-		pcall(function() tbw = title.TextBounds.X end)
-		if tbw <= 0 then tbw = #tostring(title.Text) * 9 end
-		local left = (sqm and 10 or tx) + tbw + 18
-		local right = undoBtn.Visible and 256 or 88          -- boutons FPS / annuler / replier / réduire
-		local h = sqm and 24 or 30
+		local stOn = undoBtn.Visible
 		local gap = 8
-		local avail = W - left - right
-		local w = math.floor(math.clamp(avail - h - gap, 90, 300))
-		local cy = sqm and 14 or 21
-		local chipX = W - right - h
-		search.AnchorPoint = Vector2.new(1, 0.5)
-		search.Position = UDim2.fromOffset(math.floor(chipX - gap + 0.5), cy)
-		search.Size = UDim2.fromOffset(w, h)
-		modChip.AnchorPoint = Vector2.new(0, 0.5)
-		modChip.Position = UDim2.fromOffset(math.floor(chipX + 0.5), cy)
-		modChip.Size = UDim2.fromOffset(h, h)
+		if sqm then
+			local tbw = 0
+			pcall(function() tbw = title.TextBounds.X end)
+			if tbw <= 0 then tbw = #tostring(title.Text) * 9 end
+			local left = 10 + tbw + 18
+			local right = stOn and 190 or 16        -- « Annuler » + FPS / ms
+			local h, cy = 24, 14
+			local w = math.floor(math.clamp(W - left - right - h - gap, 90, 300))
+			search.AnchorPoint = Vector2.new(1, 0.5)
+			search.Position = UDim2.fromOffset(math.floor(W - right + 0.5), cy)
+			search.Size = UDim2.fromOffset(w, h)
+			foldBtn.AnchorPoint = Vector2.new(1, 0.5)
+			foldBtn.Position = UDim2.fromOffset(math.floor(W - right - w - gap + 0.5), cy)
+			foldBtn.Size = UDim2.fromOffset(h, h)
+		else
+			-- Classique : [titre de la page + description] ......... [≡] [recherche] [poignée]
+			local hdrX = ec.pageX or 150
+			local right = 46                          -- poignée de déplacement (22 px + marges)
+			local h, cy = 30, 28
+			local w = math.floor(math.clamp(W - hdrX - 140 - right - h - gap * 2, 90, 240))   -- 140 px minimum gardés pour le titre de page
+			search.AnchorPoint = Vector2.new(1, 0.5)
+			search.Position = UDim2.fromOffset(math.floor(W - right + 0.5), cy)
+			search.Size = UDim2.fromOffset(w, h)
+			local foldRight = math.floor(W - right - w - gap + 0.5)
+			foldBtn.AnchorPoint = Vector2.new(1, 0.5)
+			foldBtn.Position = UDim2.fromOffset(foldRight, cy)
+			foldBtn.Size = UDim2.fromOffset(h, h)
+			local tw = math.max(60, foldRight - h - 10 - hdrX)
+			ec.pageTitle.Size = UDim2.fromOffset(tw, 26)
+			ec.pageSub.Size = UDim2.fromOffset(tw, 16)
+		end
 	end
 	for _, sig in ipairs({ main:GetPropertyChangedSignal("Size"), title:GetPropertyChangedSignal("TextBounds"),
 		undoBtn:GetPropertyChangedSignal("Visible") }) do
@@ -18294,21 +18477,28 @@ function Library:CreateWindow(cfg)
 			ec.sidePad.PaddingLeft, ec.sidePad.PaddingRight, ec.sidePad.PaddingTop = UDim.new(0, 2), UDim.new(0, 2), UDim.new(0, 2)
 			titleBar.Position = UDim2.new(0, cx, 0, 0)
 			titleBar.Size = UDim2.new(1, -cx, 0, 56)
+			ec.pageX = 4
+			ec.pageTitle.Size = UDim2.new(1, -300, 0, 26)
+			ec.pageSub.Size = UDim2.new(1, -300, 0, 16)
 			ec.titleLine.Position = UDim2.new(0, cx, 0, 57)
 			ec.titleLine.Size = UDim2.new(1, -(cx + 10), 0, 1)
 			search.AnchorPoint = Vector2.new(1, 0)
-			search.Position = UDim2.new(1, -116, 0, 13)
+			search.Position = UDim2.new(1, -12, 0, 13)
 			search.Size = UDim2.fromOffset(220, 30)
-			modChip.AnchorPoint = Vector2.new(1, 0)
-			modChip.Position = UDim2.new(1, -78, 0, 13)
-			modChip.Size = UDim2.fromOffset(30, 30)
+			foldBtn.AnchorPoint = Vector2.new(1, 0.5)
+			foldBtn.Position = UDim2.new(1, -240, 0, 28)
+			foldBtn.Size = UDim2.fromOffset(30, 30)
 			content.Position = UDim2.new(0, cx, 0, 66)
 			content.Size = UDim2.new(1, -SIDE_PAD, 1, -(66 + (barOn and 52 or 12)))
 			ec.bar.Position = UDim2.new(0, cx, 1, -44)
 			ec.bar.Size = UDim2.new(1, -SIDE_PAD, 0, 34)
 			fpsLabel.Parent = ec.bar
+			fpsLabel.AnchorPoint = Vector2.new(1, 0.5)
+			fpsLabel.Size = UDim2.new(0, 104, 0, 16)
+			fpsLabel.TextXAlignment = Enum.TextXAlignment.Right
 			fpsLabel.Position = UDim2.new(1, -12, 0.5, 0)
 			undoBtn.Parent = ec.bar
+			undoBtn.Size = UDim2.fromOffset(58, 24)
 			undoBtn.Position = UDim2.new(1, -122, 0.5, 0)
 		elseif sq then
 			-- barre du haut : ligne 1 = titre + recherche (verre, centrée) + boutons, ligne 2 = onglets (texte) ; le contenu dessous
@@ -18335,9 +18525,13 @@ function Library:CreateWindow(cfg)
 			content.Position = UDim2.new(0, 8, 0, 62)
 			content.Size = UDim2.new(1, -16, 1, -70)
 			fpsLabel.Parent = titleBar
-			fpsLabel.Position = UDim2.new(1, -80, 0.5, 0)
+			fpsLabel.AnchorPoint = Vector2.new(1, 0.5)
+			fpsLabel.Size = UDim2.new(0, 104, 0, 16)
+			fpsLabel.TextXAlignment = Enum.TextXAlignment.Right
+			fpsLabel.Position = UDim2.new(1, -12, 0.5, 0)
 			undoBtn.Parent = titleBar
-			undoBtn.Position = UDim2.new(1, -192, 0.5, 0)
+			undoBtn.Size = UDim2.fromOffset(58, 24)
+			undoBtn.Position = UDim2.new(1, -122, 0.5, 0)
 			if not ec.sqWheel then   -- molette = défilement horizontal des onglets
 				ec.sqWheel = true
 				track(sidebar.InputChanged:Connect(function(i)
@@ -18348,25 +18542,36 @@ function Library:CreateWindow(cfg)
 			end
 		else
 			local cp = Library.Compact == true      -- mode compact : menu réduit à une colonne d'icônes
-			local sbw = cp and 40 or 116
-			SIDE_PAD = cp and 74 or 156
-			ec.collapsedH = 44
-			footer.Position = UDim2.new(0, cp and 8 or 10, 1, -48)
+			local d = cp and 0 or math.max(0, (tonumber(Library.TabIconSize) or Library.IconSize) - Library.IconSize)   -- largeur en plus pour les grandes icônes d'onglet
+			local sbw = cp and 40 or (116 + d)
+			SIDE_PAD = cp and 74 or (156 + d)
+			local hdrX = cp and 64 or (146 + d)                       -- x où commence le contenu : l'en-tête de page (titre + description) s'aligne dessus
+			ec.pageX = hdrX + 4
+			title.Size = UDim2.new(0, math.max(60, hdrX - tx - 6), 1, 0)   -- le nom de la fenêtre reste au-dessus du menu
+			ec.collapsedH = 58
+			-- le bas de la fenêtre est occupé par la barre d'état (42 px) : pied du menu, séparateur et contenu s'arrêtent au-dessus
+			footer.Position = UDim2.new(0, cp and 8 or 10, 1, -76)
 			footer.Size = UDim2.new(0, sbw, 0, 34)
-			sidebar.Position = UDim2.new(0, cp and 8 or 10, 0, 54)
-			sidebar.Size = UDim2.new(0, sbw, 1, -106)
-			vline.Position = UDim2.new(0, cp and 54 or 134, 0, 54)
+			sidebar.Position = UDim2.new(0, cp and 8 or 10, 0, 68)
+			sidebar.Size = UDim2.new(0, sbw, 1, -148)
+			vline.Position = UDim2.new(0, cp and 54 or (134 + d), 0, 68)
+			vline.Size = UDim2.new(0, 1, 1, -110)
 			ec.sidePad.PaddingLeft, ec.sidePad.PaddingRight, ec.sidePad.PaddingTop = UDim.new(0, 0), UDim.new(0, 0), UDim.new(0, 0)
 			titleBar.Position = UDim2.new(0, 0, 0, 0)
-			titleBar.Size = UDim2.new(1, 0, 0, 42)
-			ec.titleLine.Position = UDim2.new(0, 14, 0, 42)
+			titleBar.Size = UDim2.new(1, 0, 0, 56)
+			ec.titleLine.Position = UDim2.new(0, 14, 0, 57)
 			ec.titleLine.Size = UDim2.new(1, -28, 0, 1)
-			content.Position = UDim2.new(0, cp and 64 or 146, 0, 52)
-			content.Size = UDim2.new(1, -SIDE_PAD, 1, -64)
-			fpsLabel.Parent = titleBar
-			fpsLabel.Position = UDim2.new(1, -80, 0.5, 0)
-			undoBtn.Parent = titleBar
-			undoBtn.Position = UDim2.new(1, -192, 0.5, 0)
+			content.Position = UDim2.new(0, cp and 64 or (146 + d), 0, 66)
+			content.Size = UDim2.new(1, -SIDE_PAD, 1, -108)
+			-- FPS / ms : en bas à gauche de la barre d'état ; « Annuler » à droite de cette barre
+			fpsLabel.Parent = ec.status.Bar
+			fpsLabel.AnchorPoint = Vector2.new(0, 0.5)
+			fpsLabel.Position = UDim2.new(0, 12, 0.5, 0)
+			fpsLabel.Size = UDim2.new(0, 120, 0, 16)
+			fpsLabel.TextXAlignment = Enum.TextXAlignment.Left
+			undoBtn.Parent = ec.status.Box
+			undoBtn.Size = UDim2.fromOffset(58, 20)
+			undoBtn.LayoutOrder = 100
 		end
 
 		local sideLay = sidebar:FindFirstChildOfClass("UIListLayout")
@@ -18384,7 +18589,7 @@ function Library:CreateWindow(cfg)
 			sidebar.ScrollingDirection = Enum.ScrollingDirection.XY
 			sidebar.CanvasPosition = Vector2.new(0, 0)
 		end
-		title.Visible = not on
+		title.Visible = not on and not (Library.Compact == true and not sq)
 		title.TextXAlignment = Enum.TextXAlignment.Left
 		if ec.logo then ec.logo.Visible = not on and not sq end
 		for _, t in ipairs(win.Tabs) do ec.styleTab(t) end
@@ -18452,6 +18657,7 @@ function Library:CreateWindow(cfg)
 		win.StatsVisible = statsOn
 		fpsLabel.Visible = statsOn
 		undoBtn.Visible = statsOn
+		if ec.vis then ec.vis() end
 	end
 	function win:SetMinimized(v) setMinimized(v) end
 	function win:IsMinimized() return collapsed end
@@ -18585,6 +18791,7 @@ function win:RefreshDecor() end
 	local toggleToken = 0
 	local hintShown = false
 	local toggleKey = cfg.ToggleKey or Enum.KeyCode.RightShift
+	Library._toggleKeyName = tostring(toggleKey.Name or toggleKey)
 
 	-- ------------------------------------------------------------------
 	-- Curseur libéré tant que l'interface est ouverte : en vue 1re personne (ou souris verrouillée au centre)
@@ -18842,7 +19049,8 @@ function win:RefreshDecor() end
 			local ok, v = pcall(function() return pingItem:GetValue() end)
 			if ok and v then ping = math.floor(v + 0.5) end
 		end
-		local txt = math.floor(Ticker.Fps + 0.5) .. " fps | " .. ping .. " ms"
+		local fpsN = math.floor(Ticker.Fps + 0.5)
+		local txt = fpsN .. " fps | " .. ping .. " ms"
 		if txt ~= fpsLabel.Text then fpsLabel.Text = txt end
 	end, { rate = 2, gate = function() return statsOn end }))
 
