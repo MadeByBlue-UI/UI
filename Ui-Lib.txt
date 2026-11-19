@@ -19620,6 +19620,71 @@ function win:RefreshDecor() end
 	end
 	persistReady = true
 
+	-- V9.38 : DIAGNOSTIC du déplacement. win:BenchMove() / Library:BenchMove() / bouton « Test déplacement » de la barre du bas.
+	-- Déplace la fenêtre en cercle toute seule, en masquant tour à tour fond, reflet de verre, halo et contenu, et mesure les FPS
+	-- de chaque cas : on voit ce qui coûte. Library.BenchButton = false retire le bouton.
+	win.BenchMove = function()
+		if ec.benching then return end
+		if not main.Visible or collapsed then
+			Library:Notify({ Title = "Test déplacement", Content = "Ouvre la fenêtre (non réduite) puis relance le test.", Type = "Warning" })
+			return
+		end
+		ec.benching = true
+		task.spawn(function()
+			local base = tgtPos or curPos
+			tgtPos = nil
+			local parts = { space = space, horizon = horizon, glint = glint, sheen = sheen, content = content }
+			local saved = {}
+			local function hide(names)
+				for n in pairs(names) do
+					saved[n] = parts[n].Visible
+					parts[n].Visible = false
+				end
+			end
+			local function restore()
+				for n, v in pairs(saved) do parts[n].Visible = v end
+				table.clear(saved)
+			end
+			local phases = {
+				{ "immobile", {}, false },
+				{ "bouge : tout", {}, true },
+				{ "bouge sans fond", { space = true }, true },
+				{ "bouge sans reflet verre", { glint = true, sheen = true }, true },
+				{ "bouge sans halo", { horizon = true }, true },
+				{ "bouge sans contenu", { content = true }, true },
+				{ "bouge tout masqué", { space = true, glint = true, sheen = true, horizon = true, content = true }, true },
+			}
+			local out = {}
+			Library._resizing, Library._moving = true, true
+			for _, ph in ipairs(phases) do
+				hide(ph[2])
+				local t0, n, worst = os.clock(), 0, 0
+				for k = 1, 110 do
+					local dt = RunService.RenderStepped:Wait()
+					if k == 21 then t0, n, worst = os.clock(), 0, 0 end   -- 20 images de chauffe
+					if k > 20 then n += 1 worst = math.max(worst, dt) end
+					if ph[3] then
+						local a = k * 0.12
+						curPos = clampCenter(base + Vector2.new(math.cos(a) * 70, math.sin(a) * 40))
+						setMainPos()
+					end
+				end
+				out[#out + 1] = string.format("%s : %.0f fps (pire image %.0f ms)", ph[1], n / math.max(os.clock() - t0, 0.001), worst * 1000)
+				restore()
+			end
+			Library._resizing, Library._moving = false, false
+			curPos = base
+			setMainPos()
+			ec.benching = false
+			for _, l in ipairs(out) do print("[Ui-Lib mesure] " .. l) end
+			Library:Notify({ Title = "Test déplacement", Content = table.concat(out, "\n"), Duration = 60 })
+		end)
+	end
+	if Library.BenchButton ~= false then
+		pcall(function() win:AddStatusButton({ Name = "Bench", Text = "Test déplacement", Tooltip = "Mesure les FPS pendant un déplacement (diagnostic)",
+			Callback = function() win.BenchMove() end }) end)
+	end
+
 	Library.Window = win
 	ec.apply()
 	win:RefreshShape()
@@ -24001,6 +24066,8 @@ function Library:DecorNext() end
 function Library:DecorClear() end
 function Library:DecorReact() end
 function Library:SetDecorCustom() return 0 end
+
+function Library:BenchMove() local w = Library.Window if w and w.BenchMove then w.BenchMove() end end
 
 -- Contexte donné aux modules GitHub (Home / Paramètres / Aperçu 3D) : outils internes du cœur
 Library._ctx = {
