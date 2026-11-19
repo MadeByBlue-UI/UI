@@ -43,7 +43,7 @@ local Library = {
 	RecentColors      = {},    -- couleurs récentes du color picker (hexadécimal), sauvegardées avec les réglages
 	RecentColorMax    = 8,
 	SmoothFold        = true,  -- true = repli / dépli des blocs animé · false = instantané
-	MoveMode          = "Direct",  -- déplacement de la fenêtre : "Direct" (en direct) | "Contour" (un contour suit le curseur, la fenêtre saute au relâchement)
+	MoveMode          = "Léger",   -- déplacement de la fenêtre : "Léger" (contenu rangé pendant le geste) | "Direct" (tout en direct, lent) | "Contour" (un contour suit le curseur)
 	ResizeMode        = "Contour", -- "Contour" (rapide : contour pendant le geste) | "Direct" (ancien : suit en direct, lent)
 	NoCanvasGroup     = true,  -- true = fenêtre en simple Frame (beaucoup plus fluide) ; false = fondu d'ouverture mais plus lourd
 	StarCount         = 0,     -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 = désactivé · 20 = ancien réglage)
@@ -17991,6 +17991,33 @@ function Library:CreateWindow(cfg)
 
 	-- Déplacement de la fenêtre (direct) + double-clic = réduire / restaurer
 	local lastClick = 0
+	-- V9.38 : « parking ». Roblox met à jour la position de TOUS les éléments sous la fenêtre à chaque déplacement, même masqués
+	-- (mesuré : 131 fps immobile -> ~34 fps en déplacement, quoi qu'on masque). Pendant le geste, les enfants de certains cadres
+	-- (le contenu) sont donc rangés dans un ScreenGui désactivé, qui n'est ni dessiné ni recalculé, puis remis en place au relâchement.
+	ec.park = function(list)
+		local pg = ec.parkGui
+		if not (pg and pg.Parent) then
+			pg = new("ScreenGui", { Name = "SolarisPark", ResetOnSpawn = false, Enabled = false })
+			mount(pg)
+			ec.parkGui = pg
+		end
+		local rec = {}
+		for _, host in ipairs(list) do
+			local kids = host:GetChildren()
+			local holder = new("Frame", { Name = "Park", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, pg)
+			for _, k in ipairs(kids) do k.Parent = holder end
+			rec[#rec + 1] = { host, holder, kids }
+		end
+		return rec
+	end
+	ec.unpark = function(rec)
+		for _, r in ipairs(rec) do
+			for _, k in ipairs(r[3]) do
+				if k.Parent == r[2] then k.Parent = r[1] end   -- même ordre qu'avant
+			end
+			r[2]:Destroy()
+		end
+	end
 	ec.beginDrag = function(i)
 		if not isPress(i) then return end
 		if Library.LockPosition then return end   -- position verrouillée : pas de déplacement
@@ -17998,10 +18025,11 @@ function Library:CreateWindow(cfg)
 		local start = isTouch and Vector2.new(i.Position.X, i.Position.Y) or UIS:GetMouseLocation()
 		local origin = tgtPos or curPos
 		tgtPos = nil
-		-- V9.38 : Library.MoveMode = "Direct" (défaut : la fenêtre suit le curseur) | "Contour" (seul un contour suit, la fenêtre saute au relâchement)
+		-- V9.38 : Library.MoveMode = "Léger" (défaut : le contenu est rangé hors de la fenêtre pendant le geste, la fenêtre suit le curseur)
+		--   | "Direct" (tout en direct, lent) | "Contour" (seul un contour suit, la fenêtre saute au relâchement)
 		-- La position est appliquée UNE FOIS PAR IMAGE (RenderStepped) avec la vraie position de la souris.
 		local touchPos, final = start, origin
-		local outline, outStroke
+		local outline, outStroke, parked
 		if Library.MoveMode == "Contour" then
 			outline = new("Frame", { Name = "MoveOutline", AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromOffset(math.floor(origin.X + 0.5), math.floor(origin.Y + 0.5)),
@@ -18009,6 +18037,8 @@ function Library:CreateWindow(cfg)
 				BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.93, BorderSizePixel = 0, ZIndex = 900, Active = false }, gui)
 			new("UICorner", { CornerRadius = UDim.new(0, 14) }, outline)
 			outStroke = new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 1.5, Transparency = 0.25 }, outline)
+		elseif Library.MoveMode ~= "Direct" and not collapsed then
+			parked = ec.park({ content })
 		end
 		local function step()
 			local cur = isTouch and touchPos or UIS:GetMouseLocation()
@@ -18044,6 +18074,7 @@ function Library:CreateWindow(cfg)
 				tween(os_, { Transparency = 1 }, 0.2)
 				task.delay(0.25, function() o:Destroy() end)
 			end
+			if parked then ec.unpark(parked) end
 			saveWinLater()
 		end)
 	end
@@ -19653,11 +19684,20 @@ function win:RefreshDecor() end
 				{ "bouge sans halo", { horizon = true }, true },
 				{ "bouge sans contenu", { content = true }, true },
 				{ "bouge tout masqué", { space = true, glint = true, sheen = true, horizon = true, content = true }, true },
+				{ "bouge contenu parqué", {}, true, { content } },
+				{ "bouge contenu+menu parqués", {}, true, { content, sidebar } },
+				{ "bouge contenu+menu+fond parqués", {}, true, { content, sidebar, space } },
 			}
 			local out = {}
 			Library._resizing, Library._moving = true, true
 			for _, ph in ipairs(phases) do
 				hide(ph[2])
+				local rec, tPark, tBack
+				if ph[4] then
+					local c0 = os.clock()
+					rec = ec.park(ph[4])
+					tPark = os.clock() - c0
+				end
 				local t0, n, worst = os.clock(), 0, 0
 				for k = 1, 110 do
 					local dt = RunService.RenderStepped:Wait()
@@ -19669,7 +19709,14 @@ function win:RefreshDecor() end
 						setMainPos()
 					end
 				end
-				out[#out + 1] = string.format("%s : %.0f fps (pire image %.0f ms)", ph[1], n / math.max(os.clock() - t0, 0.001), worst * 1000)
+				local line = string.format("%s : %.0f fps (pire image %.0f ms)", ph[1], n / math.max(os.clock() - t0, 0.001), worst * 1000)
+				if rec then
+					local c1 = os.clock()
+					ec.unpark(rec)
+					tBack = os.clock() - c1
+					line = line .. string.format(" · ranger %.0f ms / remettre %.0f ms", tPark * 1000, tBack * 1000)
+				end
+				out[#out + 1] = line
 				restore()
 			end
 			Library._resizing, Library._moving = false, false
