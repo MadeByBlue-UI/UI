@@ -45,9 +45,9 @@ local Library = {
 	SmoothFold        = true,  -- true = repli / dépli des blocs animé · false = instantané
 	MenuSmooth        = 30,    -- lissage de la barre de largeur du menu (plus haut = suit plus vite · 0 = sans lissage)
 	MoveSmooth        = 30,    -- lissage du déplacement de la fenêtre (plus haut = suit plus vite · 0 = suit le curseur sans lissage)
-	MoveParkThreshold = 3000,  -- pendant un déplacement, le contenu affiché n'est rangé que s'il contient plus de ce nombre d'instances (math.huge = jamais rangé : reste affiché mais plus de lag)
-	ParkInactivePages = true,  -- true = les pages des onglets non affichés sont rangées dans un ScreenGui désactivé (déplacement fluide) ; false = ancien comportement
-	MoveMode          = "Léger",   -- déplacement de la fenêtre : "Léger" (contenu rangé pendant le geste s'il dépasse MoveParkThreshold) | "Direct" (tout en direct, lent) | "Contour" (un contour suit le curseur)
+	MoveParkThreshold = math.huge,  -- V9.41 : jamais rangé (ranger / remettre des milliers d'instances = gel). Pendant un déplacement, le contenu affiché n'est rangé que s'il contient plus de ce nombre d'instances (ex. 3000 = ancien réglage)
+	ParkInactivePages = false, -- V9.41 : false (défaut) = AUCUN rangement des pages → plus de gel au changement d'onglet. true = les pages des onglets non affichés sont rangées dans un ScreenGui désactivé (déplacement plus fluide mais gel à chaque changement d'onglet)
+	MoveMode          = "Contour",   -- V9.41 : déplacement de la fenêtre : "Contour" (un contour suit le curseur, rapide sans rangement) | "Léger" (contenu rangé pendant le geste s'il dépasse MoveParkThreshold) | "Direct" (tout en direct, lent)
 	ResizeMode        = "Contour", -- "Contour" (rapide : contour pendant le geste) | "Direct" (ancien : suit en direct, lent)
 	NoCanvasGroup     = true,  -- true = fenêtre en simple Frame (beaucoup plus fluide) ; false = fondu d'ouverture mais plus lourd
 	StarCount         = 0,     -- étoiles qui rebondissent sur l'écran, derrière la fenêtre (0 = désactivé · 20 = ancien réglage)
@@ -4545,7 +4545,11 @@ do
 			warn("[Console] Ceci est un warn de test.")
 		end })
 
-		tab.OnSelect = rebuild
+		-- V9.41 : le listener met déjà la vue à jour en direct, même onglet masqué : inutile de tout reconstruire à chaque sélection (gel)
+		tab.OnSelect = function()
+			if C.Paused then return end   -- en pause, l'affichage reste figé
+			toBottom()
+		end
 		rebuild()
 		return tab
 	end
@@ -4554,7 +4558,14 @@ end
 -- Onglet « Historique » : les 50 dernières notifications
 function Window:CreateNotifLogTab(name, icon)
 	local tab = self:CreateTab(name or "Historique", nil, icon)
+	local lastSig
+	local function sigOf()
+		local h = Library.NotifHistory
+		local e = h[#h]
+		return #h .. "|" .. (e and (tostring(e.Time) .. tostring(e.Title)) or "")
+	end
 	local function rebuild()
+		lastSig = sigOf()
 		tab:ClearBlocks()
 		local blk = tab:CreateBlock({ Name = "Notifications récentes", Side = "Left" })
 		blk._noFav = true
@@ -4575,7 +4586,10 @@ function Window:CreateNotifLogTab(name, icon)
 			})
 		end
 	end
-	tab.OnSelect = rebuild
+	-- V9.41 : reconstruit seulement si l'historique a changé depuis la dernière fois (sinon gel inutile à chaque sélection)
+	tab.OnSelect = function()
+		if sigOf() ~= lastSig then rebuild() end
+	end
 	rebuild()
 	return tab
 end
@@ -18118,9 +18132,9 @@ function Library:CreateWindow(cfg)
 		dirty()
 		-- vrai si le contenu affiché est assez lourd pour être rangé pendant un geste (sans aucun parcours à l'appui)
 		ec.isHeavy = function()
-			if Library.ParkInactivePages == false then return true end
 			local lim = tonumber(Library.MoveParkThreshold) or 3000
-			if lim >= 1e9 then return false end   -- jamais : le contenu reste affiché pendant le geste
+			if lim >= 1e9 then return false end   -- jamais : le contenu reste affiché pendant le geste (V9.41 : testé AVANT ParkInactivePages, sinon un rangement lourd partait à chaque geste)
+			if Library.ParkInactivePages == false then return true end
 			return count > lim
 		end
 	end
