@@ -1,3 +1,4 @@
+-- [PATCH perf] CornerObjects purgé automatiquement · graphiques allégés (COLS 120->40, 60->30 Hz).
 --[[
 	Ui-Lib Simple — V9.37 « léger »  (noir & blanc)
 	Même API qu'avant pour les blocs / éléments (CreateToggle, CreateSlider, CreateDropdown, CreateKeybind, CreateColorPicker...).
@@ -792,7 +793,18 @@ local function corner(parent, base)
 		c:SetAttribute("SqOrig", c.CornerRadius)
 		c.CornerRadius = UDim.new(0, 0)
 	end
-	table.insert(Library.CornerObjects, { Corner = c, BaseRadius = base })
+	-- [PATCH perf] CornerObjects ne grossit plus sans fin : purge des coins dont l'élément a été détruit (Parent = nil)
+	local entry = { Corner = c, BaseRadius = base }
+	local list = Library.CornerObjects
+	list[#list + 1] = entry
+	if #list >= (Library._cornerPrune or 400) then
+		local keep = {}
+		for _, e in ipairs(list) do
+			if e == entry or (e.Corner and e.Corner.Parent) then keep[#keep + 1] = e end
+		end
+		Library.CornerObjects = keep
+		Library._cornerPrune = #keep + 400
+	end
 	return c
 end
 
@@ -12664,7 +12676,7 @@ function Block:CreateGraph(o)
 	local samples = math.clamp(math.floor(tonumber(o.Samples) or 90), 20, 240)
 	local h = math.clamp(tonumber(o.Height) or 64, 36, 200)
 	local unit = o.Unit and tostring(o.Unit) or ""
-	local COLS = 120          -- points de la courbe (la courbe est lissée entre les mesures)
+	local COLS = 40           -- [PATCH perf] 120 -> 40 : points de la courbe (la courbe est lissée entre les mesures)
 	local PADX, PADY = 7, 4   -- marges intérieures (la pointe de la courbe reste entièrement visible)
 	local f = makeRow(self, h + 34, o.Name)
 	label(f, o.Name or "Graphique", 12, { Position = UDim2.new(0, 12, 0, 4), Size = UDim2.new(0, 64, 0, 18), Font = F_BOLD })
@@ -12855,7 +12867,7 @@ function Block:CreateGraph(o)
 
 	local conn = Ticker.connect(function(dt)
 		render(math.min(dt, 0.25))
-	end, { rate = 60, gate = plot })   -- dort tant que le graphique n'est pas affiché
+	end, { rate = 30, gate = plot })   -- [PATCH perf] 60 -> 30 Hz · dort tant que le graphique n'est pas affiché
 	track(conn)
 	plot.Destroying:Connect(function() pcall(function() conn:Disconnect() end) end)
 
