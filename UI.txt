@@ -1939,20 +1939,191 @@ local function spin(g, speed)
 	return g
 end
 
--- Sons de l'interface retirés (les appels uiSnd(...) restent partout dans la lib : ils ne font plus rien)
-local function uiSnd() end
-Library.UISound = false
-Library.UISoundPack = "Aucun"
+-- ============================================================================
+-- SONS DE L'INTERFACE (rétablis)
+--   Library:SetUISoundEnabled(bool)    · Library:SetUISoundVolume(0..1 ou 0..100) · Library:SetUISoundHover(bool)
+--   Library:SetUISoundReverb(bool)     · Library:SetUISoundPack(nom) -> bool       · Library:PlayUISound(type) · Library:PlayHiSound()
+--   Library.UISoundPackNames = liste des packs (pour un menu déroulant) · Library.UISoundPacks[nom][type] = { id, vol, speed }
+--   Library:AddUISoundPack(nom, { click = "rbxassetid://123", hover = {id = 123, vol = 0.3, speed = 1.4}, ... })
+--   Types : click hover on off open close pick tab focus fold notify (tabhover / spotopen / palopen / winopen... reprennent les précédents)
+--   Par défaut les packs utilisent les sons INTÉGRÉS au client Roblox (rbxasset://sounds/...) : ils marchent partout, sans réseau.
+-- ============================================================================
+Library.UISound = true
+Library.UISoundVolume = 0.5
+Library.UISoundHover = false
+Library.NotifSound = true      -- son des notifications (indépendant des sons d'interface)
+Library.NotifVolume = 0.5
+Library.UISoundReverb = false
+Library.UISoundPack = "Classique"
 Library.UISoundPacks = {}
 Library.UISoundPackNames = {}
-function Library:PlayUISound() end
-function Library:PlayHiSound() end
-function Library:SetUISoundEnabled() end
-function Library:SetUISoundVolume() end
-function Library:SetUISoundHover() end
-function Library:SetUISoundReverb() end
-function Library:SetUISoundPack() return false end
-function Library._destroyUISound() end
+
+local uiSnd
+do
+	local SoundService = game:GetService("SoundService")
+	local folder
+	local cache, lastPlay = {}, {}
+	local ALIAS = { tabhover = "hover", spotopen = "open", palopen = "open", spotclose = "close", palclose = "close",
+		winopen = "open", winclose = "close", expand = "open", collapse = "close" }
+	local THROTTLE = { hover = 0.07, tabhover = 0.07, focus = 0.05 }
+
+	local function arg(a, b) if a == Library then return b end return a end
+	local function def(id, vol, speed) return { id = id, vol = vol or 1, speed = speed or 1 } end
+	local BTN, SW, SNAP, PING, FAST = "rbxasset://sounds/button.wav", "rbxasset://sounds/switch.wav", "rbxasset://sounds/snap.mp3",
+		"rbxasset://sounds/electronicpingshort.wav", "rbxasset://sounds/clickfast.wav"
+
+	local function addPack(name, tbl)
+		if type(name) ~= "string" or type(tbl) ~= "table" then return false end
+		if not Library.UISoundPacks[name] then Library.UISoundPackNames[#Library.UISoundPackNames + 1] = name end
+		Library.UISoundPacks[name] = tbl
+		return true
+	end
+	addPack("Aucun", {})
+	addPack("Classique", { click = def(SW, 0.6, 1.1), hover = def(FAST, 0.10, 1.7), on = def(SW, 0.7, 1.3), off = def(SW, 0.7, 0.8),
+		open = def(BTN, 0.5, 1.1), close = def(BTN, 0.5, 0.85), pick = def(PING, 0.4, 1.3), tab = def(SNAP, 0.5, 1.2),
+		focus = def(FAST, 0.3, 1.3), fold = def(SNAP, 0.4, 0.9), notify = def(PING, 0.6, 1) })
+	addPack("Doux", { click = def(BTN, 0.35, 1.3), hover = def(FAST, 0.05, 2), on = def(BTN, 0.4, 1.5), off = def(BTN, 0.4, 1.0),
+		open = def(BTN, 0.3, 1.2), close = def(BTN, 0.3, 0.95), pick = def(PING, 0.25, 1.6), tab = def(BTN, 0.3, 1.4),
+		focus = def(FAST, 0.2, 1.5), fold = def(BTN, 0.25, 1.1), notify = def(PING, 0.4, 1.2) })
+	addPack("Net", { click = def(FAST, 0.7, 1), hover = def(FAST, 0.08, 2), on = def(SNAP, 0.6, 1.4), off = def(SNAP, 0.6, 0.9),
+		open = def(SW, 0.5, 1.4), close = def(SW, 0.5, 1.0), pick = def(FAST, 0.5, 1.4), tab = def(FAST, 0.5, 1.2),
+		focus = def(FAST, 0.3, 1.5), fold = def(SNAP, 0.4, 1.1), notify = def(PING, 0.6, 0.9) })
+	addPack("Cristal", { click = def(PING, 0.45, 1.5), hover = def(PING, 0.08, 2.2), on = def(PING, 0.5, 1.9), off = def(PING, 0.5, 1.2),
+		open = def(PING, 0.4, 1.6), close = def(PING, 0.4, 1.1), pick = def(PING, 0.4, 1.8), tab = def(PING, 0.35, 1.7),
+		focus = def(PING, 0.25, 2), fold = def(PING, 0.3, 1.3), notify = def(PING, 0.6, 1) })
+	Library.AddUISoundPack = function(a, b, c)
+		if a == Library then return addPack(b, c) end
+		return addPack(a, b)
+	end
+
+	local function srcOf(id)
+		if type(id) == "number" or (type(id) == "string" and string.match(id, "^%d+$")) then return "rbxassetid://" .. tostring(id) end
+		return tostring(id)
+	end
+	local function getFolder()
+		if folder and folder.Parent then return folder end
+		folder = Instance.new("Folder")
+		folder.Name = "UiLibSounds"
+		folder.Parent = SoundService
+		return folder
+	end
+	local function clear()
+		for k, s in pairs(cache) do if s then s:Destroy() end cache[k] = nil end
+	end
+	local function effectOn(s)
+		local fx = s:FindFirstChild("Reverb")
+		if Library.UISoundReverb then
+			if not fx then
+				fx = Instance.new("ReverbSoundEffect")
+				fx.Name = "Reverb"
+				fx.DecayTime, fx.Density, fx.Diffusion, fx.DryLevel, fx.WetLevel = 2.2, 0.85, 0.85, -2, -4
+				fx.Parent = s
+			end
+			fx.Enabled = true
+		elseif fx then
+			fx.Enabled = false
+		end
+	end
+	local function volOf(e, kind)
+		local base = kind == "notify" and Library.NotifVolume or Library.UISoundVolume
+		return math.clamp((e.vol or 1) * (base or 0.5), 0, 10)
+	end
+	local function sndFor(kind, e)
+		local s = cache[kind]
+		if s and s.Parent then return s end
+		s = Instance.new("Sound")
+		s.Name = kind
+		s.SoundId = srcOf(e.id)
+		s.Volume = volOf(e, kind)
+		s.PlaybackSpeed = e.speed or 1
+		s.Parent = getFolder()
+		effectOn(s)
+		cache[kind] = s
+		return s
+	end
+
+	local function play(kind)
+		if type(kind) ~= "string" then return end
+		local isNotif = kind == "notify"
+		if isNotif then
+			if not Library.NotifSound then return end
+		elseif not Library.UISound then
+			return
+		end
+		if (kind == "hover" or kind == "tabhover") and Library.UISoundHover == false then return end
+		local pack = Library.UISoundPacks[Library.UISoundPack]
+		local e = pack and (pack[kind] or pack[ALIAS[kind] or ""])
+		if isNotif and not e then e = Library.UISoundPacks.Classique and Library.UISoundPacks.Classique.notify end   -- pack « Aucun » : la notification garde son son
+		if not e or not e.id then return end
+		local now = os.clock()
+		if now - (lastPlay[kind] or 0) < (THROTTLE[kind] or 0.02) then return end
+		lastPlay[kind] = now
+		pcall(function()
+			local s = sndFor(kind, e)
+			s.Volume = volOf(e, kind)
+			s.TimePosition = 0
+			s:Play()
+		end)
+	end
+
+	function Library.PlayUISound(a, b) play(arg(a, b)) end
+	function Library.PlayHiSound() play("winopen") end
+
+	function Library.SetUISoundEnabled(a, b)
+		local v = arg(a, b)
+		Library.UISound = v and true or false
+		if Library.UISound then play("on") end
+	end
+	function Library.SetUISoundVolume(a, b)
+		local v = tonumber(arg(a, b)) or 0.5
+		if v > 1 then v = v / 100 end
+		Library.UISoundVolume = math.clamp(v, 0, 1)
+		for kind, s in pairs(cache) do
+			local pack = Library.UISoundPacks[Library.UISoundPack]
+			local e = pack and (pack[kind] or pack[ALIAS[kind] or ""])
+			if s and s.Parent and e then s.Volume = volOf(e, kind) end
+		end
+	end
+	function Library.GetSoundPresets()
+		local out = {}
+		for i, n in ipairs(Library.UISoundPackNames) do out[i] = n end
+		return out
+	end
+	function Library.SetNotifSoundEnabled(a, b) Library.NotifSound = arg(a, b) and true or false end
+	function Library.SetNotifVolume(a, b)
+		local v = tonumber(arg(a, b)) or 0.5
+		if v > 1 then v = v / 100 end
+		Library.NotifVolume = math.clamp(v, 0, 1)
+		local s = cache.notify
+		if s and s.Parent then s:Destroy() cache.notify = nil end
+	end
+	function Library.SetNotifSound(a, b)   -- id personnalisé pour les notifications (nil = son du pack)
+		local id = arg(a, b)
+		local pk = Library.UISoundPacks.Classique
+		if pk and id ~= nil then pk.notify = def(id, 0.6, 1) end
+		local s = cache.notify
+		if s and s.Parent then s:Destroy() cache.notify = nil end
+	end
+	function Library.SetUISoundHover(a, b) Library.UISoundHover = arg(a, b) and true or false end
+	function Library.SetUISoundReverb(a, b)
+		Library.UISoundReverb = arg(a, b) and true or false
+		for _, s in pairs(cache) do if s and s.Parent then effectOn(s) end end
+	end
+	function Library.SetUISoundPack(a, b)
+		local name = arg(a, b)
+		if not Library.UISoundPacks[name] then return false end
+		Library.UISoundPack = name
+		clear()
+		play("click")
+		return true
+	end
+	function Library._destroyUISound()
+		clear()
+		if folder then folder:Destroy() folder = nil end
+	end
+
+	uiSnd = function(kind) play(kind) end
+end
 
 -- Effet de survol fluide sur une ligne
 local function hover(f, st, hit)
@@ -3368,6 +3539,7 @@ function Library:Notify(o)
 		Content = tostring(o.Content or ""), Type = kind }
 	while #hist > 50 do table.remove(hist, 1) end
 	if Library.NotifMuted and not o.Force and kind ~= "Error" then return noopHandle() end
+	if kind ~= "Loading" and o.Sound ~= false then uiSnd("notify") end
 
 	-- doublon : on empile (x2, x3...) au lieu d'ajouter une carte
 	local stackable = (o.Stack ~= false) and o.Progress == nil and not o.Loading
@@ -12788,169 +12960,358 @@ function Library:SetLayoutEdit(v)
 	end
 end
 
--- Glisser un bloc par son en-tête : un emplacement suit le curseur, le bloc « fantôme » est le curseur.
--- Les autres blocs s'écartent en glissant : l'emplacement visé GRANDIT de 0 à la hauteur du bloc, l'ancien se REFERME,
--- et le trou laissé par le bloc soulevé se referme aussi. Les LayoutOrder sont pairs (2, 4, 6...) pendant le geste,
--- les emplacements prennent les impairs : un emplacement qui se referme ne change donc jamais de place.
+-- Glisser un bloc par son en-tête (V2 : fluide).
+--   • Le bloc soulevé devient une COPIE COMPLÈTE (Clone) qui suit le curseur avec un lissage indépendant du FPS : léger
+--     agrandissement + ombre + contour accent. Un bloc très haut est coupé (le curseur reste accroché à l'en-tête).
+--   • Pendant le geste, chaque colonne passe en Padding = 0 et chaque bloc reçoit un espaceur « BlockGap » de la hauteur de
+--     l'ancien Padding. Un emplacement qui s'ouvre / se ferme (0 -> hauteur du bloc + gap) ne fait donc plus de saut de 8 px
+--     à sa création et à sa destruction (c'était la principale source de « pas fluide »).
+--   • La position d'insertion est calculée sur la disposition NATURELLE (sans les emplacements en cours d'animation) avec une
+--     hystérésis : plus de va-et-vient quand les blocs glissent sous le curseur.
+--   • Défilement automatique près des bords (proportionnel à la proximité, indépendant du FPS).
+--   • Au relâchement, la copie glisse jusqu'à l'emplacement, puis le vrai bloc prend sa place.
+-- Réglages : Library.BlockDragSmooth (18, plus haut = suit plus vite) · Library.BlockDragLift (1.03) · Library.BlockDragSlide (0.22 s)
+--            Library.BlockDragMaxH (300, hauteur max de la copie, en px d'UI)
+Library.BlockDragSmooth = Library.BlockDragSmooth or 18
+Library.BlockDragLift   = Library.BlockDragLift   or 1.03
+Library.BlockDragSlide  = Library.BlockDragSlide  or 0.22
+Library.BlockDragMaxH   = Library.BlockDragMaxH   or 300
+
 function Library:_dragBlock(blk, startPos)
 	local win, tab = Library.Window, blk.Tab
-	if not (win and win.Gui) or Library._blockDragging then return end
+	if not (win and win.Gui and tab) or Library._blockDragging then return end
 	Library._blockDragging = true
 
-	local sc = pxScale()
+	local CUBIC = Enum.EasingStyle.Quad
+	local SLIDE, LIFT, FOLLOW, MAXH = Library.BlockDragSlide, Library.BlockDragLift, Library.BlockDragSmooth, Library.BlockDragMaxH
+	local HYS = 7   -- hystérésis (px d'UI) avant de changer de place d'insertion
+
 	local frame = blk.Frame
+	local cols = tab.Cols
+	local sc = math.max(pxScale(), 0.05)
 	local fAbs, fSize = frame.AbsolutePosition, frame.AbsoluteSize
-	local gx = math.clamp(startPos.X - fAbs.X, 12, math.max(12, fSize.X - 12))
-	local headH = 34 * sc
-	local slotH = math.max(fSize.Y / math.max(sc, 0.05), 34)   -- hauteur du bloc, en unités d'UI : celle de l'emplacement
+	local slotH = math.max(fSize.Y / sc, 34)   -- hauteur du bloc en unités d'UI
 
 	local last = startPos
-	local moved = false
-	local ghost, placeholder, hb, originGap
-	local curCol, curAt
-	local dying = {}
-	local SLIDE = 0.26
+	local moved, released, finished = false, false, false
+	local conn, relT = nil, 0
+	local colState = {}          -- colonne -> { lay, pad, gap, spacers }
+	local slots, dying = {}, {}  -- tous les emplacements vivants / ceux qui se referment
+	local serial = 0
+	local placeholder, curCol, curAt
+	local g = {}                 -- copie qui suit le curseur
+	local tl, sLift = fAbs, 1    -- coin haut-gauche (px) et échelle actuels de la copie
+	local grab = Vector2.new(20, 17)
+	local finalize
 
-	local function makeSlot(parent, order, h, transp)
+	local function sortedBlocks(col, skip, onlyVisible)
+		local list = {}
+		for _, b in ipairs(tab.Blocks) do
+			if b ~= skip and not b._float and b.Frame.Parent == col and (not onlyVisible or b.Frame.Visible) then
+				list[#list + 1] = b
+			end
+		end
+		table.sort(list, function(x, y)
+			local a, c = x.Frame.LayoutOrder, y.Frame.LayoutOrder
+			if a ~= c then return a < c end
+			return x.Index < y.Index
+		end)
+		return list
+	end
+
+	local function gapOf(col)
+		local st = colState[col]
+		return st and st.gap or 0
+	end
+
+	-- ordres : blocs = 1000 * rang, espaceur après le bloc = +1, emplacements = entre deux (±500 + petit décalage unique)
+	local function prepare()
+		for _, col in ipairs(cols) do
+			local lay = col:FindFirstChildOfClass("UIListLayout")
+			local st = { lay = lay, pad = lay and lay.Padding, gap = lay and lay.Padding.Offset or 0, spacers = {} }
+			colState[col] = st
+			for j, b in ipairs(sortedBlocks(col)) do
+				b.Frame.LayoutOrder = j * 1000
+				if lay and st.gap > 0 and b ~= blk and b.Frame.Visible then
+					st.spacers[#st.spacers + 1] = new("Frame", { Name = "BlockGap", BackgroundTransparency = 1, BorderSizePixel = 0,
+						Size = UDim2.new(1, 0, 0, st.gap), LayoutOrder = j * 1000 + 1, Active = false }, col)
+				end
+			end
+			if lay then lay.Padding = UDim.new(0, 0) end
+		end
+	end
+
+	local function restoreCols()
+		for _, st in pairs(colState) do
+			for _, s in ipairs(st.spacers) do if s.Parent then s:Destroy() end end
+			if st.lay and st.lay.Parent and st.pad then st.lay.Padding = st.pad end
+		end
+		table.clear(colState)
+	end
+
+	-- emplacement : hauteur = bloc + gap (le gap est porté par l'emplacement, pas par le Padding)
+	local function makeSlot(col, order, h)
 		local f = new("Frame", { Name = "BlockPlaceholder", Size = UDim2.new(1, 0, 0, h), LayoutOrder = order,
-			BackgroundColor3 = T.Accent, BackgroundTransparency = transp, BorderSizePixel = 0 }, parent)
-		new("UICorner", { CornerRadius = UDim.new(0, 10) }, f)
-		new("UIStroke", { Color = T.Accent, Transparency = (transp >= 1) and 1 or 0.45, Thickness = 1.5, ApplyStrokeMode = BORDER }, f)
+			BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true, Active = false }, col)
+		local mark = new("Frame", { Name = "Mark", Position = UDim2.fromOffset(2, 2), Size = UDim2.new(1, -4, 0, slotH - 4),
+			BackgroundColor3 = T.Accent, BackgroundTransparency = 0.9, BorderSizePixel = 0 }, f)
+		new("UICorner", { CornerRadius = UDim.new(0, 10) }, mark)
+		new("UIStroke", { Color = T.Accent, Transparency = 0.45, Thickness = 1.5, ApplyStrokeMode = BORDER }, mark)
+		slots[f] = true
 		return f
 	end
-	local function growSlot(f)
-		tween(f, { Size = UDim2.new(1, 0, 0, slotH), BackgroundTransparency = 0.9 }, SLIDE, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
-		local st = f:FindFirstChildOfClass("UIStroke")
-		if st then tween(st, { Transparency = 0.45 }, SLIDE) end
-	end
-	local function shrinkSlot(f)
-		if not f then return end
-		dying[f] = true
-		tween(f, { Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1 }, 0.22, Enum.EasingStyle.Cubic, Enum.EasingDirection.InOut)
-		local st = f:FindFirstChildOfClass("UIStroke")
-		if st then tween(st, { Transparency = 1 }, 0.18) end
-		task.delay(0.4, function()
-			dying[f] = nil
-			if f.Parent then f:Destroy() end
-		end)
+
+	local function openSlot(f, col)
+		tween(f, { Size = UDim2.new(1, 0, 0, slotH + gapOf(col)) }, SLIDE, CUBIC, OUT)
 	end
 
-	-- ordres pairs et stables dans chaque colonne (l'ordre visible ne change pas)
-	local function normalise()
-		for _, col in ipairs(tab.Cols) do
-			local list = {}
-			for _, b in ipairs(tab.Blocks) do
-				if b.Frame.Parent == col then list[#list + 1] = b end
-			end
-			table.sort(list, function(x, y)
-				if x.Frame.LayoutOrder ~= y.Frame.LayoutOrder then return x.Frame.LayoutOrder < y.Frame.LayoutOrder end
-				return x.Index < y.Index
-			end)
-			for j, b in ipairs(list) do b.Frame.LayoutOrder = j * 2 end
+	local function closeSlot(f)
+		dying[f] = true
+		local function kill()
+			dying[f] = nil
+			slots[f] = nil
+			if f.Parent then f:Destroy() end
 		end
+		local tw = tween(f, { Size = UDim2.new(1, 0, 0, 0) }, SLIDE, CUBIC, OUT)
+		tw.Completed:Once(kill)
+		task.delay(SLIDE + 0.6, kill)   -- filet de sécurité
+	end
+
+	-- colonne visée : la plus proche horizontalement, avec un peu d'hystérésis
+	local function pickCol(P)
+		local function dist(col)
+			local ap, as = col.AbsolutePosition, col.AbsoluteSize
+			if P.X < ap.X then return ap.X - P.X end
+			if P.X > ap.X + as.X then return P.X - ap.X - as.X end
+			return 0
+		end
+		local best, bd
+		for _, col in ipairs(cols) do
+			if col.AbsoluteSize.X > 4 then
+				local d = dist(col)
+				if not bd or d < bd then best, bd = col, d end
+			end
+		end
+		if best and curCol and curCol.Parent and curCol.AbsoluteSize.X > 4 and dist(curCol) <= bd + 12 * sc then
+			best = curCol
+		end
+		return best or curCol
+	end
+
+	-- place d'insertion : calculée sur les positions SANS les emplacements (leur animation ne peut plus décaler la mesure)
+	local function retarget(P)
+		local col = pickCol(P)
+		if not col then return nil end
+		local sibs = sortedBlocks(col, blk, true)
+		local centers = {}
+		for k, b in ipairs(sibs) do
+			local f = b.Frame
+			local off = 0
+			for s in pairs(slots) do
+				if s.Parent == col and s.LayoutOrder < f.LayoutOrder then off += s.AbsoluteSize.Y end
+			end
+			centers[k] = f.AbsolutePosition.Y + f.AbsoluteSize.Y / 2 - off
+		end
+		local function indexFor(y)
+			for k, c in ipairs(centers) do
+				if y < c then return k end
+			end
+			return #centers + 1
+		end
+		local at = indexFor(P.Y)
+		if col == curCol and curAt then
+			local lo, hi = indexFor(P.Y - HYS * sc), indexFor(P.Y + HYS * sc)
+			if curAt >= lo and curAt <= hi then at = curAt end
+		end
+		if col ~= curCol or at ~= curAt then
+			local ord
+			if #sibs == 0 then ord = 500
+			elseif at <= #sibs then ord = sibs[at].Frame.LayoutOrder - 500
+			else ord = sibs[#sibs].Frame.LayoutOrder + 500 end
+			serial = serial % 300 + 1
+			ord += serial
+			if placeholder then closeSlot(placeholder) end   -- l'ancien emplacement se referme...
+			placeholder = makeSlot(col, ord, 0)
+			openSlot(placeholder, col)                       -- ...et le nouveau s'ouvre : les blocs voisins glissent
+			curCol, curAt = col, at
+		end
+		return col
+	end
+
+	-- copie du bloc qui suit le curseur
+	local function buildGhost(hPx)
+		local wPx = fSize.X
+		local fullH = fSize.Y
+		local okc, cl = pcall(function() return frame:Clone() end)
+		if not okc then cl = nil end
+		local fc = frame:FindFirstChildOfClass("UICorner")
+		local radius = fc and fc.CornerRadius or UDim.new(0, 10)
+		if not cl then hPx, fullH = 34 * sc, 34 * sc end
+
+		g.root = new("Frame", { Name = "BlockGhost", BackgroundTransparency = 1, BorderSizePixel = 0, Active = false, ZIndex = 500,
+			Position = UDim2.fromOffset(fAbs.X, fAbs.Y), Size = UDim2.fromOffset(wPx, hPx) }, win.Gui)
+		g.scale = new("UIScale", { Scale = 1 }, g.root)
+		g.shadow = new("Frame", { Name = "Shadow", Position = UDim2.fromOffset(4, 10), Size = UDim2.new(1, -8, 1, 0),
+			BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 499 }, g.root)
+		new("UICorner", { CornerRadius = radius }, g.shadow)
+		local holder = new("Frame", { Name = "Holder", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+			BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 500 }, g.root)
+		new("UICorner", { CornerRadius = radius }, holder)
+		g.stroke = new("UIStroke", { Color = T.Accent, Thickness = 1.5, Transparency = 1, ApplyStrokeMode = BORDER }, holder)
+
+		local content = new("Frame", { Name = "Content", BackgroundTransparency = 1, BorderSizePixel = 0,
+			Size = UDim2.fromOffset(wPx / sc, fullH / sc) }, holder)
+		new("UIScale", { Scale = sc }, content)
+
+		if cl then
+			cl.AutomaticSize = AN
+			cl.Size = UDim2.fromScale(1, 1)
+			cl.Position = UDim2.new()
+			cl.LayoutOrder = 0
+			cl.Visible = true
+			cl.Parent = content
+			-- la copie ne doit rien capter (boutons, champs de texte...)
+			for _, d in ipairs(cl:GetDescendants()) do
+				if d:IsA("GuiButton") then d.Active = false d.AutoButtonColor = false end
+				if d:IsA("TextBox") then d.TextEditable = false end
+				if d:IsA("GuiObject") then pcall(function() d.Interactable = false end) end
+			end
+		else
+			-- repli : simple pastille avec le nom du bloc
+			local pill = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = T.Second, BackgroundTransparency = 0.1,
+				BorderSizePixel = 0 }, content)
+			new("UICorner", { CornerRadius = UDim.new(0, 10) }, pill)
+			label(pill, blk.Name, 13, { Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -28, 1, 0), Font = F_BOLD })
+		end
+		return hPx
 	end
 
 	local function create()
 		moved = true
-		normalise()
-		-- le bloc soulevé laisse un trou de sa hauteur, qui se referme doucement
-		originGap = makeSlot(frame.Parent, frame.LayoutOrder, slotH, 1)
-		ghost = new("Frame", { Name = "BlockGhost", Size = UDim2.fromOffset(fSize.X, headH), ZIndex = 500,
-			BackgroundColor3 = T.Second, BackgroundTransparency = 0.12, BorderSizePixel = 0 }, win.Gui)
-		new("UICorner", { CornerRadius = UDim.new(0, math.floor(10 * sc)) }, ghost)
-		new("UIStroke", { Color = T.Accent, Transparency = 0.2, Thickness = 1.5, ApplyStrokeMode = BORDER }, ghost)
-		local lb = label(ghost, blk.Name, 13, { Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -28, 1, 0),
-			Font = F_BOLD, ZIndex = 501 })
-		lb.TextSize = math.max(9, math.floor(13 * sc * (Library.FontScale or 1) + 0.5))
+		fAbs, fSize = frame.AbsolutePosition, frame.AbsoluteSize
+		sc = math.max(pxScale(), 0.05)
+		slotH = math.max(fSize.Y / sc, 34)
+		local hPx = math.min(fSize.Y, MAXH * sc)
+
+		prepare()                    -- ordres stables + espaceurs + Padding 0 (visuellement identique)
+		hPx = buildGhost(hPx)        -- la copie est prise AVANT de cacher le vrai bloc
+
+		local p0 = Library._pointerPos(startPos)
+		grab = Vector2.new(math.clamp(p0.X - fAbs.X, 10, math.max(10, fSize.X - 10)), math.clamp(p0.Y - fAbs.Y, 6, math.max(6, hPx - 6)))
+		tl = fAbs
+
+		-- l'emplacement d'origine prend la place exacte du bloc (même hauteur) : il EST l'emplacement courant
+		local origCol = frame.Parent
+		placeholder = makeSlot(origCol, frame.LayoutOrder, slotH + gapOf(origCol))
+		local sibs0 = sortedBlocks(origCol, blk, true)
+		local at0 = #sibs0 + 1
+		for k, b in ipairs(sibs0) do
+			if b.Frame.LayoutOrder > frame.LayoutOrder then at0 = k break end
+		end
+		curCol, curAt = origCol, at0
 		frame.Visible = false
-		shrinkSlot(originGap)
 		uiSnd("fold")
 	end
 
-	local function step()
-		Library._busyUntil = os.clock() + 0.3
-		if not moved then
-			if (last - startPos).Magnitude > 5 then create() else return end
+	local function follow(dt, P)
+		sLift += ((released and 1 or LIFT) - sLift) * (1 - math.exp(-dt * 18))
+		local aim
+		if released and placeholder and placeholder.Parent then
+			aim = placeholder.AbsolutePosition                 -- relâché : on vise l'emplacement (relu à chaque image)
+		else
+			aim = P - grab * sLift                              -- le point saisi reste sous le curseur malgré l'agrandissement
 		end
-		local cur = Library._pointerPos(last)
-		ghost.Position = UDim2.fromOffset(cur.X - gx, cur.Y - headH / 2)
+		local rate = Library.Animations and FOLLOW or 400
+		tl = tl:Lerp(aim, 1 - math.exp(-dt * rate))
+		g.root.Position = UDim2.fromOffset(tl.X, tl.Y)
+		g.scale.Scale = sLift
+		local t = math.clamp((sLift - 1) / math.max(LIFT - 1, 1e-3), 0, 1)
+		g.shadow.BackgroundTransparency = 1 - 0.3 * t
+		g.stroke.Transparency = 1 - 0.5 * t
+	end
 
-		-- colonne visée : la plus proche horizontalement
-		local best, bd = 1, nil
-		for i, col in ipairs(tab.Cols) do
-			local ap, as = col.AbsolutePosition, col.AbsoluteSize
-			local d = 0
-			if cur.X < ap.X then d = ap.X - cur.X elseif cur.X > ap.X + as.X then d = cur.X - ap.X - as.X end
-			if not bd or d < bd then best, bd = i, d end
-		end
-		local col = tab.Cols[best]
-
-		-- défilement automatique près des bords
+	local function autoScroll(col, P, dt)
 		local ap, as = col.AbsolutePosition, col.AbsoluteSize
-		local edge = 46
-		if cur.Y < ap.Y + edge then
-			col.CanvasPosition = Vector2.new(0, math.max(0, col.CanvasPosition.Y - 14))
-		elseif cur.Y > ap.Y + as.Y - edge then
-			col.CanvasPosition = Vector2.new(0, col.CanvasPosition.Y + 14)
+		local edge = 60 * sc
+		local k = 0
+		if P.Y < ap.Y + edge then
+			k = -(1 - math.clamp((P.Y - ap.Y) / edge, 0, 1))
+		elseif P.Y > ap.Y + as.Y - edge then
+			k = 1 - math.clamp((ap.Y + as.Y - P.Y) / edge, 0, 1)
 		end
-
-		-- position d'insertion parmi les blocs visibles de la colonne
-		local sibs = {}
-		for _, b in ipairs(tab.Blocks) do
-			if b ~= blk and b.Frame.Parent == col and b.Frame.Visible then sibs[#sibs + 1] = b end
-		end
-		table.sort(sibs, function(x, y)
-			if x.Frame.LayoutOrder ~= y.Frame.LayoutOrder then return x.Frame.LayoutOrder < y.Frame.LayoutOrder end
-			return x.Index < y.Index
-		end)
-		local at = #sibs + 1
-		for k, b in ipairs(sibs) do
-			local f = b.Frame
-			if cur.Y < f.AbsolutePosition.Y + f.AbsoluteSize.Y / 2 then at = k break end
-		end
-		if col ~= curCol or at ~= curAt then
-			curCol, curAt = col, at
-			if placeholder then shrinkSlot(placeholder) end   -- l'ancien emplacement se referme...
-			local ord
-			if #sibs == 0 then ord = 1
-			elseif at <= #sibs then ord = sibs[at].Frame.LayoutOrder - 1
-			else ord = sibs[#sibs].Frame.LayoutOrder + 1 end
-			placeholder = makeSlot(col, ord, 0, 1)           -- ...et le nouveau s'ouvre : les blocs voisins glissent
-			growSlot(placeholder)
+		if k ~= 0 then
+			local y = col.CanvasPosition.Y + k * math.abs(k) * 900 * dt   -- plus on s'approche du bord, plus ça va vite
+			col.CanvasPosition = Vector2.new(0, math.max(0, y))
 		end
 	end
 
-	hb = Ticker.connect(step)
-
-	startDrag(function(p) last = p end, blk.Scroll, startPos, function()
-		if hb then hb:Disconnect() hb = nil end
-		Library._blockDragging = false
-		if not moved then return end
-		local pp, ps = ghost.Position, Vector2.new(fSize.X, headH)
-		if placeholder then
-			pp = placeholder.AbsolutePosition
-			ps = Vector2.new(placeholder.AbsoluteSize.X, slotH * sc)
+	local function frameStep(dt)
+		Library._busyUntil = os.clock() + 0.3
+		if not frame.Parent then finalize() return end
+		if not moved then
+			if released or (last - startPos).Magnitude <= 5 then return end
+			create()
 		end
-		if curCol and placeholder then
+		local P = Library._pointerPos(last)
+		if not released then
+			local col = retarget(P)
+			if col then autoScroll(col, P, dt) end
+		end
+		follow(dt, P)
+
+		if released then
+			-- fini quand la copie est posée, l'emplacement entièrement ouvert et plus aucun ancien emplacement en train de se fermer
+			local el = os.clock() - relT
+			local done = el > 0.7
+			if not done then
+				if placeholder and placeholder.Parent then
+					local near = (tl - placeholder.AbsolutePosition).Magnitude < 1.5 and math.abs(sLift - 1) < 0.004
+					local grown = placeholder.AbsoluteSize.Y >= (slotH + gapOf(placeholder.Parent)) * sc - 1.5
+					done = el > 0.1 and near and grown and next(dying) == nil
+				else
+					done = true
+				end
+			end
+			if done then uiSnd("fold") finalize() end
+		end
+	end
+
+	finalize = function()
+		if finished then return end
+		finished = true
+		Library._blockDragging = false
+		if conn then conn:Disconnect() conn = nil end
+		if not moved then return end
+		-- tout se fait dans la même image : le vrai bloc remplace la copie sans le moindre saut
+		if placeholder and placeholder.Parent and curCol and curCol.Parent and frame.Parent then
 			frame.Parent = curCol
 			frame.LayoutOrder = placeholder.LayoutOrder
 			blk.Scroll = curCol
 		end
-		frame.Visible = true
-		for f in pairs(dying) do if f.Parent then f:Destroy() end end
-		table.clear(dying)
-		if placeholder then placeholder:Destroy() end
-		if originGap and originGap.Parent then originGap:Destroy() end
-		tab:_commitLayout()
-		-- le fantôme glisse vers l'emplacement puis disparaît
-		tween(ghost, { Position = UDim2.fromOffset(pp.X, pp.Y), Size = UDim2.fromOffset(ps.X, ps.Y),
-			BackgroundTransparency = 1 }, 0.2)
-		for _, d in ipairs(ghost:GetDescendants()) do
-			if d:IsA("TextLabel") then tween(d, { TextTransparency = 1 }, 0.18) end
-			if d:IsA("UIStroke") then tween(d, { Transparency = 1 }, 0.18) end
+		for s in pairs(slots) do
+			if s.Parent then s:Destroy() end
 		end
-		local g = ghost
-		task.delay(0.25, function() g:Destroy() end)
+		table.clear(slots)
+		table.clear(dying)
+		restoreCols()
+		if frame.Parent then frame.Visible = true end
+		pcall(function() tab:_commitLayout() end)
+		if g.root then g.root:Destroy() end
+	end
+
+	conn = RunService.RenderStepped:Connect(function(dt)
+		if finished then return end
+		local ok, err = pcall(frameStep, math.min(dt, 0.1))
+		if not ok then
+			warn("[Ui-Lib] Déplacement de bloc : " .. tostring(err))
+			pcall(finalize)
+		end
+	end)
+
+	startDrag(function(p) last = p end, blk.Scroll, startPos, function()
+		if finished then return end
+		if not moved then finalize() return end   -- simple clic : rien n'a bougé
+		released, relT = true, os.clock()
 	end)
 end
 
